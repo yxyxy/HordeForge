@@ -1,0 +1,34 @@
+# Dependency Check Pipeline
+# Triggered by dependency_checker scheduler job.
+
+pipeline_name: dependency_check_pipeline
+description: |
+  Pipeline for dependency update findings triage and report generation.
+
+triggers:
+  - scheduled_trigger
+  - manual_trigger
+
+steps:
+  - name: architecture_evaluator
+    agent: architecture_evaluator
+    description: Evaluate dependency impact on architecture surface
+    input:
+      dependency: "{{dependency}}"
+      repository: "{{repository}}"
+    output: "{{architecture_report}}"
+    on_failure: log_warning
+
+  - name: test_analyzer
+    agent: test_analyzer
+    description: Recommend test focus for dependency update validation
+    input:
+      dependency: "{{dependency}}"
+      repository: "{{repository}}"
+    output: "{{test_coverage_report}}"
+    on_failure: log_warning
+
+logging:
+  level: INFO
+  log_decisions: true
+  post_to_github: false

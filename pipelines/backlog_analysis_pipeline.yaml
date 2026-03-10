@@ -1,0 +1,41 @@
+# Backlog Analysis Pipeline
+# Triggered by issue_scanner scheduler job.
+
+pipeline_name: backlog_analysis_pipeline
+description: |
+  Lightweight pipeline that prepares analysis artifacts for newly discovered
+  backlog issues marked as agent-ready.
+
+triggers:
+  - scheduled_trigger
+  - manual_trigger
+
+steps:
+  - name: dod_extractor
+    agent: dod_extractor
+    description: Build baseline DoD for backlog issue
+    input:
+      issue: "{{issue}}"
+    output: "{{dod}}"
+    on_failure: stop_pipeline
+
+  - name: specification_writer
+    agent: specification_writer
+    description: Create initial feature specification from DoD
+    input:
+      dod: "{{dod}}"
+    output: "{{spec}}"
+    on_failure: stop_pipeline
+
+  - name: task_decomposer
+    agent: task_decomposer
+    description: Produce subtask breakdown for planning board
+    input:
+      spec: "{{spec}}"
+    output: "{{subtasks}}"
+    on_failure: log_warning
+
+logging:
+  level: INFO
+  log_decisions: true
+  post_to_github: false

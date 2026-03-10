@@ -1,0 +1,5 @@
+{
+  "title": "Fix memory leak in data processor",
+  "body": "## Description\nThe data processor is leaking memory when processing large files\n\n## Steps to Reproduce\n1. Process a file larger than 100MB\n2. Memory usage increases\n3. Process never releases memory\n\n## Expected Behavior\nMemory should be released after processing\n\n## Stack Trace\n```\nMemoryError: Out of memory at line 42\n```\n\n## Definition of Done\n- [ ] Memory leak fixed\n- [ ] Tests added to prevent regression\n- [ ] Performance improved",
+  "labels": ["bug", "performance"]
+}

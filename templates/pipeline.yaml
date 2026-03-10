@@ -1,0 +1,8 @@
+name: default
+steps:
+  - agent: architect
+  - agent: planner
+  - agent: bdd_generator
+  - agent: tester
+  - agent: coder
+  - agent: reviewer

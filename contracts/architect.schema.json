@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["specification","definition_of_done","assumptions"],
+  "properties": {
+    "specification":{"type":"string"},
+    "definition_of_done":{"type":"array","items":{"type":"string"}},
+    "assumptions":{"type":"array","items":{"type":"string"}}
+  }
+}

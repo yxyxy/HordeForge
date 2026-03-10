@@ -1,0 +1,53 @@
+name: Test CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+      
+      - name: Run linter
+        run: ruff check .
+      
+      - name: Run tests
+        run: pytest tests/ -v
+      
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: pip install ruff
+      
+      - name: Run linter
+        run: ruff check .
+      
+      - name: Check formatting
+        run: ruff format --check .

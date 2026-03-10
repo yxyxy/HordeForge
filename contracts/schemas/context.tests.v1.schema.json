@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hordeforge.local/schemas/context.tests.v1.schema.json",
+  "title": "Tests Context v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "test_cases"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["1.0", "2.0"],
+      "description": "Schema version for tests artifact"
+    },
+    "test_cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "type",
+          "expected_result"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected_result": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "language": {
+      "type": "string",
+      "description": "Detected programming language (python, javascript, typescript, etc.)"
+    },
+    "framework": {
+      "type": ["string", "null"],
+      "description": "Detected testing framework (pytest, jest, unittest, etc.)"
+    },
+    "test_template": {
+      "type": ["string", "null"],
+      "description": "Generated test file template"
+    },
+    "test_patterns": {
+      "type": "object",
+      "description": "Extracted test patterns from existing tests",
+      "properties": {
+        "uses_fixtures": { "type": "boolean" },
+        "uses_mocks": { "type": "boolean" },
+        "uses_parametrize": { "type": "boolean" },
+        "uses_setups": { "type": "boolean" },
+        "common_assertions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "naming_convention": { "type": "string" }
+      }
+    }
+  }
+}

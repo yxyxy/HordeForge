@@ -1,0 +1,115 @@
+# pipelines/ci_fix_pipeline.yaml
+# CI Self-Healing Pipeline for HordeForge
+# Description: Automates detection and fixing of failing tests after merge
+
+pipeline_name: ci_fix_pipeline
+description: |
+  Pipeline for monitoring CI failures and automatically fixing broken tests
+  or code regressions. Integrates with GitHub and orchestrator.
+
+triggers:
+  - ci_failure_detected
+  - scheduled_trigger
+
+steps:
+
+  - name: ci_failure_analyzer
+    agent: ci_failure_analyzer
+    description: Analyze failed CI run and detect root cause
+    input:
+      repository: "{{repository}}"
+      ci_run: "{{ci_run}}"
+    output: "{{failure_analysis}}"
+    on_failure: create_issue_for_human
+
+  - name: test_fixer
+    agent: fix_agent
+    description: Generate fixes for failing tests or code regressions
+    input:
+      failure_analysis: "{{failure_analysis}}"
+      repository: "{{repository}}"
+    output: "{{fixed_code_patch}}"
+    retry_limit: 5
+    on_failure: escalate_to_human
+
+  - name: test_runner
+    agent: test_runner
+    description: Run tests on fixed code patch
+    input:
+      code_patch: "{{fixed_code_patch}}"
+    output: "{{test_results}}"
+    on_failure: retry_step
+
+  - name: fix_loop
+    agent: fix_agent
+    description: Iteratively fix any remaining test failures
+    input:
+      code_patch: "{{fixed_code_patch}}"
+      test_results: "{{test_results}}"
+    output: "{{final_code_patch}}"
+    retry_limit: 5
+    loops:
+      condition: "{{test_results.failed}} > 0"
+      steps:
+        - fix_agent
+        - test_runner
+    on_failure: create_issue_for_human
+
+  - name: review_agent
+    agent: review_agent
+    description: Review fix PR automatically
+    input:
+      final_code_patch: "{{final_code_patch}}"
+      repository: "{{repository}}"
+    output: "{{review_result}}"
+    on_failure: escalate_to_human
+
+  - name: pr_merge_agent
+    agent: pr_merge_agent
+    description: Merge fix PR if review passes
+    input:
+      review_result: "{{review_result}}"
+      repository: "{{repository}}"
+    output: "{{merge_status}}"
+    on_failure: escalate_to_human
+
+  - name: ci_verification
+    agent: test_runner
+    description: Re-run full CI suite to verify fixes
+    input:
+      repository: "{{repository}}"
+    output: "{{ci_verification_results}}"
+    on_failure: create_issue_for_human
+
+  - name: close_issue_agent
+    agent: issue_closer
+    description: Close issue if all tests pass and DoD is satisfied
+    input:
+      ci_results: "{{ci_verification_results}}"
+      issue: "{{original_issue}}"
+    output: "{{close_status}}"
+    on_failure: escalate_to_human
+
+# Logging
+
+logging:
+  level: INFO
+  log_decisions: true
+  log_artifacts: true
+  post_to_github: true
+
+# Loops
+
+loops:
+  - condition: "{{ci_verification_results.failed}} > 0"
+    steps:
+      - fix_loop
+      - test_runner
+      - ci_verification
+
+# Notes:
+
+# - Each step follows AGENT_SPEC.md contract
+# - Fix loop ensures self-healing until all tests pass or retry limit reached
+# - CI monitoring can be triggered by cron or GitHub webhook
+# - All outputs validated and logged

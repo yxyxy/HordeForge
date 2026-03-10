@@ -1,0 +1,74 @@
+# pipelines/init_pipeline.yaml
+# Initialization pipeline for HordeForge
+# Purpose: setup project, connect repo, populate RAG, init memory, assess architecture and tests
+
+pipeline_name: init_pipeline
+description: |
+  Pipeline to initialize a new project for autonomous AI agents.
+  Steps include repository setup, RAG population, agent memory initialization,
+  project architecture analysis, test coverage evaluation, and pipeline configuration.
+
+triggers:
+  - manual_trigger
+  - scheduled_trigger (optional for daily refresh)
+
+steps:
+
+  - name: repo_connector
+    agent: repo_connector
+    description: Clone repository and load metadata
+    input:
+      repo_url: "{{repo_url}}"
+      token: "{{github_token}}"
+    output: "{{repository_metadata}}"
+    on_failure: stop_pipeline
+
+  - name: rag_initializer
+    agent: rag_initializer
+    description: Populate RAG context from code, docs, wiki
+    input:
+      repository_metadata: "{{repository_metadata}}"
+    output: "{{rag_index}}"
+    on_failure: stop_pipeline
+
+  - name: memory_agent
+    agent: memory_agent
+    description: Initialize agent memory with repo history and context
+    input:
+      repository_metadata: "{{repository_metadata}}"
+      rag_index: "{{rag_index}}"
+    output: "{{memory_state}}"
+    on_failure: stop_pipeline
+
+  - name: architecture_evaluator
+    agent: architecture_evaluator
+    description: Analyze project architecture and suggest improvements
+    input:
+      repository_metadata: "{{repository_metadata}}"
+    output: "{{architecture_report}}"
+    on_failure: log_warning
+
+  - name: test_analyzer
+    agent: test_analyzer
+    description: Evaluate existing tests and coverage
+    input:
+      repository_metadata: "{{repository_metadata}}"
+    output: "{{test_coverage_report}}"
+    on_failure: log_warning
+
+  - name: pipeline_initializer
+    agent: pipeline_initializer
+    description: Setup feature and CI pipelines, cron jobs, and webhooks
+    input:
+      repository_metadata: "{{repository_metadata}}"
+      memory_state: "{{memory_state}}"
+      architecture_report: "{{architecture_report}}"
+      test_coverage_report: "{{test_coverage_report}}"
+    output: "{{pipeline_status}}"
+    on_failure: escalate_to_human
+
+# Logging
+logging:
+  level: INFO
+  log_decisions: true
+  post_to_github: true

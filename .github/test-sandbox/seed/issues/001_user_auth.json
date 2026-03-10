@@ -1,0 +1,5 @@
+{
+  "title": "Add user authentication",
+  "body": "## Description\nImplement user authentication system\n\n## Requirements\n- [ ] Login form\n- [ ] Registration form\n- [ ] Password reset\n\n## Acceptance Criteria\n- Users can register with email/password\n- Users can log in\n- Sessions persist across page refreshes\n\n## Definition of Done\n- [ ] Code written\n- [ ] Unit tests added\n- [ ] Integration tests pass\n- [ ] Documentation updated",
+  "labels": ["feature", "backend"]
+}

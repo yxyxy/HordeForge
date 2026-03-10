@@ -1,0 +1,9 @@
+project: HordeForge
+repo: github.com/org/project
+llm:
+  provider: openai
+  model: gpt-5
+github:
+  issues: true
+  pull_requests: true
+pipeline: default

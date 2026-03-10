@@ -1,0 +1,153 @@
+# pipelines/feature_pipeline.yaml
+# Feature Pipeline for HordeForge
+# Description: Full autonomous pipeline from issue to merged PR
+
+pipeline_name: feature_pipeline
+description: |
+  Pipeline for handling GitHub issues autonomously.
+  Steps include:
+    - DoD extraction
+    - Specification generation
+    - BDD/TDD creation
+    - Code implementation
+    - Test execution
+    - Fix loop
+    - Review
+    - Merge
+
+triggers:
+  - issue_created
+  - manual_trigger
+  - scheduled_trigger
+
+steps:
+
+  - name: dod_extractor
+    agent: dod_extractor
+    description: Extract Definition of Done from GitHub issue
+    input:
+      issue: "{{issue}}"
+    output: "{{dod}}"
+    on_failure: stop_pipeline
+
+  - name: architecture_planner
+    agent: architecture_planner
+    description: Create technical specification and plan tasks
+    input:
+      dod: "{{dod}}"
+      repository: "{{repository}}"
+      rag_context: "{{rag_context}}"
+    output: "{{specification}}"
+    on_failure: stop_pipeline
+
+  - name: specification_writer
+    agent: specification_writer
+    description: Generate detailed specifications, user stories, and acceptance criteria
+    input:
+      specification: "{{specification}}"
+      rules: "{{rules}}"
+    output: "{{feature_spec}}"
+    on_failure: stop_pipeline
+
+  - name: task_decomposer
+    agent: task_decomposer
+    description: Decompose specification into subtasks for agents
+    input:
+      feature_spec: "{{feature_spec}}"
+    output: "{{subtasks}}"
+    on_failure: stop_pipeline
+
+  - name: bdd_generator
+    agent: bdd_generator
+    description: Generate BDD scenarios based on specification
+    input:
+      feature_spec: "{{feature_spec}}"
+    output: "{{bdd_scenarios}}"
+    on_failure: skip_step
+
+  - name: test_generator
+    agent: test_generator
+    description: Generate TDD tests (unit and integration) for each subtask
+    input:
+      subtasks: "{{subtasks}}"
+      rules: "{{rules}}"
+    output: "{{tests}}"
+    on_failure: stop_pipeline
+
+  - name: code_generator
+    agent: code_generator
+    description: Implement code to satisfy tests
+    input:
+      subtasks: "{{subtasks}}"
+      tests: "{{tests}}"
+      repository: "{{repository}}"
+    output: "{{code_patch}}"
+    on_failure: retry_step
+
+  - name: test_runner
+    agent: test_runner
+    description: Run tests on code patch
+    input:
+      code_patch: "{{code_patch}}"
+      tests: "{{tests}}"
+    output: "{{test_results}}"
+    on_failure: trigger_fix_loop
+
+  - name: fix_agent
+    agent: fix_agent
+    description: Iteratively fix failing tests until all pass
+    input:
+      code_patch: "{{code_patch}}"
+      test_results: "{{test_results}}"
+    output: "{{fixed_code_patch}}"
+    retry_limit: 5
+    on_failure: create_issue_for_human
+
+  - name: review_agent
+    agent: review_agent
+    description: Review PR automatically, comment issues, approve or request changes
+    input:
+      fixed_code_patch: "{{fixed_code_patch}}"
+      repository: "{{repository}}"
+    output: "{{review_result}}"
+    on_failure: create_issue_for_human
+
+  - name: pr_merge_agent
+    agent: pr_merge_agent
+    description: Merge PR to main branch if review passes
+    input:
+      review_result: "{{review_result}}"
+      repository: "{{repository}}"
+    output: "{{merge_status}}"
+    on_failure: create_issue_for_human
+
+  - name: ci_monitor_agent
+    agent: ci_failure_analyzer
+    description: Monitor CI after merge, create issue if tests fail
+    input:
+      repository: "{{repository}}"
+    output: "{{ci_issue}}"
+    on_failure: escalate_to_human
+
+# Conditional loops
+
+loops:
+  - condition: "{{test_runner.test_results.failed}} > 0"
+    steps:
+      - fix_agent
+      - test_runner
+
+# Logging
+
+logging:
+  level: INFO
+  log_decisions: true
+  log_artifacts: true
+  post_to_github: true
+
+# Notes:
+
+# - Each step follows AGENT_SPEC.md contract
+# - All outputs must be validated JSON
+# - Loops ensure all DoD is satisfied before merge
+# - CI monitoring ensures post-merge self-healing

@@ -1,0 +1,35 @@
+# CI Monitoring Pipeline
+# Triggered by ci_monitor scheduler job.
+
+pipeline_name: ci_monitoring_pipeline
+description: |
+  Monitoring-oriented pipeline that classifies CI signal and generates
+  follow-up diagnostics artifact.
+
+triggers:
+  - scheduled_trigger
+  - manual_trigger
+
+steps:
+  - name: ci_failure_analyzer
+    agent: ci_failure_analyzer
+    description: Analyze latest workflow run status
+    input:
+      ci_run: "{{ci_run}}"
+      repository: "{{repository}}"
+    output: "{{failure_analysis}}"
+    on_failure: log_warning
+
+  - name: issue_closer
+    agent: issue_closer
+    description: Derive closure readiness from monitoring snapshot
+    input:
+      ci_results: "{{failure_analysis}}"
+      issue: "{{issue}}"
+    output: "{{close_status}}"
+    on_failure: log_warning
+
+logging:
+  level: INFO
+  log_decisions: true
+  post_to_github: false

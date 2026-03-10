@@ -1,0 +1,213 @@
+# Test Sandbox Configuration
+
+sandbox:
+  org: "hordeforge-test"
+  repo: "hordeforge-sandbox"
+  default_branch: "main"
+
+# Sample issues to create
+issues:
+  - title: "Add user authentication"
+    body: |
+      ## Description
+      Implement user authentication system
+      
+      ## Requirements
+      - [ ] Login form
+      - [ ] Registration form
+      - [ ] Password reset
+      
+      ## Acceptance Criteria
+      - Users can register with email/password
+      - Users can log in
+      - Sessions persist across page refreshes
+    labels: ["feature", "backend"]
+
+  - title: "Fix memory leak in data processor"
+    body: |
+      ## Description
+      The data processor is leaking memory when processing large files
+      
+      ## Steps to Reproduce
+      1. Process a file larger than 100MB
+      - Memory usage increases
+      - Process never releases memory
+      
+      ## Expected Behavior
+      Memory should be released after processing
+      
+      ## Stack Trace
+      ```
+      MemoryError: Out of memory at line 42
+      ```
+    labels: ["bug", "performance"]
+
+  - title: "Add unit tests for utils module"
+    body: |
+      ## Description
+      Add comprehensive unit tests for the utils module
+      
+      ## Requirements
+      - Test all public functions
+      - Achieve 80% coverage
+      - Include edge cases
+    labels: ["testing", "enhancement"]
+
+# Sample code files to seed
+code_files:
+  - path: "src/auth.py"
+    content: |
+      """User authentication module."""
+      
+      class AuthError(Exception):
+          """Authentication error."""
+          pass
+      
+      class User:
+          """User model."""
+          
+          def __init__(self, username: str, email: str):
+              self.username = username
+              self.email = email
+              self.is_authenticated = False
+          
+          def authenticate(self, password: str) -> bool:
+              """Authenticate user with password."""
+              # Placeholder - implement properly
+              if len(password) >= 8:
+                  self.is_authenticated = True
+                  return True
+              return False
+      
+      def login(username: str, password: str) -> User:
+          """Log in a user."""
+          user = User(username, f"{username}@example.com")
+          if user.authenticate(password):
+              return user
+          raise AuthError("Invalid credentials")
+      
+      def logout(user: User) -> None:
+          """Log out a user."""
+          user.is_authenticated = False
+
+  - path: "src/utils.py"
+    content: |
+      """Utility functions."""
+      
+      def parse_config(config: dict) -> dict:
+          """Parse configuration dictionary."""
+          defaults = {
+              "host": "localhost",
+              "port": 8080,
+              "debug": False,
+          }
+          return {**defaults, **config}
+      
+      def validate_email(email: str) -> bool:
+          """Validate email format."""
+          return "@" in email and "." in email.split("@")[1]
+      
+      def format_date(date_str: str) -> str:
+          """Format date string."""
+          # Simple implementation
+          return date_str
+
+  - path: "src/data_processor.py"
+    content: |
+      """Data processing module."""
+      
+      class DataProcessor:
+          """Process data files."""
+          
+          def __init__(self):
+              self.data = []
+          
+          def load(self, filepath: str) -> list:
+              """Load data from file."""
+              with open(filepath, 'r') as f:
+                  self.data = f.readlines()
+              return self.data
+          
+          def process(self) -> list:
+              """Process loaded data."""
+              return [line.strip() for line in self.data]
+          
+          def save(self, filepath: str, data: list) -> None:
+              """Save data to file."""
+              with open(filepath, 'w') as f:
+                  f.writelines(line + '\n' for line in data)
+
+# Sample test files
+test_files:
+  - path: "tests/test_auth.py"
+    content: |
+      """Tests for auth module."""
+      
+      import pytest
+      from src.auth import User, login, AuthError
+      
+      def test_user_creation():
+          """Test user creation."""
+          user = User("testuser", "test@example.com")
+          assert user.username == "testuser"
+          assert user.is_authenticated is False
+      
+      def test_successful_authentication():
+          """Test successful authentication."""
+          user = User("testuser", "test@example.com")
+          result = user.authenticate("password123")
+          assert result is True
+          assert user.is_authenticated is True
+      
+      def test_failed_authentication():
+          """Test failed authentication."""
+          user = User("testuser", "test@example.com")
+          result = user.authenticate("short")
+          assert result is False
+          assert user.is_authenticated is False
+      
+      def test_login_success():
+          """Test login function."""
+          user = login("testuser", "password123")
+          assert user.username == "testuser"
+      
+      def test_login_failure():
+          """Test login with invalid credentials."""
+          with pytest.raises(AuthError):
+              login("testuser", "short")
+
+  - path: "tests/test_utils.py"
+    content: |
+      """Tests for utils module."""
+      
+      from src.utils import parse_config, validate_email, format_date
+      
+      def test_parse_config_defaults():
+          """Test config parsing with defaults."""
+          config = parse_config({})
+          assert config["host"] == "localhost"
+          assert config["port"] == 8080
+      
+      def test_parse_config_override():
+          """Test config parsing with overrides."""
+          config = parse_config({"port": 9000})
+          assert config["port"] == 9000
+      
+      def test_validate_email_valid():
+          """Test valid email validation."""
+          assert validate_email("test@example.com") is True
+      
+      def test_validate_email_invalid():
+          """Test invalid email validation."""
+          assert validate_email("invalid") is False
+      
+      def test_format_date():
+          """Test date formatting."""
+          result = format_date("2024-01-01")
+          assert result == "2024-01-01"
+
+# CI workflow configuration
+ci_config:
+  python_version: "3.10"
+  test_command: "pytest tests/ -v"
+  lint_command: "ruff check ."
