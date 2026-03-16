@@ -73,6 +73,8 @@
 | Kubernetes integration | P1 | done | `scheduler/k8s/` - Kubernetes integration for scheduling | - |
 | SQL models | P1 | done | `storage/sql_models.py` - SQL models for ORM | - |
 | Agent registry | P1 | partial | runtime: `agents/registry/`, metadata: `registry/agents.py` | единый source-of-truth реестр |
+| Agent Memory | P1 | done | `rag/memory_store.py`, `orchestrator/hooks.py`, `agents/memory_agent.py` - memory storage, hooks for saving results, memory retrieval | - |
+| Context Optimization | P1 | done | `rag/context_compressor.py`, `rag/deduplicator.py` - compression and deduplication of context | - |
 
 ## MVP фичи, которые должны быть закрыты первыми
 

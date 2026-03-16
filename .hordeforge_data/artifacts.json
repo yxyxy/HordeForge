@@ -1,1 +1,10 @@
-[]
+[
+  {
+    "run_id": "default:594d6616-a18b-4db6-a03f-3195803f0d08",
+    "step_name": "repo_connector",
+    "artifact_type": "repository_operation",
+    "content": {},
+    "size_bytes": 2,
+    "tenant_id": "default"
+  }
+]

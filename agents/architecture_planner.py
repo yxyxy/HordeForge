@@ -433,6 +433,9 @@ class ArchitecturePlanner(BaseAgent):
         feature_description = context.get("feature_description", "")
         project_path = context.get("project_path", ".")
 
+        # Get memory context if available
+        memory_context = context.get("memory_context", "")
+
         if not feature_description:
             return build_agent_result(
                 status="FAILURE",
@@ -443,6 +446,19 @@ class ArchitecturePlanner(BaseAgent):
                 logs=["No feature description found in context"],
                 next_actions=[],
             )
+
+        # If memory context exists, consider it in the analysis
+        if memory_context:
+            # Enhance feature description with memory context
+            enhanced_description = f"""
+Original feature description: {feature_description}
+
+Previous solutions and architectural decisions:
+{memory_context}
+
+Consider the previous solutions and architectural decisions when proposing the new architecture.
+"""
+            feature_description = enhanced_description
 
         # Generate architecture proposal
         proposal = generate_architecture_proposal(feature_description, project_path)
@@ -461,9 +477,9 @@ class ArchitecturePlanner(BaseAgent):
                 "dependencies": proposal.dependencies,
             },
             "analysis": {
-                "rag_patterns": analyze_rag_documentation(feature_description)[
-                    "identified_patterns"
-                ],
+                "rag_patterns": analyze_rag_documentation(
+                    feature_description.replace("Original feature description: ", "").split("\n")[0]
+                ),
                 "code_structure_summary": {
                     "total_modules": len(analyze_code_structure(project_path)["modules"]),
                     "total_files": len(analyze_code_structure(project_path)["files"]),

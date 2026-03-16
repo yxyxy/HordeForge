@@ -1,1 +1,494 @@
-[]
+[
+  {
+    "run_id": "default:594d6616-a18b-4db6-a03f-3195803f0d08",
+    "pipeline_name": "init_pipeline",
+    "status": "FAILED",
+    "source": "cli",
+    "correlation_id": "5ca2e50c-a213-4ff6-b95f-bec00670514f",
+    "started_at": "2026-03-16T22:18:27.289818+00:00",
+    "tenant_id": "default",
+    "repository_full_name": "acme/hordeforge",
+    "finished_at": "2026-03-16T22:18:43.902562+00:00",
+    "result": {
+      "run_id": "default:594d6616-a18b-4db6-a03f-3195803f0d08",
+      "pipeline_name": "init_pipeline",
+      "status": "FAILED",
+      "steps": {
+        "repo_connector": {
+          "artifacts": [
+            {
+              "type": "repository_operation",
+              "content": {}
+            }
+          ],
+          "next_actions": [
+            "retry_repository_operation",
+            "check_credentials"
+          ],
+          "logs": [
+            "Repository operation failed: Authentication failed - invalid token"
+          ],
+          "decisions": [
+            {
+              "reason": "Repository operation failed: Authentication failed - invalid token",
+              "confidence": 0.5
+            }
+          ],
+          "status": "FAILED"
+        }
+      },
+      "summary": {
+        "run_id": "default:594d6616-a18b-4db6-a03f-3195803f0d08",
+        "pipeline_name": "init_pipeline",
+        "correlation_id": "5ca2e50c-a213-4ff6-b95f-bec00670514f",
+        "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+        "run_status": "FAILED",
+        "step_count": 6,
+        "status_counts": {
+          "FAILED": 1,
+          "PARTIAL_SUCCESS": 4,
+          "SUCCESS": 1
+        },
+        "total_retries": 0,
+        "errors": [],
+        "step_results_count": 1,
+        "step_retries": {
+          "repo_connector": 0,
+          "rag_initializer": 0,
+          "memory_agent": 0,
+          "architecture_evaluator": 0,
+          "test_analyzer": 0,
+          "pipeline_initializer": 0
+        },
+        "step_durations_seconds": {
+          "repo_connector": 0.43446,
+          "rag_initializer": 0.0,
+          "memory_agent": 0.0,
+          "architecture_evaluator": 0.0,
+          "test_analyzer": 0.0,
+          "pipeline_initializer": 0.006569
+        }
+      },
+      "run_state": {
+        "run_id": "default:594d6616-a18b-4db6-a03f-3195803f0d08",
+        "pipeline_name": "init_pipeline",
+        "correlation_id": "5ca2e50c-a213-4ff6-b95f-bec00670514f",
+        "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+        "steps": [
+          {
+            "name": "repo_connector",
+            "agent": "repo_connector",
+            "status": "FAILED",
+            "attempts": 1,
+            "correlation_id": "5ca2e50c-a213-4ff6-b95f-bec00670514f",
+            "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+            "span_id": "364b29d5c1b1423f",
+            "parent_span_id": "6d4073a1076f4ff9",
+            "started_at": "2026-03-16T22:18:27.293193+00:00",
+            "finished_at": "2026-03-16T22:18:27.727653+00:00",
+            "error": null,
+            "output": {
+              "artifacts": [
+                {
+                  "type": "repository_operation",
+                  "content": {}
+                }
+              ],
+              "next_actions": [
+                "retry_repository_operation",
+                "check_credentials"
+              ],
+              "logs": [
+                "Repository operation failed: Authentication failed - invalid token"
+              ],
+              "decisions": [
+                {
+                  "reason": "Repository operation failed: Authentication failed - invalid token",
+                  "confidence": 0.5
+                }
+              ],
+              "status": "FAILED"
+            }
+          },
+          {
+            "name": "rag_initializer",
+            "agent": "rag_initializer",
+            "status": "PARTIAL_SUCCESS",
+            "attempts": 1,
+            "correlation_id": "5ca2e50c-a213-4ff6-b95f-bec00670514f",
+            "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+            "span_id": "e6879467fd02406a",
+            "parent_span_id": "6d4073a1076f4ff9",
+            "started_at": "2026-03-16T22:18:27.293913+00:00",
+            "finished_at": null,
+            "error": null,
+            "output": {
+              "artifacts": [
+                {
+                  "type": "rag_index",
+                  "content": {
+                    "index_id": "repo_index_3555923253042141473",
+                    "indexed_files_count": 0,
+                    "total_symbols_count": 0,
+                    "source_repo": "./",
+                    "deterministic": true,
+                    "vector_store_status": false,
+                    "keyword_index_status": false,
+                    "collection_name": "repo_chunks",
+                    "rag_working": false
+                  }
+                }
+              ],
+              "next_actions": [
+                "memory_agent"
+              ],
+              "logs": [
+                "Indexed 0 files from ./.",
+                "Extracted 0 symbols.",
+                "Vector store status: Failed",
+                "Keyword index status: Failed"
+              ],
+              "decisions": [
+                {
+                  "reason": "RAG index initialization failed.",
+                  "confidence": 0.65
+                }
+              ],
+              "status": "PARTIAL_SUCCESS"
+            }
+          },
+          {
+            "name": "memory_agent",
+            "agent": "memory_agent",
+            "status": "PARTIAL_SUCCESS",
+            "attempts": 1,
+            "correlation_id": "5ca2e50c-a213-4ff6-b95f-bec00670514f",
+            "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+            "span_id": "3a8d80e0e1614148",
+            "parent_span_id": "6d4073a1076f4ff9",
+            "started_at": "2026-03-16T22:18:27.294540+00:00",
+            "finished_at": null,
+            "error": null,
+            "output": {
+              "artifacts": [
+                {
+                  "type": "memory_state",
+                  "content": {
+                    "schema_version": "1.0",
+                    "repository": {
+                      "owner": "unknown",
+                      "repo_name": "unknown",
+                      "full_name": "unknown"
+                    },
+                    "knowledge": {
+                      "documents_count": 0,
+                      "index_id": "rag_index_missing"
+                    },
+                    "events": [
+                      {
+                        "type": "memory_initialized",
+                        "source": "memory_agent"
+                      }
+                    ],
+                    "ready_for_downstream": true
+                  }
+                }
+              ],
+              "next_actions": [
+                "architecture_evaluator",
+                "test_analyzer"
+              ],
+              "logs": [
+                "Initial memory state prepared.",
+                "Repository metadata present: False.",
+                "RAG index present: False."
+              ],
+              "decisions": [
+                {
+                  "reason": "Memory state seeded from repository metadata and docs index.",
+                  "confidence": 0.7
+                }
+              ],
+              "status": "PARTIAL_SUCCESS"
+            }
+          },
+          {
+            "name": "architecture_evaluator",
+            "agent": "architecture_evaluator",
+            "status": "PARTIAL_SUCCESS",
+            "attempts": 1,
+            "correlation_id": "5ca2e50c-a213-4ff6-b95f-bec00670514f",
+            "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+            "span_id": "dceb0d4ef81844cb",
+            "parent_span_id": "6d4073a1076f4ff9",
+            "started_at": "2026-03-16T22:18:27.295276+00:00",
+            "finished_at": null,
+            "error": null,
+            "output": {
+              "artifacts": [
+                {
+                  "type": "architecture_report",
+                  "content": {
+                    "target": "unknown",
+                    "findings": [
+                      "MVP runtime is orchestrator-driven.",
+                      "Agent contracts are validated by runtime schema validator."
+                    ],
+                    "risks": [
+                      "Repository metadata is missing; analysis is generic."
+                    ],
+                    "recommendations": [
+                      "Add integration tests for init/feature/ci_fix pipelines.",
+                      "Promote deterministic stubs to production integrations."
+                    ]
+                  }
+                }
+              ],
+              "next_actions": [
+                "pipeline_initializer"
+              ],
+              "logs": [
+                "Architecture evaluation completed in MVP deterministic mode."
+              ],
+              "decisions": [
+                {
+                  "reason": "Baseline architecture report generated for initialization flow.",
+                  "confidence": 0.66
+                }
+              ],
+              "status": "PARTIAL_SUCCESS"
+            }
+          },
+          {
+            "name": "test_analyzer",
+            "agent": "test_analyzer",
+            "status": "PARTIAL_SUCCESS",
+            "attempts": 1,
+            "correlation_id": "5ca2e50c-a213-4ff6-b95f-bec00670514f",
+            "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+            "span_id": "f0e2e4855587424b",
+            "parent_span_id": "6d4073a1076f4ff9",
+            "started_at": "2026-03-16T22:18:27.295555+00:00",
+            "finished_at": null,
+            "error": null,
+            "output": {
+              "artifacts": [
+                {
+                  "type": "test_coverage_report",
+                  "content": {
+                    "total_tests": 0,
+                    "coverage_percentage": 0,
+                    "risk_level": "high",
+                    "missing_tests": [],
+                    "test_files": [],
+                    "modules": [],
+                    "fallback_reason": "No tests or coverage data discovered in provided context."
+                  }
+                }
+              ],
+              "next_actions": [
+                "pipeline_initializer"
+              ],
+              "logs": [
+                "Detected 0 test files.",
+                "Coverage: 0%",
+                "Risk level: high",
+                "Missing tests for: 0 modules"
+              ],
+              "decisions": [
+                {
+                  "reason": "Coverage report generated via intelligent test analyzer.",
+                  "confidence": 0.7
+                }
+              ],
+              "status": "PARTIAL_SUCCESS"
+            }
+          },
+          {
+            "name": "pipeline_initializer",
+            "agent": "pipeline_initializer",
+            "status": "SUCCESS",
+            "attempts": 1,
+            "correlation_id": "5ca2e50c-a213-4ff6-b95f-bec00670514f",
+            "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+            "span_id": "13b8bdd5ba3b4252",
+            "parent_span_id": "6d4073a1076f4ff9",
+            "started_at": "2026-03-16T22:18:27.296792+00:00",
+            "finished_at": "2026-03-16T22:18:27.303361+00:00",
+            "error": null,
+            "output": {
+              "artifacts": [
+                {
+                  "type": "pipeline_config",
+                  "content": {
+                    "pipeline_type": "init",
+                    "pipeline_name": "init_pipeline",
+                    "description": "Initialize project for autonomous AI agents",
+                    "steps": [
+                      {
+                        "name": "repo_connector",
+                        "agent": "repo_connector",
+                        "depends_on": [],
+                        "on_failure": "stop_pipeline",
+                        "retry_limit": null,
+                        "timeout_seconds": null
+                      },
+                      {
+                        "name": "rag_initializer",
+                        "agent": "rag_initializer",
+                        "depends_on": [
+                          "repo_connector"
+                        ],
+                        "on_failure": "stop_pipeline",
+                        "retry_limit": null,
+                        "timeout_seconds": null
+                      },
+                      {
+                        "name": "memory_agent",
+                        "agent": "memory_agent",
+                        "depends_on": [
+                          "repo_connector",
+                          "rag_initializer"
+                        ],
+                        "on_failure": "stop_pipeline",
+                        "retry_limit": null,
+                        "timeout_seconds": null
+                      },
+                      {
+                        "name": "architecture_evaluator",
+                        "agent": "architecture_evaluator",
+                        "depends_on": [
+                          "repo_connector"
+                        ],
+                        "on_failure": "stop_pipeline",
+                        "retry_limit": null,
+                        "timeout_seconds": null
+                      },
+                      {
+                        "name": "test_analyzer",
+                        "agent": "test_analyzer",
+                        "depends_on": [
+                          "repo_connector"
+                        ],
+                        "on_failure": "stop_pipeline",
+                        "retry_limit": null,
+                        "timeout_seconds": null
+                      }
+                    ],
+                    "step_count": 5,
+                    "parallel_execution": {
+                      "max_parallel_workers": 3,
+                      "execution_levels": [
+                        [
+                          "repo_connector"
+                        ],
+                        [
+                          "rag_initializer",
+                          "architecture_evaluator",
+                          "test_analyzer"
+                        ],
+                        [
+                          "memory_agent"
+                        ]
+                      ],
+                      "parallelizable_steps": [
+                        "repo_connector"
+                      ]
+                    },
+                    "estimated_duration_minutes": 6,
+                    "validation": {
+                      "inputs_valid": true,
+                      "pipeline_exists": true,
+                      "steps_configured": true,
+                      "yaml_steps_count": 6
+                    }
+                  }
+                }
+              ],
+              "next_actions": [
+                "feature_pipeline"
+              ],
+              "logs": [
+                "Pipeline type: init",
+                "Pipeline name: init_pipeline",
+                "Steps configured: 5",
+                "Pipeline exists: True"
+              ],
+              "decisions": [
+                {
+                  "reason": "Pipeline 'init_pipeline' initialized for init task",
+                  "confidence": 0.95
+                }
+              ],
+              "status": "SUCCESS"
+            }
+          }
+        ],
+        "current_step_index": 5,
+        "run_status": "FAILED"
+      },
+      "trace": {
+        "correlation_id": "5ca2e50c-a213-4ff6-b95f-bec00670514f",
+        "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+        "root_span_id": "6d4073a1076f4ff9",
+        "steps": [
+          {
+            "step": "repo_connector",
+            "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+            "span_id": "364b29d5c1b1423f",
+            "parent_span_id": "6d4073a1076f4ff9",
+            "started_at": "2026-03-16T22:18:27.293193+00:00",
+            "finished_at": "2026-03-16T22:18:27.727653+00:00"
+          },
+          {
+            "step": "rag_initializer",
+            "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+            "span_id": "e6879467fd02406a",
+            "parent_span_id": "6d4073a1076f4ff9",
+            "started_at": "2026-03-16T22:18:27.293913+00:00",
+            "finished_at": null
+          },
+          {
+            "step": "memory_agent",
+            "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+            "span_id": "3a8d80e0e1614148",
+            "parent_span_id": "6d4073a1076f4ff9",
+            "started_at": "2026-03-16T22:18:27.294540+00:00",
+            "finished_at": null
+          },
+          {
+            "step": "architecture_evaluator",
+            "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+            "span_id": "dceb0d4ef81844cb",
+            "parent_span_id": "6d4073a1076f4ff9",
+            "started_at": "2026-03-16T22:18:27.295276+00:00",
+            "finished_at": null
+          },
+          {
+            "step": "test_analyzer",
+            "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+            "span_id": "f0e2e4855587424b",
+            "parent_span_id": "6d4073a1076f4ff9",
+            "started_at": "2026-03-16T22:18:27.295555+00:00",
+            "finished_at": null
+          },
+          {
+            "step": "pipeline_initializer",
+            "trace_id": "8dcc654d7540314d8e18b1a5832a7e72",
+            "span_id": "13b8bdd5ba3b4252",
+            "parent_span_id": "6d4073a1076f4ff9",
+            "started_at": "2026-03-16T22:18:27.296792+00:00",
+            "finished_at": "2026-03-16T22:18:27.303361+00:00"
+          }
+        ]
+      }
+    },
+    "error": null,
+    "inputs": {
+      "repo_url": "https://github.com/acme/hordeforge.git",
+      "github_token": "[REDACTED]"
+    },
+    "idempotency_key": "hf:c5770c8b0d9f06e2cc20f7c8941bb7df808f6cc51bba3854405f65baf6ced2bc",
+    "override_state": null
+  }
+]

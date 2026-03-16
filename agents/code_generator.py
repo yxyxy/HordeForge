@@ -53,6 +53,10 @@ class EnhancedCodeGenerator(BaseAgent):
             or {}
         )
 
+        # Get memory context if available
+        memory_context = context.get("memory_context", "")
+        task_description = context.get("task_description", spec.get("summary", ""))
+
         rules_payload: dict[str, Any] = (
             context.get("rules") if isinstance(context.get("rules"), dict) else {}
         )
@@ -86,7 +90,20 @@ class EnhancedCodeGenerator(BaseAgent):
                         "rules_documents": list(rules_documents.keys()),
                     }
 
+                    # Build enhanced prompt with memory context if available
                     prompt: str = build_code_prompt(spec, test_cases, repo_context)
+
+                    # Add memory context to the prompt if available
+                    if memory_context:
+                        enhanced_prompt = f"""
+{prompt}
+
+Previous solutions:
+{memory_context}
+
+Task: {task_description}
+"""
+                        prompt = enhanced_prompt
 
                     response: str = llm.complete(prompt)
                     llm.close()

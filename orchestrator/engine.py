@@ -14,6 +14,7 @@ from uuid import uuid4
 from logging_utils import redact_mapping
 from orchestrator.context import ExecutionContext
 from orchestrator.executor import StepExecutor
+from orchestrator.hooks import trigger_memory_hook
 from orchestrator.loader import LoopDefinition, PipelineDefinition, PipelineLoader, StepDefinition
 from orchestrator.override import RUN_OVERRIDE_REGISTRY
 from orchestrator.parallel import build_step_dependency_graph, select_lock_aware_batch
@@ -477,13 +478,24 @@ class OrchestratorEngine:
                 step_results[step.name] = output
                 if should_stop:
                     break
+                # Вызываем memory hook после успешного выполнения шага
+                trigger_memory_hook(step.name, output, context.state)
         else:
-            should_stop = self._execute_with_parallelism(
-                steps_to_execute,
-                context,
-                run_state,
-                step_results,
+            # Выполняем шаги с параллелизмом
+            step_outputs, should_stop = self._execute_step_batch(
+                steps_to_execute, context, run_state
             )
+
+            # Обновляем результаты шагов
+            for step_name, output in step_outputs.items():
+                step_results[step_name] = output
+                step = next((s for s in steps_to_execute if s.name == step_name), None)
+                if step:
+                    # Вызываем memory hook после успешного выполнения шага
+                    trigger_memory_hook(step.name, output, context.state)
+
+                if should_stop:
+                    break
 
         if not should_stop and pipeline.loops:
             step_by_name = {step.name: step for step in pipeline.steps}

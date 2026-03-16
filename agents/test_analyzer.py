@@ -123,8 +123,12 @@ class TestAnalyzer(BaseAgent):
     def run(self, context: dict[str, Any]) -> dict:
         # Try to get repo path from repository metadata
         repo_data = (
-            get_artifact_from_context(context, "repository_data", preferred_steps=["repo_connector"])
-            or get_artifact_from_context(context, "repository_metadata", preferred_steps=["repo_connector"])
+            get_artifact_from_context(
+                context, "repository_data", preferred_steps=["repo_connector"]
+            )
+            or get_artifact_from_context(
+                context, "repository_metadata", preferred_steps=["repo_connector"]
+            )
             or {}
         )
         repo_path = repo_data.get("local_path")

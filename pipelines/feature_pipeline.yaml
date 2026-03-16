@@ -30,6 +30,22 @@ steps:
     output: "{{dod}}"
     on_failure: stop_pipeline
 
+  - name: rag_initializer
+    agent: rag_initializer
+    description: Initialize RAG with repository data
+    input:
+      repository: "{{repository}}"
+    output: "{{rag_context}}"
+    on_failure: stop_pipeline
+
+  - name: memory_retrieval
+    agent: memory_agent
+    description: Retrieve similar tasks from memory
+    input:
+      query: "{{issue.title}} {{issue.body}}"
+    output: "{{memory_context}}"
+    on_failure: continue
+
   - name: architecture_planner
     agent: architecture_planner
     description: Create technical specification and plan tasks
@@ -37,6 +53,7 @@ steps:
       dod: "{{dod}}"
       repository: "{{repository}}"
       rag_context: "{{rag_context}}"
+      memory_context: "{{memory_context}}"
     output: "{{specification}}"
     on_failure: stop_pipeline
 
@@ -81,6 +98,7 @@ steps:
       subtasks: "{{subtasks}}"
       tests: "{{tests}}"
       repository: "{{repository}}"
+      memory_context: "{{memory_context}}"
     output: "{{code_patch}}"
     on_failure: retry_step
 
@@ -109,8 +127,19 @@ steps:
     input:
       fixed_code_patch: "{{fixed_code_patch}}"
       repository: "{{repository}}"
+      memory_context: "{{memory_context}}"
     output: "{{review_result}}"
     on_failure: create_issue_for_human
+
+  - name: memory_writer
+    agent: memory_agent
+    description: Save results to memory
+    input:
+      task_description: "{{issue.title}}"
+      result: "{{review_result}}"
+      code_patch: "{{fixed_code_patch}}"
+    output: "{{memory_write_result}}"
+    on_failure: continue
 
   - name: pr_merge_agent
     agent: pr_merge_agent

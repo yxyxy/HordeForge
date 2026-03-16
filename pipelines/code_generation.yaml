@@ -1,0 +1,91 @@
+# pipelines/code_generation.yaml
+# Code Generation Pipeline with Memory Integration
+# Description: Full autonomous pipeline from issue to code implementation with memory context
+
+pipeline_name: code_generation
+description: |
+  Pipeline for handling GitHub issues with code implementation.
+  Steps include:
+    - RAG initialization
+    - Memory retrieval
+    - Planning with memory context
+    - Code implementation with memory context
+    - Review
+    - Memory writing
+
+triggers:
+  - issue_created
+  - manual_trigger
+
+steps:
+
+  - name: rag_initializer
+    agent: rag_initializer
+    description: Initialize RAG with repository data
+    input:
+      repository: "{{repository}}"
+    output: "{{rag_context}}"
+    on_failure: stop_pipeline
+
+  - name: memory_retrieval
+    agent: memory_agent
+    description: Retrieve similar tasks from memory
+    input:
+      query: "{{issue.title}} {{issue.body}}"
+    output: "{{memory_context}}"
+    on_failure: continue
+
+  - name: planner
+    agent: architecture_planner
+    description: Create technical plan with memory context
+    input:
+      issue: "{{issue}}"
+      repository: "{{repository}}"
+      rag_context: "{{rag_context}}"
+      memory_context: "{{memory_context}}"
+    output: "{{plan}}"
+    on_failure: stop_pipeline
+
+  - name: code_generator
+    agent: code_generator
+    description: Generate code with memory context
+    input:
+      plan: "{{plan}}"
+      repository: "{{repository}}"
+      rag_context: "{{rag_context}}"
+      memory_context: "{{memory_context}}"
+    output: "{{code_patch}}"
+    on_failure: retry_step
+
+  - name: review
+    agent: review_agent
+    description: Review generated code
+    input:
+      code_patch: "{{code_patch}}"
+      repository: "{{repository}}"
+    output: "{{review_result}}"
+    on_failure: continue
+
+  - name: memory_writer
+    agent: memory_agent
+    description: Save results to memory
+    input:
+      task_description: "{{issue.title}}"
+      result: "{{review_result}}"
+      code_patch: "{{code_patch}}"
+    output: "{{memory_write_result}}"
+    on_failure: continue
+
+# Logging
+
+logging:
+  level: INFO
+  log_decisions: true
+  log_artifacts: true
+  post_to_github: true
+
+# Notes:
+
+# - Each step follows AGENT_SPEC.md contract
+# - All outputs must be validated JSON
+# - Memory context is passed to enhance decision making

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 
 from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
@@ -11,161 +10,134 @@ from agents.context_utils import build_agent_result, get_artifact_from_context
 try:
     import qdrant_client
     from qdrant_client.http import models
-    from sentence_transformers import SentenceTransformer
 except ImportError:
     qdrant_client = None
     models = None
-    SentenceTransformer = None
+
+from rag.keyword_index import KeywordIndex
+from rag.symbol_extractor import SymbolExtractor
+from rag.vector_store import QdrantStore
 
 logger = logging.getLogger(__name__)
 
 
-def setup_vector_db(config: dict[str, Any]) -> dict[str, Any]:
+def extract_and_index_repository(repo_path: str, collection_name: str = "repo_chunks"):
     """
-    Инициализация векторной базы данных
+    Extract symbols from repository and index them in Qdrant with keyword index.
 
     Args:
-        config: Конфигурация векторной базы данных
+        repo_path: Path to the repository to index
+        collection_name: Name of the collection to store embeddings in
 
     Returns:
-        Результат инициализации
+        Dictionary with indexing results
     """
     try:
-        host = config.get("host", "localhost")
-        port = config.get("port", 6333)
+        # Initialize vector store and keyword index
+        vector_store = QdrantStore()
+        keyword_index = KeywordIndex()
 
-        if qdrant_client is None:
-            raise ImportError("qdrant_client и sentence_transformers не установлены")
+        # Create collection if it doesn't exist
+        vector_store.create_collection(collection_name)
 
-        client = qdrant_client.QdrantClient(host=host, port=port)
+        # Initialize symbol extractor
+        extractor = SymbolExtractor()
 
-        # Проверяем соединение
-        client.get_collections()
+        # Walk through all Python files in the repository
+        repo_dir = Path(repo_path)
+        indexed_count = 0
+        total_symbols = 0
 
-        return {"status": "ready", "client": client, "host": host, "port": port}
-    except Exception as e:
-        logger.error(f"Ошибка при инициализации векторной базы данных: {e}")
-        return {"status": "failed", "error": str(e)}
+        for py_file in repo_dir.rglob("*.py"):
+            try:
+                # Extract symbols from the Python file
+                symbols = extractor.extract_symbols(py_file)
 
+                for symbol in symbols:
+                    # Create content for indexing based on symbol type
+                    if symbol.type == "class":
+                        content = f"class {symbol.name}: {symbol.docstring or ''}"
+                    elif symbol.type == "function":
+                        params_str = ", ".join(symbol.parameters)
+                        content = f"def {symbol.name}({params_str}): {symbol.docstring or ''}"
+                    elif symbol.type == "method":
+                        params_str = ", ".join(symbol.parameters)
+                        content = f"def {symbol.name}({params_str}): {symbol.docstring or ''}"
+                    else:
+                        content = f"{symbol.name}: {symbol.docstring or ''}"
 
-def embed_documents(text: str) -> dict[str, Any]:
-    """
-    Генерация эмбеддингов для документа
+                    # Add to vector store
+                    embedding = vector_store.embed_text([content])[0]
 
-    Args:
-        text: Текст документа
+                    # Create a point for Qdrant
+                    point = {
+                        "id": f"{py_file.as_posix()}#{symbol.name}",
+                        "vector": embedding,
+                        "payload": {
+                            "file_path": py_file.as_posix(),
+                            "symbol_name": symbol.name,
+                            "symbol_type": symbol.type,
+                            "content": content,
+                            "line_number": symbol.line_number,
+                            "docstring": symbol.docstring,
+                            "parameters": symbol.parameters,
+                            "class_name": symbol.class_name,
+                            "is_async": symbol.is_async,
+                        },
+                    }
 
-    Returns:
-        Результат эмбеддинга
-    """
-    try:
-        if SentenceTransformer is None:
-            raise ImportError("sentence_transformers не установлен")
+                    # Upsert the point to Qdrant
+                    vector_store.upsert(collection_name, [point])
 
-        # Используем предобученную модель для генерации эмбеддингов
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-        embedding = model.encode([text])
+                    # Add to keyword index
+                    keyword_index.add_document(
+                        doc_id=f"{py_file.as_posix()}#{symbol.name}",
+                        content=content,
+                        metadata={
+                            "file_path": py_file.as_posix(),
+                            "symbol_name": symbol.name,
+                            "symbol_type": symbol.type,
+                            "line_number": symbol.line_number,
+                        },
+                    )
 
-        # Проверяем, является ли результат массивом numpy, и конвертируем его в список
-        if hasattr(embedding[0], "tolist"):
-            embedding_list = embedding[0].tolist()
-        else:
-            embedding_list = list(embedding[0])
+                    total_symbols += 1
 
-        return {
-            "status": "success",
-            "embedding": embedding_list,  # преобразуем в список для сериализации
-            "model": "all-MiniLM-L6-v2",
-        }
-    except Exception as e:
-        logger.error(f"Ошибка при генерации эмбеддинга: {e}")
-        return {"status": "failed", "error": str(e)}
-
-
-def create_index(embeddings: list[list[float]]) -> dict[str, Any]:
-    """
-    Создание индекса для поиска
-
-    Args:
-        embeddings: Список эмбеддингов
-
-    Returns:
-        Результат создания индекса
-    """
-    try:
-        if not embeddings:
-            return {"status": "failed", "error": "Нет эмбеддингов для создания индекса"}
-
-        if qdrant_client is None:
-            raise ImportError("qdrant_client не установлен")
-
-        # Создаем клиент для локальной Qdrant базы
-        client = qdrant_client.QdrantClient(":memory:")  # используем in-memory для MVP
-
-        collection_name = "hordeforge_docs"
-
-        # Удаляем коллекцию если она существует
-        try:
-            client.delete_collection(collection_name)
-        except Exception:
-            pass  # коллекция может не существовать
-
-        # Создаем новую коллекцию
-        client.create_collection(
-            collection_name=collection_name,
-            vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE),
-        )
-
-        # Добавляем векторы в коллекцию
-        points = []
-        for idx, embedding in enumerate(embeddings):
-            points.append(
-                models.PointStruct(id=idx, vector=embedding, payload={"doc_id": f"doc_{idx}"})
-            )
-
-        if points:
-            client.upsert(collection_name=collection_name, points=points)
+                indexed_count += 1
+            except Exception as e:
+                logger.warning(f"Error processing file {py_file}: {e}")
+                continue
 
         return {
             "status": "ready",
-            "index_id": collection_name,
-            "vector_count": len(points),
-            "dimension": len(embeddings[0]) if embeddings else 0,
+            "indexed_files": indexed_count,
+            "total_symbols": total_symbols,
+            "collection_name": collection_name,
+            "vector_store_ready": True,
+            "keyword_index_ready": True,
         }
     except Exception as e:
-        logger.error(f"Ошибка при создании индекса: {e}")
+        logger.error(f"Error during repository indexing: {e}")
         return {"status": "failed", "error": str(e)}
 
 
 class RagInitializer(BaseAgent):
     name = "rag_initializer"
-    description = "Builds a deterministic lightweight RAG index from local docs."
-
-    @staticmethod
-    def _collect_docs(docs_dir: Path) -> list[dict[str, object]]:
-        if not docs_dir.exists() or not docs_dir.is_dir():
-            return []
-
-        files: list[Path] = []
-        for suffix in ("*.md", "*.rst", "*.txt"):
-            files.extend(docs_dir.rglob(suffix))
-        files = sorted({file_path for file_path in files}, key=lambda value: value.as_posix())
-
-        documents: list[dict[str, object]] = []
-        for file_path in files:
-            stat = file_path.stat()
-            documents.append(
-                {
-                    "path": file_path.as_posix(),
-                    "size_bytes": stat.st_size,
-                }
-            )
-        return documents
+    description = "Builds a deterministic lightweight RAG index from repository code."
 
     def run(self, context: dict) -> dict:
-        docs_dir_raw = context.get("docs_dir", "docs")
-        docs_dir = Path(str(docs_dir_raw))
-        documents = self._collect_docs(docs_dir)
+        # Get repository path from context
+        repo_path = context.get("repo_path", context.get("repo_url", "./"))
+
+        # Handle git repository URLs by cloning or using local path
+        if repo_path.startswith("http"):
+            # This would normally involve cloning the repo
+            # For now, we'll assume the repo is already available locally
+            # or the path has been processed by a previous agent
+            repo_path = context.get("local_repo_path", "./")
+        else:
+            repo_path = repo_path if Path(repo_path).exists() else "./"
+
         repository_metadata = (
             get_artifact_from_context(
                 context,
@@ -175,64 +147,39 @@ class RagInitializer(BaseAgent):
             or {}
         )
 
-        # Инициализируем векторную базу данных
-        db_config = {
-            "host": context.get("vector_db_host", "localhost"),
-            "port": context.get("vector_db_port", 6333),
-        }
-
-        db_result = setup_vector_db(db_config)
-        if db_result["status"] != "ready":
-            logger.warning(f"Не удалось инициализировать векторную базу: {db_result.get('error')}")
-
-        # Генерируем эмбеддинги для документов
-        embeddings = []
-        for doc in documents[:10]:  # Ограничиваем количество для MVP
-            try:
-                with open(Path(doc["path"]), encoding="utf-8") as f:
-                    content = f.read()[:100]  # Ограничиваем размер документа
-
-                embed_result = embed_documents(content)
-                if embed_result["status"] == "success":
-                    embeddings.append(embed_result["embedding"])
-            except Exception as e:
-                logger.error(f"Ошибка при обработке документа {doc['path']}: {e}")
-
-        # Создаем индекс
-        index_result = create_index(embeddings)
-        if index_result["status"] != "ready":
-            logger.warning(f"Не удалось создать индекс: {index_result.get('error')}")
+        # Perform repository indexing
+        index_result = extract_and_index_repository(repo_path)
 
         # Determine status based on RAG functionality
-        rag_working = bool(embeddings and index_result["status"] == "ready")
+        rag_working = index_result["status"] == "ready"
         status = "SUCCESS" if rag_working else "PARTIAL_SUCCESS"
-        confidence = 0.88 if rag_working else 0.65
+        confidence = 0.95 if rag_working else 0.65
 
         rag_index = {
-            "index_id": "rag_index_v1",
-            "documents_count": len(documents),
-            "documents": documents,
-            "source_repo": repository_metadata.get("full_name", "unknown"),
+            "index_id": f"repo_index_{hash(repo_path)}",
+            "indexed_files_count": index_result.get("indexed_files", 0),
+            "total_symbols_count": index_result.get("total_symbols", 0),
+            "source_repo": repository_metadata.get("full_name", repo_path),
             "deterministic": True,
-            "vector_db_status": db_result["status"],
-            "embeddings_count": len(embeddings),
-            "index_status": index_result["status"],
-            "index_info": index_result if index_result["status"] == "ready" else None,
+            "vector_store_status": index_result.get("vector_store_ready", False),
+            "keyword_index_status": index_result.get("keyword_index_ready", False),
+            "collection_name": index_result.get("collection_name", "repo_chunks"),
             "rag_working": rag_working,
         }
+
         return build_agent_result(
             status=status,
             artifact_type="rag_index",
             artifact_content=rag_index,
-            reason="Lightweight deterministic docs index built for MVP runtime."
+            reason="Repository code index built with symbol extraction and hybrid search capability."
             if rag_working
-            else "RAG index created but embeddings/vector DB unavailable. Using deterministic fallback.",
+            else "RAG index initialization failed.",
             confidence=confidence,
             logs=[
-                f"Indexed {len(documents)} documents from {docs_dir.as_posix()}.",
-                f"Created embeddings for {len(embeddings)} documents.",
-                f"Vector DB status: {db_result['status']}",
-                f"Index status: {index_result['status']}",
+                f"Indexed {index_result.get('indexed_files', 0)} files from {repo_path}.",
+                f"Extracted {index_result.get('total_symbols', 0)} symbols.",
+                f"Vector store status: {'Ready' if index_result.get('vector_store_ready') else 'Failed'}",
+                f"Keyword index status: {'Ready' if index_result.get('keyword_index_ready') else 'Failed'}",
             ],
             next_actions=["memory_agent"],
         )

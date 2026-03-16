@@ -63,6 +63,8 @@ Issue → DoD → Spec → Tasks → Tests → Code → Fix Loop → Review → 
 - Incremental re-index
 - Top-k retrieval для контекста агентам
 - Embeddings abstraction (OpenAI, Anthropic, Google GenAI)
+- Agent Memory для хранения исторических решений и патчей
+- Context optimization (compression и deduplication) для эффективного использования токенов
 
 ---
 

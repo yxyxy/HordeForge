@@ -4,6 +4,7 @@ import os
 import re
 from dataclasses import dataclass
 
+from orchestrator.loader import PipelineDefinition, PipelineLoader
 from registry.agents import AgentRegistry
 from registry.placeholder_mapping import (
     extract_placeholders,
@@ -11,7 +12,6 @@ from registry.placeholder_mapping import (
     resolve_contract_for_placeholder,
     root_key,
 )
-from orchestrator.loader import PipelineDefinition, PipelineLoader
 
 
 @dataclass(frozen=True)
@@ -297,4 +297,3 @@ class PipelineRegistry:
                             f"contract '{expected_contract}' but placeholder '{key}' "
                             f"uses '{actual_contract}'"
                         )
-
