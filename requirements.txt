@@ -18,3 +18,4 @@ psycopg[binary]>=3.1
 toml
 packaging>=21.0
 fastembed
+qdrant-client>=1.9.0
