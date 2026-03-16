@@ -66,15 +66,13 @@ class RedisTaskQueue(TaskQueueBackend):
             logger.info("Redis connection established with pool size %d", self._pool_size)
         except ImportError as e:
             raise ImportError(
-                "redis is required for Redis queue. "
-                "Install with: pip install redis"
+                "redis is required for Redis queue. Install with: pip install redis"
             ) from e
         except Exception as exc:
             message = str(exc).lower()
             if "connection refused" in message or "error 10061" in message:
                 raise ImportError(
-                    "redis is required for Redis queue. "
-                    "Install with: pip install redis"
+                    "redis is required for Redis queue. Install with: pip install redis"
                 ) from exc
             raise RuntimeError(f"Failed to connect to Redis: {exc}") from exc
 
@@ -99,6 +97,8 @@ class RedisTaskQueue(TaskQueueBackend):
 
             return {
                 "healthy": pong,
+                "status": "healthy" if pong else "unhealthy",
+                "backend": "redis",
                 "latency_ms": round(latency_ms, 2),
                 "pool": pool_info,
                 "checked_at": self._utc_now_iso(),
@@ -106,6 +106,8 @@ class RedisTaskQueue(TaskQueueBackend):
         except Exception as exc:  # noqa: BLE001
             return {
                 "healthy": False,
+                "status": "unhealthy",
+                "backend": "redis",
                 "error": str(exc),
                 "checked_at": self._utc_now_iso(),
             }
@@ -113,9 +115,10 @@ class RedisTaskQueue(TaskQueueBackend):
     def _check_connection(self) -> None:
         """Check connection health before each operation."""
         now = datetime.now(timezone.utc)
-        if self._last_health_check is None or (
-            now - self._last_health_check
-        ).total_seconds() > self._health_check_interval:
+        if (
+            self._last_health_check is None
+            or (now - self._last_health_check).total_seconds() > self._health_check_interval
+        ):
             health = self.health_check()
             if not health.get("healthy", False):
                 # Try to reconnect

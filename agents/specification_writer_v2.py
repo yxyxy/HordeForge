@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
 from agents.llm_wrapper import build_spec_prompt, get_llm_wrapper
 
 
-class EnhancedSpecificationWriter:
+class EnhancedSpecificationWriter(BaseAgent):
     """Production-ready specification writer with LLM support."""
 
     name = "specification_writer"
@@ -102,7 +103,9 @@ class EnhancedSpecificationWriter:
                     llm_context = {
                         "has_upstream_spec": bool(upstream_spec),
                         "has_dod": bool(dod),
-                        "rag_sources_count": len(rag_sources) if isinstance(rag_sources, list) else 0,
+                        "rag_sources_count": len(rag_sources)
+                        if isinstance(rag_sources, list)
+                        else 0,
                         "rules_documents": list(rule_documents.keys()),
                     }
                     prompt = build_spec_prompt(summary, deduped, llm_context)
@@ -137,7 +140,11 @@ class EnhancedSpecificationWriter:
                 rag_sources=rag_sources,
                 rule_documents=rule_documents,
             )
-            reason = "Deterministic spec generated (LLM unavailable)." if llm_error else "Feature spec generated from available artifacts."
+            reason = (
+                "Deterministic spec generated (LLM unavailable)."
+                if llm_error
+                else "Feature spec generated from available artifacts."
+            )
             confidence = 0.9 if llm_error else 0.9
 
         # Build notes
@@ -145,9 +152,7 @@ class EnhancedSpecificationWriter:
             f"requirements_count={len(spec['requirements'])}",
         ]
         if isinstance(rag_sources, list):
-            normalized_sources = [
-                str(item).strip() for item in rag_sources if str(item).strip()
-            ]
+            normalized_sources = [str(item).strip() for item in rag_sources if str(item).strip()]
             notes.append(f"rag_sources={len(normalized_sources)}")
         rules_version = str(rules_payload.get("version", "")).strip()
         if rules_version:
@@ -183,7 +188,11 @@ class EnhancedSpecificationWriter:
         # Common patterns
         if "api" in req_text or "endpoint" in req_text:
             file_changes.append(
-                {"path": "src/api/routes.py", "change_type": "modify", "description": "API endpoint definitions"}
+                {
+                    "path": "src/api/routes.py",
+                    "change_type": "modify",
+                    "description": "API endpoint definitions",
+                }
             )
         if "model" in req_text or "database" in req_text:
             file_changes.append(
@@ -191,7 +200,11 @@ class EnhancedSpecificationWriter:
             )
         if "test" in req_text:
             file_changes.append(
-                {"path": "tests/test_feature.py", "change_type": "create", "description": "Feature tests"}
+                {
+                    "path": "tests/test_feature.py",
+                    "change_type": "create",
+                    "description": "Feature tests",
+                }
             )
 
         technical_notes = [

@@ -1,4 +1,4 @@
-# pipelines/ci_fix_pipeline.yaml
+﻿# pipelines/ci_fix_pipeline.yaml
 # CI Self-Healing Pipeline for HordeForge
 # Description: Automates detection and fixing of failing tests after merge
 
@@ -51,7 +51,7 @@ steps:
     loops:
       condition: "{{test_results.failed}} > 0"
       steps:
-        - fix_agent
+        - fix_loop
         - test_runner
     on_failure: create_issue_for_human
 

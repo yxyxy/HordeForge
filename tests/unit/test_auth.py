@@ -130,17 +130,27 @@ class TestGetOAuthProvider:
 
     def test_get_google_provider(self):
         """Test getting Google OAuth provider."""
-        provider = get_oauth_provider("google", client_id="id", client_secret="secret", redirect_uri="uri")
+        provider = get_oauth_provider(
+            "google", client_id="id", client_secret="secret", redirect_uri="uri"
+        )
         assert isinstance(provider, GoogleOAuthProvider)
 
     def test_get_github_provider(self):
         """Test getting GitHub OAuth provider."""
-        provider = get_oauth_provider("github", client_id="id", client_secret="secret", redirect_uri="uri")
+        provider = get_oauth_provider(
+            "github", client_id="id", client_secret="secret", redirect_uri="uri"
+        )
         assert isinstance(provider, GitHubOAuthProvider)
 
     def test_get_oidc_provider(self):
         """Test getting generic OIDC provider."""
-        provider = get_oauth_provider("oidc", issuer_url="https://issuer.com", client_id="id", client_secret="secret", redirect_uri="uri")
+        provider = get_oauth_provider(
+            "oidc",
+            issuer_url="https://issuer.com",
+            client_id="id",
+            client_secret="secret",
+            redirect_uri="uri",
+        )
         assert isinstance(provider, OIDCOAuthProvider)
 
 
@@ -182,7 +192,9 @@ class TestJWTValidator:
         import json
 
         payload = {"sub": "user123", "email": "test@example.com"}
-        payload_encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        payload_encoded = (
+            base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        )
 
         result = decode_jwt_payload(payload_encoded)
         assert result["sub"] == "user123"
@@ -217,15 +229,18 @@ class TestSessionManager:
 
         mock_redis = session_manager._redis
         import json
+
         now = int(time.time())
-        session_data = json.dumps({
-            "session_id": "valid_session_id",
-            "user_id": "user123",
-            "email": "user@example.com",
-            "roles": ["user"],
-            "created_at": now,
-            "expires_at": now + 3600,
-        })
+        session_data = json.dumps(
+            {
+                "session_id": "valid_session_id",
+                "user_id": "user123",
+                "email": "user@example.com",
+                "roles": ["user"],
+                "created_at": now,
+                "expires_at": now + 3600,
+            }
+        )
         mock_redis.get.return_value = session_data.encode()
 
         result = session_manager.validate_session("valid_session_id")
@@ -298,3 +313,141 @@ class TestAuthMiddleware:
         # Test that /protected redirects to login when no auth
         response = client.get("/protected", follow_redirects=False)
         assert response.status_code in [307, 401]
+
+
+class TestRBACEnforcement:
+    """Tests for RBAC enforcement on gateway endpoints."""
+
+    def test_viewer_cannot_override_run(self):
+        """Test that viewer role cannot execute override."""
+        from scheduler.auth.rbac import Permission, Role, has_role_permission
+
+        # Viewer should not have override:execute permission
+        assert not has_role_permission(Role.VIEWER, Permission.OVERRIDE_EXECUTE)
+
+    def test_operator_can_override_run(self):
+        """Test that operator role can execute override."""
+        from scheduler.auth.rbac import Permission, Role, has_role_permission
+
+        # Operator should have override:execute permission
+        assert has_role_permission(Role.OPERATOR, Permission.OVERRIDE_EXECUTE)
+
+    def test_admin_has_all_permissions(self):
+        """Test that admin role has all permissions."""
+        from scheduler.auth.rbac import Permission, Role, has_role_permission
+
+        # Admin should have all permissions
+        assert has_role_permission(Role.ADMIN, Permission.OVERRIDE_EXECUTE)
+        assert has_role_permission(Role.ADMIN, Permission.CRON_TRIGGER)
+        assert has_role_permission(Role.ADMIN, Permission.QUEUE_DRAIN)
+        assert has_role_permission(Role.ADMIN, Permission.RUNS_READ)
+        assert has_role_permission(Role.ADMIN, Permission.ADMIN_ACCESS)
+
+    def test_viewer_can_read_runs(self):
+        """Test that viewer role can read runs."""
+        from scheduler.auth.rbac import Permission, Role, has_role_permission
+
+        # Viewer should have runs:read permission
+        assert has_role_permission(Role.VIEWER, Permission.RUNS_READ)
+
+    def test_viewer_cannot_trigger_cron(self):
+        """Test that viewer role cannot trigger cron jobs."""
+        from scheduler.auth.rbac import Permission, Role, has_role_permission
+
+        # Viewer should not have cron:trigger permission
+        assert not has_role_permission(Role.VIEWER, Permission.CRON_TRIGGER)
+
+
+class TestJWTConfig:
+    """Tests for JWT configuration in RunConfig."""
+
+    def test_auth_config_defaults(self):
+        """Test that auth config has correct defaults."""
+        import os
+
+        # Set auth env vars for testing
+        with patch.dict(os.environ, {"HORDEFORGE_AUTH_ENABLED": "false"}):
+            from hordeforge_config import RunConfig
+
+            config = RunConfig.from_env()
+            assert config.auth_enabled is False
+            assert config.jwt_secret_key == "dev-jwt-secret-change-in-production"
+            assert config.jwt_algorithm == "HS256"
+            assert config.session_ttl_seconds == 3600
+            assert "/health" in config.auth_public_paths
+
+    def test_auth_config_from_env(self):
+        """Test that auth config can be set from environment."""
+        import os
+
+        env_vars = {
+            "HORDEFORGE_AUTH_ENABLED": "true",
+            "HORDEFORGE_JWT_SECRET_KEY": "test-secret-key",
+            "HORDEFORGE_JWT_ALGORITHM": "HS384",
+            "HORDEFORGE_JWT_ISSUER": "test-issuer",
+            "HORDEFORGE_JWT_AUDIENCE": "test-audience",
+            "HORDEFORGE_SESSION_TTL_SECONDS": "7200",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            from hordeforge_config import RunConfig
+
+            config = RunConfig.from_env()
+            assert config.auth_enabled is True
+            assert config.jwt_secret_key == "test-secret-key"
+            assert config.jwt_algorithm == "HS384"
+            assert config.jwt_issuer == "test-issuer"
+            assert config.jwt_audience == "test-audience"
+            assert config.session_ttl_seconds == 7200
+
+
+class TestJWTTokenWithRoles:
+    """Tests for JWT token with role-based access."""
+
+    def test_create_token_with_admin_role(self):
+        """Test creating JWT token with admin role."""
+        validator = JWTValidator(secret_key="test_secret")
+
+        token = validator.create_token(
+            subject="admin_user",
+            email="admin@example.com",
+            roles=["admin"],
+            expires_in=3600,
+        )
+
+        result = validator.validate_token(token)
+        assert result is not None
+        assert result.subject == "admin_user"
+        assert result.roles == ["admin"]
+
+    def test_create_token_with_operator_role(self):
+        """Test creating JWT token with operator role."""
+        validator = JWTValidator(secret_key="test_secret")
+
+        token = validator.create_token(
+            subject="operator_user",
+            email="operator@example.com",
+            roles=["operator"],
+            expires_in=3600,
+        )
+
+        result = validator.validate_token(token)
+        assert result is not None
+        assert result.subject == "operator_user"
+        assert result.roles == ["operator"]
+
+    def test_create_token_with_viewer_role(self):
+        """Test creating JWT token with viewer role."""
+        validator = JWTValidator(secret_key="test_secret")
+
+        token = validator.create_token(
+            subject="viewer_user",
+            email="viewer@example.com",
+            roles=["viewer"],
+            expires_in=3600,
+        )
+
+        result = validator.validate_token(token)
+        assert result is not None
+        assert result.subject == "viewer_user"
+        assert result.roles == ["viewer"]

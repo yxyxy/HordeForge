@@ -18,6 +18,7 @@
 | P8 Agent Implementation Phase 2 | Week 19 | Agent implementation (ArchitecturePlanner, BddGenerator) | Complete feature pipeline agents |
 | P9 CI/CD & Testing | Week 20 | GitHub Actions CI pipeline, Integration tests | Automated testing |
 | P10 Production Hardening | Week 21 | RBAC, Error handling, Redis config | Production-ready |
+| P11 Agent Development Phase 1 | Week 22-23 | Core agent development and implementation | Repo Connector, RAG Initializer, Memory, Pipeline Initializer, Issue Scanner, CI Monitor, Dependency Checker agents |
 
 ## Фактический статус на 2026-03-10
 
@@ -31,6 +32,7 @@
 8. P8 Agent Implementation Phase 2 — DONE (HF-P8-001..HF-P8-002 COMPLETE).
 9. P9 CI/CD & Testing — DONE (HF-P9-001..HF-P9-002 COMPLETE).
 10. P10 Production Hardening — DONE (HF-P10-001..HF-P10-003 COMPLETE).
+11. P11 Agent Development Phase 1 — IN PROGRESS (HF-P11-001..HF-P11-022 COMPLETE).
 
 ## Phase 5 Backlog (COMPLETED)
 
@@ -51,6 +53,31 @@
 - ✅ Load testing utility
 - ✅ Multi-tenant audit logging
 - ✅ Cost dashboard exporters (Datadog, Grafana)
+
+## Phase 11 Backlog (IN PROGRESS)
+
+- ✅ DoD Extractor Agent (HF-P11-001)
+- ✅ Task Decomposer Agent (HF-P11-002)
+- ✅ Architecture Planner Agent (HF-P11-003)
+- ✅ Specification Writer Agent (HF-P11-004)
+- ✅ BDD Generator Agent (HF-P11-005)
+- ✅ Code Generator Agent (HF-P11-006)
+- ✅ Fix Agent (HF-P11-007)
+- ✅ Patch Workflow Orchestrator (HF-P11-008)
+- ✅ Test Generator Agent (TDD) (HF-P11-009)
+- ✅ Test Runner Agent (HF-P11-010)
+- ✅ Test Analyzer Agent (HF-P11-011)
+- ✅ Review Agent (HF-P11-012)
+- ✅ PR Merge Agent (HF-P11-013)
+- ✅ CI Failure Analyzer (HF-P11-014)
+- ✅ Issue Closer Agent (HF-P11-015)
+- ✅ Repo Connector Agent (HF-P11-016)
+- ✅ RAG Initializer Agent (HF-P11-017)
+- ✅ Memory Agent (HF-P11-018)
+- ✅ Pipeline Initializer Agent (HF-P11-019)
+- ✅ Issue Scanner Agent (HF-P11-020)
+- ✅ CI Monitor Agent (HF-P11-021)
+- ✅ Dependency Checker Agent (HF-P11-022)
 
 ## Критический путь
 

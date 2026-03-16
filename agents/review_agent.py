@@ -1,9 +1,121 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from typing import Any
 
 from agents.context_utils import build_agent_result, get_artifact_from_context
+
+
+def run_lint(project: str) -> dict[str, Any]:
+    """
+    Run lint checks using ruff.
+
+    Args:
+        project: The project type to lint
+
+    Returns:
+        Dictionary containing the linting results
+    """
+    try:
+        # Execute ruff lint command
+        result = subprocess.run(
+            ["ruff", "check", "."],
+            capture_output=True,
+            text=True,
+            cwd=project if project != "python" else ".",
+        )
+
+        return {
+            "tool": "ruff",
+            "exit_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "success": result.returncode == 0,
+        }
+    except FileNotFoundError:
+        # Handle case where ruff is not installed
+        return {
+            "tool": "ruff",
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": "ruff command not found",
+            "success": False,
+        }
+    except Exception as e:
+        return {"tool": "ruff", "exit_code": -1, "stdout": "", "stderr": str(e), "success": False}
+
+
+def run_security_scan(project: str) -> dict[str, Any]:
+    """
+    Run security scan using bandit.
+
+    Args:
+        project: The project type to scan
+
+    Returns:
+        Dictionary containing the security scan results
+    """
+    try:
+        # Execute bandit security scan command
+        result = subprocess.run(
+            ["bandit", "-r", "."],
+            capture_output=True,
+            text=True,
+            cwd=project if project != "python" else ".",
+        )
+
+        return {
+            "tool": "bandit",
+            "exit_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "success": result.returncode == 0,
+        }
+    except FileNotFoundError:
+        # Handle case where bandit is not installed
+        return {
+            "tool": "bandit",
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": "bandit command not found",
+            "success": False,
+        }
+    except Exception as e:
+        return {"tool": "bandit", "exit_code": -1, "stdout": "", "stderr": str(e), "success": False}
+
+
+def validate_architecture_rules(dependencies: list[str]) -> dict[str, Any]:
+    """
+    Validate architecture rules against module dependencies.
+
+    Args:
+        dependencies: List of module dependencies in format "module_a -> module_b"
+
+    Returns:
+        Dictionary containing the architecture validation results
+    """
+    # For now, we'll implement basic validation logic
+    # In a real implementation, this would check against architectural rules
+
+    violations = []
+
+    # Example architectural rule: agents should not depend on api
+    for dep in dependencies:
+        if "agents/" in dep and "api/" in dep:
+            violations.append(f"Architecture violation: {dep} (agents should not depend on api)")
+
+    # Example architectural rule: storage should not depend on api
+    for dep in dependencies:
+        if "storage/" in dep and "api/" in dep:
+            violations.append(f"Architecture violation: {dep} (storage should not depend on api)")
+
+    return {
+        "valid": len(violations) == 0,
+        "violations": violations,
+        "total_dependencies": len(dependencies),
+    }
+
 
 # Code analysis patterns (HF-P5-006)
 SECURITY_PATTERNS = [
@@ -31,27 +143,34 @@ def analyze_file_content(path: str, content: str) -> list[dict[str, Any]]:
     # Security checks
     for pattern, message in SECURITY_PATTERNS:
         if re.search(pattern, content, re.IGNORECASE):
-            findings.append({
-                "type": "security",
-                "severity": "high",
-                "file": path,
-                "message": message,
-            })
+            findings.append(
+                {
+                    "type": "security",
+                    "severity": "high",
+                    "file": path,
+                    "message": message,
+                }
+            )
 
     # Style checks
     for pattern, message in STYLE_PATTERNS:
         if re.search(pattern, content):
-            findings.append({
-                "type": "style",
-                "severity": "low",
-                "file": path,
-                "message": message,
-            })
+            findings.append(
+                {
+                    "type": "style",
+                    "severity": "low",
+                    "file": path,
+                    "message": message,
+                }
+            )
 
     return findings
 
 
-class ReviewAgent:
+from agents.base import BaseAgent
+
+
+class ReviewAgent(BaseAgent):
     name = "review_agent"
     description = "Performs review with policy checks and optional live GitHub integration."
 
@@ -100,7 +219,11 @@ class ReviewAgent:
             "live_review": live_review,
         }
 
-        reason = f"Live GitHub review: {decision}" if live_review else "Review decision generated via policy checks."
+        reason = (
+            f"Live GitHub review: {decision}"
+            if live_review
+            else "Review decision generated via policy checks."
+        )
 
         return build_agent_result(
             status=status,

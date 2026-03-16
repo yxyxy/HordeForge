@@ -102,10 +102,10 @@ class AgentBenchmarkCollector:
 
         # Calculate overall score (0-100)
         score = (
-            avg_spec_accuracy * 25 +
-            avg_code_pass_rate * 25 +
-            avg_test_coverage * 25 +
-            (1.0 - min(avg_fix_iterations / 5.0, 1.0)) * 25
+            avg_spec_accuracy * 25
+            + avg_code_pass_rate * 25
+            + avg_test_coverage * 25
+            + (1.0 - min(avg_fix_iterations / 5.0, 1.0)) * 25
         )
 
         return BenchmarkResult(
@@ -183,7 +183,7 @@ Generated: {result.timestamp}
 - **Status**: {status}
 - **Overall Score**: {result.overall_score:.1f}/100
 - **Total Runs**: {result.total_runs}
-- **Success Rate**: {result.successful_runs}/{result.total_runs} ({result.successful_runs/result.total_runs*100:.1f}%)
+- **Success Rate**: {result.successful_runs}/{result.total_runs} ({result.successful_runs / result.total_runs * 100:.1f}%)
 
 ## Quality Metrics
 | Metric | Value | Baseline | Status |
@@ -204,15 +204,50 @@ Generated: {result.timestamp}
 
 # Golden set of test issues for benchmarking
 GOLDEN_TEST_ISSUES = [
-    {"id": "issue_001", "title": "Add user authentication", "language": "python", "complexity": "medium"},
-    {"id": "issue_002", "title": "Create REST API endpoint", "language": "python", "complexity": "medium"},
-    {"id": "issue_003", "title": "Add unit tests for utils", "language": "python", "complexity": "low"},
-    {"id": "issue_004", "title": "Implement data migration script", "language": "python", "complexity": "high"},
-    {"id": "issue_005", "title": "Add React component", "language": "typescript", "complexity": "medium"},
-    {"id": "issue_006", "title": "Create Go HTTP handler", "language": "go", "complexity": "medium"},
+    {
+        "id": "issue_001",
+        "title": "Add user authentication",
+        "language": "python",
+        "complexity": "medium",
+    },
+    {
+        "id": "issue_002",
+        "title": "Create REST API endpoint",
+        "language": "python",
+        "complexity": "medium",
+    },
+    {
+        "id": "issue_003",
+        "title": "Add unit tests for utils",
+        "language": "python",
+        "complexity": "low",
+    },
+    {
+        "id": "issue_004",
+        "title": "Implement data migration script",
+        "language": "python",
+        "complexity": "high",
+    },
+    {
+        "id": "issue_005",
+        "title": "Add React component",
+        "language": "typescript",
+        "complexity": "medium",
+    },
+    {
+        "id": "issue_006",
+        "title": "Create Go HTTP handler",
+        "language": "go",
+        "complexity": "medium",
+    },
     {"id": "issue_007", "title": "Fix memory leak", "language": "python", "complexity": "high"},
     {"id": "issue_008", "title": "Add input validation", "language": "python", "complexity": "low"},
-    {"id": "issue_009", "title": "Implement caching layer", "language": "python", "complexity": "medium"},
+    {
+        "id": "issue_009",
+        "title": "Implement caching layer",
+        "language": "python",
+        "complexity": "medium",
+    },
     {"id": "issue_010", "title": "Add error handling", "language": "python", "complexity": "low"},
 ]
 

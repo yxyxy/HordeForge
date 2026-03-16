@@ -29,7 +29,7 @@ def create_issue(
     }
     url = f"{api_url}/issues"
     data = {"title": title, "body": body, "labels": labels}
-    
+
     response = session.post(url, headers=headers, json=data)
     response.raise_for_status()
     return response.json()
@@ -46,19 +46,19 @@ def create_file(
 ) -> dict:
     """Create or update a file in the repository."""
     import base64
-    
+
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
     }
     url = f"{api_url}/contents/{path}"
-    
+
     # Check if file exists
     get_response = session.get(url, headers=headers, params={"ref": branch})
     sha = None
     if get_response.status_code == 200:
         sha = get_response.json().get("sha")
-    
+
     data = {
         "message": message,
         "content": base64.b64encode(content.encode()).decode(),
@@ -66,7 +66,7 @@ def create_file(
     }
     if sha:
         data["sha"] = sha
-    
+
     response = session.put(url, headers=headers, json=data)
     response.raise_for_status()
     return response.json()
@@ -84,13 +84,13 @@ def create_branch(
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
     }
-    
+
     # Get SHA of base branch
     ref_url = f"{api_url}/git/ref/heads/{base_branch}"
     ref_response = session.get(ref_url, headers=headers)
     ref_response.raise_for_status()
     base_sha = ref_response.json()["object"]["sha"]
-    
+
     # Create new branch
     create_url = f"{api_url}/git/refs"
     data = {
@@ -111,20 +111,20 @@ def setup_sandbox(
     """Set up the test sandbox repository."""
     session = requests.Session()
     api_url = f"https://api.github.com/repos/{org}/{repo}"
-    
+
     # Load config
     if config_path is None:
         config_path = Path(__file__).parent / "config.yaml"
-    
+
     with open(config_path) as f:
         config = yaml.safe_load(f)
-    
+
     issues_config = config.get("issues", [])
     code_files = config.get("code_files", [])
     test_files = config.get("test_files", [])
-    
+
     print(f"Setting up sandbox: {org}/{repo}")
-    
+
     # Create issues
     print(f"\nCreating {len(issues_config)} issues...")
     for issue in issues_config:
@@ -140,7 +140,7 @@ def setup_sandbox(
             print(f"  ✓ Created issue: {result['number']} - {issue['title']}")
         except Exception as e:
             print(f"  ✗ Failed to create issue: {e}")
-    
+
     # Create code files
     print(f"\nCreating {len(code_files)} code files...")
     for file in code_files:
@@ -156,7 +156,7 @@ def setup_sandbox(
             print(f"  ✓ Created: {file['path']}")
         except Exception as e:
             print(f"  ✗ Failed to create {file['path']}: {e}")
-    
+
     # Create test files
     print(f"\nCreating {len(test_files)} test files...")
     for file in test_files:
@@ -172,7 +172,7 @@ def setup_sandbox(
             print(f"  ✓ Created: {file['path']}")
         except Exception as e:
             print(f"  ✗ Failed to create {file['path']}: {e}")
-    
+
     print("\n✓ Sandbox setup complete!")
     print(f"  Repository: https://github.com/{org}/{repo}")
     print(f"  Issues: https://github.com/{org}/{repo}/issues")
@@ -185,9 +185,9 @@ def main() -> int:
     parser.add_argument("--org", required=True, help="GitHub organization")
     parser.add_argument("--repo", default="hordeforge-sandbox", help="Repository name")
     parser.add_argument("--config", help="Path to config file")
-    
+
     args = parser.parse_args()
-    
+
     try:
         setup_sandbox(
             token=args.token,

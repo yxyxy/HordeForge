@@ -139,9 +139,7 @@ class TestLiveMerger:
 
     def test_merge_if_ready_approved(self, merger, mock_client):
         """Test merge_if_ready with approval."""
-        mock_client.get_pull_request_reviews.return_value = [
-            {"state": "APPROVED"}
-        ]
+        mock_client.get_pull_request_reviews.return_value = [{"state": "APPROVED"}]
 
         result = merger.merge_if_ready(pull_number=1, require_approval=True)
 
@@ -158,9 +156,7 @@ class TestLiveMerger:
 
     def test_get_merge_status(self, merger, mock_client):
         """Test get_merge_status."""
-        mock_client.get_pull_request_reviews.return_value = [
-            {"state": "APPROVED"}
-        ]
+        mock_client.get_pull_request_reviews.return_value = [{"state": "APPROVED"}]
 
         status = merger.get_merge_status(1)
 
@@ -187,9 +183,7 @@ class TestAutoMergeOnSuccess:
         )
         client.get_combined_status = MagicMock(return_value={"state": "success"})
         client.merge_pull_request = MagicMock(return_value={"sha": "merged123"})
-        client.get_pull_request_reviews = MagicMock(
-            return_value=[{"state": "APPROVED"}]
-        )
+        client.get_pull_request_reviews = MagicMock(return_value=[{"state": "APPROVED"}])
         return client
 
     def test_auto_merge_success(self, mock_client):

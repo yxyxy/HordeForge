@@ -1,7 +1,9 @@
 from typing import Any
 
+from agents.base import BaseAgent
 
-class StubAgent:
+
+class StubAgent(BaseAgent):
     """Development scaffold for not-yet-implemented agents."""
 
     name = "stub_agent"

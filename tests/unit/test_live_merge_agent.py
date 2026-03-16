@@ -26,7 +26,9 @@ class TestPrMergeAgent:
             }
         }
         # Мокаем merge_if_ready для dry-run
-        agent.merge_if_ready = MagicMock(return_value={"success": True, "merged": True, "dry_run": True})
+        agent.merge_if_ready = MagicMock(
+            return_value={"success": True, "merged": True, "dry_run": True}
+        )
         result = agent.run(context)
         artifacts = result.get("artifacts", [{}])
         artifact = artifacts[0].get("content", {}) if artifacts else {}
@@ -78,14 +80,19 @@ class TestPrMergeAgent:
     def test_live_merge_not_mergeable(self):
         agent = PrMergeAgent()
         mock_client = MagicMock()
-        mock_client.get_mergeable_status.return_value = {"mergeable": False, "mergeable_state": "dirty"}
+        mock_client.get_mergeable_status.return_value = {
+            "mergeable": False,
+            "mergeable_state": "dirty",
+        }
 
         context = {
             "github_client": mock_client,
             "pr_number": 123,
             "review_result": {"decision": "approve"},
         }
-        agent.merge_if_ready = MagicMock(return_value={"success": False, "merged": False, "merge_error": "Not mergeable"})
+        agent.merge_if_ready = MagicMock(
+            return_value={"success": False, "merged": False, "merge_error": "Not mergeable"}
+        )
         result = agent.run(context)
         artifacts = result.get("artifacts", [{}])
         artifact = artifacts[0].get("content", {}) if artifacts else {}
@@ -130,7 +137,9 @@ class TestPrMergeAgent:
     def test_merge_strategy_default_squash(self):
         agent = PrMergeAgent()
         context = {"review_result": {"decision": "approve"}}
-        agent.merge_if_ready = MagicMock(return_value={"success": True, "merged": True, "strategy": "squash"})
+        agent.merge_if_ready = MagicMock(
+            return_value={"success": True, "merged": True, "strategy": "squash"}
+        )
         result = agent.run(context)
         artifacts = result.get("artifacts", [{}])
         artifact = artifacts[0].get("content", {}) if artifacts else {}
@@ -139,7 +148,9 @@ class TestPrMergeAgent:
     def test_next_actions_when_merged(self):
         agent = PrMergeAgent()
         context = {"review_result": {"decision": "approve"}}
-        agent.merge_if_ready = MagicMock(return_value={"success": True, "merged": True, "next_actions": ["ci_monitor_agent"]})
+        agent.merge_if_ready = MagicMock(
+            return_value={"success": True, "merged": True, "next_actions": ["ci_monitor_agent"]}
+        )
         result = agent.run(context)
         next_actions = result.get("next_actions", [])
         assert "ci_monitor_agent" in next_actions
@@ -147,7 +158,13 @@ class TestPrMergeAgent:
     def test_next_actions_when_not_merged(self):
         agent = PrMergeAgent()
         context = {"review_result": {"decision": "request_changes"}}
-        agent.merge_if_ready = MagicMock(return_value={"success": False, "merged": False, "next_actions": ["request_human_review"]})
+        agent.merge_if_ready = MagicMock(
+            return_value={
+                "success": False,
+                "merged": False,
+                "next_actions": ["request_human_review"],
+            }
+        )
         result = agent.run(context)
         next_actions = result.get("next_actions", [])
         assert "request_human_review" in next_actions
@@ -204,13 +221,15 @@ class TestMergeStatusArtifact:
     def test_artifact_has_required_fields(self):
         agent = PrMergeAgent()
         context = {"review_result": {"decision": "approve"}}
-        agent.merge_if_ready = MagicMock(return_value={
-            "merged": True,
-            "dry_run": True,
-            "strategy": "squash",
-            "reason": "approved",
-            "live_merge": True
-        })
+        agent.merge_if_ready = MagicMock(
+            return_value={
+                "merged": True,
+                "dry_run": True,
+                "strategy": "squash",
+                "reason": "approved",
+                "live_merge": True,
+            }
+        )
         result = agent.run(context)
         artifacts = result.get("artifacts", [{}])
         artifact = artifacts[0].get("content", {}) if artifacts else {}
@@ -233,11 +252,9 @@ class TestMergeStatusArtifact:
             "pr_number": 123,
             "review_result": {"decision": "approve"},
         }
-        agent.merge_if_ready = MagicMock(return_value={
-            "merged": True,
-            "live_merge": True,
-            "merge_error": None
-        })
+        agent.merge_if_ready = MagicMock(
+            return_value={"merged": True, "live_merge": True, "merge_error": None}
+        )
         result = agent.run(context)
         artifacts = result.get("artifacts", [{}])
         artifact = artifacts[0].get("content", {}) if artifacts else {}

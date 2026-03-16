@@ -1,16 +1,36 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 
+from storage.backends import StorageBackend, get_storage_backend
 from storage.models import RunRecord
-from storage.persistence import JsonStore
+
+_DEFAULT_TABLE_NAME = "hordeforge_runs"
 
 
 class RunRepository:
-    def __init__(self, storage_dir: str = ".hordeforge_data") -> None:
-        self.store = JsonStore(Path(storage_dir) / "runs.json")
+    def __init__(
+        self,
+        storage_dir: str = ".hordeforge_data",
+        *,
+        backend: StorageBackend | None = None,
+        backend_type: str | None = None,
+        table_name: str | None = None,
+    ) -> None:
+        if backend is None:
+            resolved_type = backend_type or os.getenv("HORDEFORGE_STORAGE_BACKEND", "json")
+            if resolved_type == "json":
+                file_path = Path(storage_dir) / "runs.json"
+                backend = get_storage_backend("json", file_path=file_path)
+            else:
+                backend = get_storage_backend(
+                    resolved_type,
+                    table_name=table_name or _DEFAULT_TABLE_NAME,
+                )
+        self.store = backend
 
     # ---------------- normalization ----------------
 

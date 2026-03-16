@@ -63,9 +63,7 @@ class AuditLogger:
         log_dir: str | None = None,
         retention_days: int = 90,
     ) -> None:
-        self._log_dir = log_dir or os.getenv(
-            "HORDEFORGE_AUDIT_LOG_DIR", ".hordeforge_data/audit"
-        )
+        self._log_dir = log_dir or os.getenv("HORDEFORGE_AUDIT_LOG_DIR", ".hordeforge_data/audit")
         self._retention_days = retention_days
         self._logger = logging.getLogger("hordeforge.audit")
         self._lock = RLock()
@@ -266,9 +264,7 @@ def log_auth_event(
 ) -> AuditEvent:
     """Log authentication event."""
     return get_audit_logger().log(
-        event_type=(
-            AuditEventType.AUTH_SUCCESS if success else AuditEventType.AUTH_FAILURE
-        ),
+        event_type=(AuditEventType.AUTH_SUCCESS if success else AuditEventType.AUTH_FAILURE),
         tenant_id=tenant_id,
         action="authenticate",
         result="success" if success else "failure",

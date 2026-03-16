@@ -219,6 +219,7 @@ def test_non_json_error_body_is_reported_as_api_error():
 # Pagination Tests (HF-P6-001)
 # =========================================================================
 
+
 def test_parse_link_header():
     """Test Link header parsing."""
     client, _ = _make_client([])

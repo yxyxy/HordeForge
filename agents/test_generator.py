@@ -6,6 +6,79 @@ from typing import Any
 from agents.context_utils import build_agent_result, get_artifact_from_context
 from agents.test_templates import get_test_template
 
+
+def generate_unit_tests(function: str) -> str:
+    """Generate unit tests for a given function.
+
+    Args:
+        function: Name of the function to test
+
+    Returns:
+        String containing unit test code
+    """
+    # Basic unit test template
+    test_template = f"""def test_{function}():
+    # Arrange
+    # Setup test data
+    
+    # Act
+    # Call the function
+    
+    # Assert
+    # Verify the result
+    pass"""
+
+    return test_template
+
+
+def generate_integration_tests(endpoint: str) -> str:
+    """Generate integration tests for a given endpoint.
+
+    Args:
+        endpoint: API endpoint to test (e.g., "POST /login")
+
+    Returns:
+        String containing integration test code
+    """
+    # Parse HTTP method and path
+    method, path = endpoint.split(" ", 1)
+    test_name = path.strip("/").replace("/", "_").replace("-", "_")
+
+    # Basic integration test template
+    test_template = f'''def test_{test_name}():
+    # Test {method} {path} endpoint
+    # Arrange
+    client = get_test_client()
+    
+    # Act
+    response = client.{method.lower()}("{path}")
+    
+    # Assert
+    assert response.status_code == 200'''
+
+    return test_template
+
+
+def generate_edge_cases(function: str) -> str:
+    """Generate edge case tests for a given function.
+
+    Args:
+        function: Name of the function to test
+
+    Returns:
+        String containing edge case test code
+    """
+    # Basic edge case test template
+    test_template = f"""def test_{function}_edge_cases():
+    # Test empty input
+    # Test null values
+    # Test boundary conditions
+    # Test error handling
+    pass"""
+
+    return test_template
+
+
 # Language detection (HF-P5-004)
 LANGUAGE_EXTENSIONS = {
     "py": "python",
@@ -178,7 +251,9 @@ def mock_dependencies():
     # Add mocks if project uses them
     if patterns.get("uses_mocks"):
         if language == "python" and "from unittest.mock import" not in adapted:
-            adapted = adapted.replace("import pytest", "import pytest\nfrom unittest.mock import Mock, patch")
+            adapted = adapted.replace(
+                "import pytest", "import pytest\nfrom unittest.mock import Mock, patch"
+            )
 
     return adapted
 
@@ -225,7 +300,10 @@ def detect_framework(language: str, repo_config: dict[str, Any] | None = None) -
     return None
 
 
-class TestGenerator:
+from agents.base import BaseAgent
+
+
+class TestGenerator(BaseAgent):
     name = "test_generator"
     description = "Generates deterministic test cases from decomposed subtasks."
 
@@ -292,7 +370,9 @@ class TestGenerator:
             test_patterns = extract_test_patterns(existing_test_files, language, framework)
             # Adapt template to project patterns
             if test_template:
-                test_template = adapt_test_to_patterns(test_template, test_patterns, language, framework)
+                test_template = adapt_test_to_patterns(
+                    test_template, test_patterns, language, framework
+                )
 
         tests_artifact = {
             "schema_version": "2.0",

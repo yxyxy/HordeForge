@@ -213,9 +213,7 @@ class TestExtractErrorContext:
         result.failed = 1
         result.failure_details = [{"test": "test_fail", "message": "Error"}]
 
-        test_code = {
-            "tests/test_main.py": "def test_fail():\n    assert False"
-        }
+        test_code = {"tests/test_main.py": "def test_fail():\n    assert False"}
 
         context = extract_error_context(result, test_code)
         assert "Relevant Code" in context
@@ -237,6 +235,7 @@ class TestEnhancedFixAgent:
             from importlib import reload
 
             import agents.fix_agent_v2 as fix_module
+
             reload(fix_module)
             # Agent uses env var at class definition time
 
@@ -291,7 +290,7 @@ class TestEnhancedFixAgent:
                         "type": "code_patch",
                         "content": {
                             "fix_iteration": 1,
-                        }
+                        },
                     }
                 ],
             },

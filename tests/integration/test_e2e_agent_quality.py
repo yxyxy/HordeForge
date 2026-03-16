@@ -46,21 +46,23 @@ class TestSpecGenerationPipeline:
 
     def test_parse_valid_spec_output(self):
         """Test parsing valid spec output."""
-        spec_json = json.dumps({
-            "summary": "Test feature",
-            "requirements": [
-                {
-                    "id": "REQ-001",
-                    "description": "Test requirement",
-                    "test_criteria": "Run test",
-                    "priority": "must",
-                }
-            ],
-            "technical_notes": ["Note 1"],
-            "file_changes": [
-                {"path": "test.py", "change_type": "create", "description": "Test file"}
-            ],
-        })
+        spec_json = json.dumps(
+            {
+                "summary": "Test feature",
+                "requirements": [
+                    {
+                        "id": "REQ-001",
+                        "description": "Test requirement",
+                        "test_criteria": "Run test",
+                        "priority": "must",
+                    }
+                ],
+                "technical_notes": ["Note 1"],
+                "file_changes": [
+                    {"path": "test.py", "change_type": "create", "description": "Test file"}
+                ],
+            }
+        )
         spec = parse_spec_output(spec_json)
         assert spec["summary"] == "Test feature"
         assert len(spec["requirements"]) == 1
@@ -118,13 +120,13 @@ class TestCodeGenerationPipeline:
 
     def test_parse_valid_code_output(self):
         """Test parsing valid code output."""
-        code_json = json.dumps({
-            "files": [
-                {"path": "test.py", "change_type": "create", "content": "x = 1"}
-            ],
-            "decisions": ["decision1"],
-            "test_changes": [],
-        })
+        code_json = json.dumps(
+            {
+                "files": [{"path": "test.py", "change_type": "create", "content": "x = 1"}],
+                "decisions": ["decision1"],
+                "test_changes": [],
+            }
+        )
         result = parse_code_output(code_json)
         assert len(result["files"]) == 1
         assert result["files"][0]["path"] == "test.py"
@@ -166,17 +168,17 @@ class TestPipelineIntegration:
 
     @patch("agents.code_generator_v2.get_llm_wrapper")
     @patch("agents.code_generator_v2.PatchWorkflowOrchestrator")
-    def test_feature_pipeline_with_github_integration(
-        self, mock_orchestrator_class, mock_llm
-    ):
+    def test_feature_pipeline_with_github_integration(self, mock_orchestrator_class, mock_llm):
         """Test feature pipeline with GitHub integration."""
         # Setup mocks
         mock_llm_instance = MagicMock()
-        mock_llm_instance.complete.return_value = json.dumps({
-            "files": [{"path": "feature.py", "content": "# Feature", "change_type": "create"}],
-            "decisions": [],
-            "test_changes": [],
-        })
+        mock_llm_instance.complete.return_value = json.dumps(
+            {
+                "files": [{"path": "feature.py", "content": "# Feature", "change_type": "create"}],
+                "decisions": [],
+                "test_changes": [],
+            }
+        )
         mock_llm.return_value = mock_llm_instance
 
         mock_orchestrator = MagicMock()
@@ -236,12 +238,16 @@ class TestNegativeTestCases:
     def test_spec_missing_test_criteria_raises(self):
         """Test that missing test_criteria raises ValueError."""
         with pytest.raises(ValueError, match="test_criteria"):
-            parse_spec_output(json.dumps({
-                "summary": "Test",
-                "requirements": [{"description": "Test"}],
-                "technical_notes": [],
-                "file_changes": [],
-            }))
+            parse_spec_output(
+                json.dumps(
+                    {
+                        "summary": "Test",
+                        "requirements": [{"description": "Test"}],
+                        "technical_notes": [],
+                        "file_changes": [],
+                    }
+                )
+            )
 
     def test_code_missing_files_field_raises(self):
         """Test that missing files field raises ValueError."""
@@ -258,7 +264,12 @@ class TestHappyPathScenarios:
         spec = {
             "summary": "Test feature",
             "requirements": [
-                {"id": "REQ-001", "description": "Test", "test_criteria": "pass", "priority": "must"}
+                {
+                    "id": "REQ-001",
+                    "description": "Test",
+                    "test_criteria": "pass",
+                    "priority": "must",
+                }
             ],
             "technical_notes": ["Note"],
             "file_changes": [{"path": "test.py", "change_type": "create", "description": "Test"}],
@@ -277,15 +288,21 @@ class TestHappyPathScenarios:
 
     def test_multiple_file_code_generation(self):
         """Test code generation for multiple files."""
-        code_json = json.dumps({
-            "files": [
-                {"path": "models.py", "content": "class Model: pass", "change_type": "create"},
-                {"path": "views.py", "content": "def view(): pass", "change_type": "create"},
-                {"path": "tests/test_models.py", "content": "def test_model(): pass", "change_type": "create"},
-            ],
-            "decisions": [],
-            "test_changes": [],
-        })
+        code_json = json.dumps(
+            {
+                "files": [
+                    {"path": "models.py", "content": "class Model: pass", "change_type": "create"},
+                    {"path": "views.py", "content": "def view(): pass", "change_type": "create"},
+                    {
+                        "path": "tests/test_models.py",
+                        "content": "def test_model(): pass",
+                        "change_type": "create",
+                    },
+                ],
+                "decisions": [],
+                "test_changes": [],
+            }
+        )
 
         result = parse_code_output(code_json)
         assert len(result["files"]) == 3
@@ -301,12 +318,16 @@ class TestErrorRecovery:
         """Test that parse errors are handled gracefully."""
         # First call returns invalid JSON, second works
         invalid_json = "not valid"
-        valid_json = json.dumps({
-            "summary": "Test",
-            "requirements": [{"id": "1", "description": "t", "test_criteria": "t", "priority": "must"}],
-            "technical_notes": [],
-            "file_changes": [],
-        })
+        valid_json = json.dumps(
+            {
+                "summary": "Test",
+                "requirements": [
+                    {"id": "1", "description": "t", "test_criteria": "t", "priority": "must"}
+                ],
+                "technical_notes": [],
+                "file_changes": [],
+            }
+        )
 
         # Test parse_spec_output raises on invalid
         with pytest.raises(ValueError):

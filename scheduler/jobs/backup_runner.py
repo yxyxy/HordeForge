@@ -79,9 +79,13 @@ class BackupRunnerJob:
 
         results: list[BackupScriptResult] = []
         if run_postgres:
-            results.append(self._run_script(self._script_path("postgres_backup.py"), dry_run=dry_run))
+            results.append(
+                self._run_script(self._script_path("postgres_backup.py"), dry_run=dry_run)
+            )
         if run_storage:
-            results.append(self._run_script(self._script_path("storage_backup.py"), dry_run=dry_run))
+            results.append(
+                self._run_script(self._script_path("storage_backup.py"), dry_run=dry_run)
+            )
 
         success = all(item.return_code == 0 for item in results)
         return {

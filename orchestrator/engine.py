@@ -17,10 +17,13 @@ from orchestrator.executor import StepExecutor
 from orchestrator.loader import LoopDefinition, PipelineDefinition, PipelineLoader, StepDefinition
 from orchestrator.override import RUN_OVERRIDE_REGISTRY
 from orchestrator.parallel import build_step_dependency_graph, select_lock_aware_batch
+from orchestrator.pipeline_validator import PipelineValidationError, PipelineValidator
 from orchestrator.retry import RetryPolicy
 from orchestrator.state import PipelineRunState
 from orchestrator.status import StepStatus
 from orchestrator.summary import RunSummaryBuilder
+from registry.bootstrap import init_registries
+from registry.runtime_adapter import RuntimeRegistryAdapter
 from rules.loader import DEFAULT_RULE_SET_VERSION, RulePackLoader
 
 POLICY_ACTIONS: dict[str, str] = {
@@ -51,13 +54,44 @@ class OrchestratorEngine:
         rules_dir: str = "rules",
         rule_set_version: str = DEFAULT_RULE_SET_VERSION,
         rule_pack_loader: RulePackLoader | None = None,
+        validate_pipeline_schema: bool = False,
+        contracts_dir: str = "contracts/schemas",
+        use_registry_bootstrap: bool = True,
+        allow_pipeline_fallback: bool = True,
     ):
-        self.pipeline_loader = pipeline_loader or PipelineLoader(pipelines_dir=pipelines_dir)
-        self.step_executor = step_executor or StepExecutor(
-            strict_schema_validation=strict_schema_validation,
-            enable_dynamic_fallback=enable_dynamic_fallback,
-            fallback_allowlist=dynamic_fallback_allowlist,
-        )
+        registry_bundle: dict[str, Any] | None = None
+        runtime_registry: RuntimeRegistryAdapter | None = None
+        if use_registry_bootstrap:
+            registry_bundle = init_registries(
+                contracts_dir=contracts_dir,
+                pipelines_dir=pipelines_dir,
+            )
+            runtime_registry = RuntimeRegistryAdapter(registry_bundle["agent_registry"])
+
+        if pipeline_loader is None:
+            if registry_bundle is not None:
+                self.pipeline_loader = PipelineLoader(
+                    pipelines_dir=pipelines_dir,
+                    pipeline_registry=registry_bundle["pipeline_registry"],
+                    allow_fallback=allow_pipeline_fallback,
+                )
+            else:
+                self.pipeline_loader = PipelineLoader(pipelines_dir=pipelines_dir)
+        else:
+            self.pipeline_loader = pipeline_loader
+
+        if step_executor is None:
+            if runtime_registry is not None:
+                self.step_executor = StepExecutor(
+                    agent_registry=runtime_registry,
+                    strict_schema_validation=strict_schema_validation,
+                )
+            else:
+                self.step_executor = StepExecutor(
+                    strict_schema_validation=strict_schema_validation,
+                )
+        else:
+            self.step_executor = step_executor
         self.retry_policy = retry_policy or RetryPolicy(retry_limit=0, backoff_seconds=0.0)
         self.summary_builder = summary_builder or RunSummaryBuilder()
         self.max_loop_iterations = max_loop_iterations
@@ -66,6 +100,14 @@ class OrchestratorEngine:
             rules_dir=rules_dir,
             rule_set_version=rule_set_version,
         )
+        self.validate_pipeline_schema = validate_pipeline_schema
+        if validate_pipeline_schema:
+            if runtime_registry is not None:
+                self._pipeline_validator = PipelineValidator(agent_registry=runtime_registry)
+            else:
+                self._pipeline_validator = PipelineValidator()
+        else:
+            self._pipeline_validator = None
         self.logger = logging.getLogger("hordeforge.orchestrator.engine")
 
     @staticmethod
@@ -328,6 +370,14 @@ class OrchestratorEngine:
         resume_step_results: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         pipeline: PipelineDefinition = self.pipeline_loader.load(pipeline_name)
+
+        # Validate pipeline schema before execution
+        if self._pipeline_validator is not None:
+            try:
+                self._pipeline_validator.validate(pipeline)
+            except PipelineValidationError as e:
+                self.logger.error(f"Pipeline validation failed for '{pipeline_name}': {e}")
+                raise
         raw_metadata = dict(metadata or {})
         resumed_state_payload = resume_run_state if isinstance(resume_run_state, dict) else None
         resumed_step_results_payload = (

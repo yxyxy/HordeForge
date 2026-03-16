@@ -46,14 +46,14 @@ def subtract(a: int, b: int) -> int:
 
         # Create pyproject.toml
         (repo_path / "pyproject.toml").write_text(
-            '''[project]
+            """[project]
 name = "test-project"
 version = "0.1.0"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
-'''
+"""
         )
 
         # Create a simple test file
@@ -83,24 +83,26 @@ def mock_llm():
     """Create a mock LLM wrapper."""
     llm = MagicMock()
     llm.complete = MagicMock(
-        return_value=json.dumps({
-            "summary": "Test implementation",
-            "requirements": [
-                {
-                    "id": "REQ-001",
-                    "description": "Implement feature X",
-                    "test_criteria": "Tests pass",
-                    "priority": "must",
-                }
-            ],
-            "technical_notes": ["Implementation note"],
-            "files": [
-                {
-                    "path": "src/feature.py",
-                    "content": '"""Feature X."""\n\ndef feature_x():\n    return True\n',
-                }
-            ],
-        })
+        return_value=json.dumps(
+            {
+                "summary": "Test implementation",
+                "requirements": [
+                    {
+                        "id": "REQ-001",
+                        "description": "Implement feature X",
+                        "test_criteria": "Tests pass",
+                        "priority": "must",
+                    }
+                ],
+                "technical_notes": ["Implementation note"],
+                "files": [
+                    {
+                        "path": "src/feature.py",
+                        "content": '"""Feature X."""\n\ndef feature_x():\n    return True\n',
+                    }
+                ],
+            }
+        )
     )
     return llm
 
@@ -111,13 +113,17 @@ def mock_github_client():
     client = MagicMock()
     client.create_issue = MagicMock(return_value={"number": 1})
     client.create_branch = MagicMock(return_value={"ref": "feature/123"})
-    client.create_pr = MagicMock(return_value={"number": 1, "html_url": "https://github.com/test/repo/pull/1"})
-    client.get_pull_request = MagicMock(return_value={
-        "merged": False,
-        "mergeable": True,
-        "state": "open",
-        "head": {"sha": "abc123"},
-    })
+    client.create_pr = MagicMock(
+        return_value={"number": 1, "html_url": "https://github.com/test/repo/pull/1"}
+    )
+    client.get_pull_request = MagicMock(
+        return_value={
+            "merged": False,
+            "mergeable": True,
+            "state": "open",
+            "head": {"sha": "abc123"},
+        }
+    )
     client.get_pull_request_reviews = MagicMock(return_value=[{"state": "APPROVED"}])
     client.get_combined_status = MagicMock(return_value={"state": "success"})
     client.merge_pull_request = MagicMock(return_value={"sha": "merged123"})

@@ -96,9 +96,16 @@ class PipelineRunner:
                 break
 
             try:
+                import asyncio
+                import inspect
+
                 agent_class = self._import_agent(agent_name)
                 agent = agent_class()
-                output = agent.run(context)
+                # Check if agent.run is a coroutine (async method)
+                if inspect.iscoroutinefunction(agent.run):
+                    output = asyncio.run(agent.run(context))
+                else:
+                    output = agent.run(context)
                 if not isinstance(output, dict):
                     raise TypeError("Agent output must be a dict")
             except Exception as exc:  # pylint: disable=broad-except

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, Query
+from fastapi import FastAPI, Header, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -16,10 +16,13 @@ from observability.alerts import AlertDispatcher
 from observability.metrics import RuntimeMetrics
 from orchestrator import OrchestratorEngine
 from orchestrator.override import RUN_OVERRIDE_REGISTRY
-from scheduler.auth.rbac import Permission, Role, has_role_permission
+from scheduler.auth.jwt_validator import JWTValidator
+from scheduler.auth.middleware import AuthMiddleware
+from scheduler.auth.rbac import Permission, RBACUser, Role, has_role_permission
 from scheduler.cron_dispatcher import CronDispatcher
 from scheduler.cron_runtime import build_default_cron_dispatcher
 from scheduler.idempotency import IdempotencyStore, build_idempotency_key
+from scheduler.queue_backends import get_task_queue_backend
 
 # Rate limiting imports
 from scheduler.rate_limiter import (
@@ -38,6 +41,7 @@ from storage.repositories.step_log_repository import StepLogRepository
 
 try:
     from scheduler.rate_limiter_middleware import RateLimitMiddleware
+
     RATE_LIMITER_AVAILABLE = True
 except ImportError:
     RATE_LIMITER_AVAILABLE = False
@@ -45,11 +49,30 @@ except ImportError:
 
 app = FastAPI(title="HordeForge Scheduler Gateway", version="0.1.0")
 
+config = RunConfig.from_env()
+
+# Initialize JWT validator if auth is enabled
+JWT_VALIDATOR: JWTValidator | None = None
+if config.auth_enabled:
+    JWT_VALIDATOR = JWTValidator(
+        secret_key=config.jwt_secret_key,
+        algorithm=config.jwt_algorithm,
+        issuer=config.jwt_issuer,
+        audience=config.jwt_audience,
+    )
+    # Add auth middleware
+    app.add_middleware(
+        AuthMiddleware,
+        jwt_validator=JWT_VALIDATOR,
+        public_paths=list(config.auth_public_paths),
+    )
+    logger.info("JWT authentication enabled")
+
 # Add rate limiting middleware if available
 if RATE_LIMITER_AVAILABLE and RateLimitMiddleware is not None:
     rate_limiter = get_default_api_limiter()
     app.add_middleware(RateLimitMiddleware, rate_limiter=rate_limiter)
-config = RunConfig.from_env()
+
 engine = OrchestratorEngine(
     pipelines_dir=config.pipelines_dir,
     rules_dir=config.rules_dir,
@@ -68,15 +91,80 @@ METRICS = RuntimeMetrics()
 ALERT_DISPATCHER = AlertDispatcher(throttle_seconds=60)
 logger = logging.getLogger("hordeforge.gateway")
 CRON_DISPATCHER: CronDispatcher | None = None
-TASK_QUEUE = InMemoryTaskQueue()
+QUEUE_BACKEND_REQUESTED = config.queue_backend
+QUEUE_BACKEND_ACTIVE: str | None = None
+QUEUE_BACKEND_ERROR: str | None = None
+
+
+def _init_task_queue():
+    global QUEUE_BACKEND_ACTIVE, QUEUE_BACKEND_ERROR
+    backend_type = QUEUE_BACKEND_REQUESTED or "memory"
+    try:
+        queue = get_task_queue_backend(backend_type)
+        QUEUE_BACKEND_ACTIVE = backend_type
+        return queue
+    except Exception as exc:  # noqa: BLE001
+        QUEUE_BACKEND_ACTIVE = "memory"
+        QUEUE_BACKEND_ERROR = str(exc)
+        logger.warning(
+            "Queue backend '%s' failed to initialize: %s. Falling back to memory.",
+            backend_type,
+            exc,
+        )
+        return InMemoryTaskQueue()
+
+
+TASK_QUEUE = _init_task_queue()
 TENANT_REGISTRY = TenantRepositoryRegistry(
     mapping=config.tenant_repository_map,
     default_tenant_id=config.default_tenant_id,
     enforce_boundaries=config.enforce_tenant_boundaries,
 )
+STORAGE_BACKEND_REQUESTED = os.getenv("HORDEFORGE_STORAGE_BACKEND", "json")
+STORAGE_BACKEND_ERROR: str | None = None
+
+
+def _validate_backends_on_startup() -> None:
+    global STORAGE_BACKEND_ERROR, QUEUE_BACKEND_ERROR
+    if STORAGE_BACKEND_REQUESTED == "postgres":
+        try:
+            store = RUN_REPOSITORY.store
+            if hasattr(store, "health_check"):
+                health = store.health_check()
+                if isinstance(health, dict) and not health.get("healthy", True):
+                    STORAGE_BACKEND_ERROR = str(health.get("error", "unhealthy"))
+                    logger.warning(
+                        "Postgres storage health check failed: %s",
+                        STORAGE_BACKEND_ERROR,
+                    )
+            else:
+                store.read_all()
+        except Exception as exc:  # noqa: BLE001
+            STORAGE_BACKEND_ERROR = str(exc)
+            logger.warning("Postgres storage health check failed: %s", exc)
+
+    if QUEUE_BACKEND_REQUESTED == "redis":
+        if QUEUE_BACKEND_ERROR:
+            logger.warning(
+                "Redis queue backend failed to initialize: %s",
+                QUEUE_BACKEND_ERROR,
+            )
+            return
+        if hasattr(TASK_QUEUE, "health_check"):
+            try:
+                health = TASK_QUEUE.health_check()
+                if isinstance(health, dict) and not health.get("healthy", True):
+                    QUEUE_BACKEND_ERROR = str(health.get("error", "unhealthy"))
+                    logger.warning("Redis queue health check failed: %s", QUEUE_BACKEND_ERROR)
+            except Exception as exc:  # noqa: BLE001
+                QUEUE_BACKEND_ERROR = str(exc)
+                logger.warning("Redis queue health check failed: %s", exc)
+
 
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+_validate_backends_on_startup()
 
 
 class PipelineRequest(BaseModel):
@@ -197,6 +285,72 @@ def _scope_idempotency_key(*, tenant_id: str, key: str) -> str:
 
 def _normalize_access_field(value: str | None) -> str:
     return str(value or "").strip().lower()
+
+
+def _get_user_from_request(request: Any) -> RBACUser | None:
+    """Extract user from request state (set by JWT middleware)."""
+    if not hasattr(request, "state") or not hasattr(request.state, "user"):
+        return None
+    user_data = request.state.user
+    if not isinstance(user_data, dict):
+        return None
+    try:
+        role = Role(user_data.get("role", "viewer"))
+    except ValueError:
+        role = Role.VIEWER
+    return RBACUser(
+        user_id=user_data.get("user_id", ""),
+        role=role,
+        email=user_data.get("email"),
+    )
+
+
+def _authorize_jwt_request(
+    request: Any,
+    required_permission: Permission,
+) -> tuple[bool, str | None, RBACUser | None]:
+    """Authorize request using JWT user info from request.state.
+
+    Returns:
+        tuple of (authorized, denial_reason, user)
+    """
+    # If auth is not enabled, allow all requests
+    if not config.auth_enabled:
+        return True, None, None
+
+    user = _get_user_from_request(request)
+    if user is None:
+        return False, "unauthenticated", None
+
+    if not user.has_permission(required_permission):
+        return False, "permission_denied", user
+
+    return True, None, user
+
+
+def _audit_jwt_request(
+    *,
+    run_id: str,
+    action: str,
+    endpoint: str,
+    authorized: bool,
+    user: RBACUser | None,
+    reason: str | None = None,
+    outcome: str | None = None,
+) -> None:
+    """Audit log for JWT-based requests."""
+    _log_event(
+        logging.INFO if authorized else logging.WARNING,
+        run_id,
+        "jwt_auth_audit",
+        action=action,
+        endpoint=endpoint,
+        authorized=authorized,
+        user_id=user.user_id if user else None,
+        user_role=user.role.value if user else None,
+        reason=reason,
+        outcome=outcome,
+    )
 
 
 def _authorize_manual_command(
@@ -416,19 +570,51 @@ def health() -> dict[str, str]:
 @app.get("/health/redis")
 def redis_health() -> dict[str, Any]:
     """Health check for Redis connection."""
-    from scheduler.queue_backends import get_task_queue_backend
+    if QUEUE_BACKEND_REQUESTED != "redis":
+        return {"status": "not_configured", "backend": QUEUE_BACKEND_REQUESTED}
+    if QUEUE_BACKEND_ERROR:
+        return {
+            "status": "unhealthy",
+            "backend": QUEUE_BACKEND_ACTIVE or "redis",
+            "error": QUEUE_BACKEND_ERROR,
+        }
+    if hasattr(TASK_QUEUE, "health_check"):
+        health = TASK_QUEUE.health_check()
+        if isinstance(health, dict):
+            health.setdefault(
+                "status",
+                "healthy" if health.get("healthy", False) else "unhealthy",
+            )
+            health.setdefault("backend", QUEUE_BACKEND_ACTIVE or "redis")
+            return health
+    return {"status": "no_health_check", "backend": QUEUE_BACKEND_ACTIVE or "redis"}
 
-    backend_type = config.queue_backend or os.getenv("HORDEFORGE_QUEUE_BACKEND", "memory")
-    if backend_type != "redis":
-        return {"status": "not_configured", "backend": backend_type}
 
+@app.get("/health/postgres")
+def postgres_health() -> dict[str, Any]:
+    """Health check for Postgres storage backend."""
+    if STORAGE_BACKEND_REQUESTED != "postgres":
+        return {"status": "not_configured", "backend": STORAGE_BACKEND_REQUESTED}
+    if STORAGE_BACKEND_ERROR:
+        return {
+            "status": "unhealthy",
+            "backend": STORAGE_BACKEND_REQUESTED,
+            "error": STORAGE_BACKEND_ERROR,
+        }
+    store = RUN_REPOSITORY.store
+    if hasattr(store, "health_check"):
+        health = store.health_check()
+        if isinstance(health, dict):
+            health.setdefault(
+                "status",
+                "healthy" if health.get("healthy", False) else "unhealthy",
+            )
+            return health
     try:
-        queue = get_task_queue_backend(backend_type)
-        if hasattr(queue, "health_check"):
-            return queue.health_check()
-        return {"status": "no_health_check", "backend": backend_type}
+        store.read_all()
+        return {"status": "healthy", "backend": "postgres"}
     except Exception as exc:  # noqa: BLE001
-        return {"status": "unhealthy", "error": str(exc)}
+        return {"status": "unhealthy", "backend": "postgres", "error": str(exc)}
 
 
 @app.get("/ready")
@@ -727,11 +913,30 @@ def get_queue_task(task_id: str):
 
 @app.post("/queue/drain", response_model=None)
 def drain_queue(
+    http_request: Request,
     request: QueueDrainRequest,
     x_operator_key: str | None = Header(default=None, alias="X-Operator-Key"),
     x_operator_role: str | None = Header(default=None, alias="X-Operator-Role"),
     x_command_source: str | None = Header(default=None, alias="X-Command-Source"),
 ):
+    # Try JWT authorization first if auth is enabled
+    if config.auth_enabled:
+        authorized, denial_reason, jwt_user = _authorize_jwt_request(
+            http_request,
+            Permission.QUEUE_DRAIN,
+        )
+        if not authorized:
+            _audit_jwt_request(
+                run_id="system",
+                action="queue_drain",
+                endpoint="/queue/drain",
+                authorized=False,
+                user=jwt_user,
+                reason=denial_reason,
+                outcome="denied",
+            )
+            return _error_response(403, "FORBIDDEN", "Permission denied")
+
     authorized, denial_reason, principal = _authorize_manual_command(
         x_operator_key,
         x_operator_role,
@@ -792,6 +997,58 @@ def metrics() -> PlainTextResponse:
     return PlainTextResponse(content=METRICS.render_prometheus())
 
 
+@app.post("/metrics/export", response_model=None)
+def export_metrics(
+    x_operator_key: str | None = Header(default=None, alias="X-Operator-Key"),
+    x_operator_role: str | None = Header(default=None, alias="X-Operator-Role"),
+    x_command_source: str | None = Header(default=None, alias="X-Command-Source"),
+) -> dict[str, Any]:
+    """Manually trigger metrics export to configured exporter."""
+    # This endpoint requires admin or operator role
+    authorized, denial_reason, principal = _authorize_manual_command(
+        x_operator_key,
+        x_operator_role,
+        x_command_source,
+        required_permission=Permission.ADMIN_ACCESS,
+    )
+    if not authorized:
+        # Fall back to checking if it's at least operator
+        authorized, denial_reason, principal = _authorize_manual_command(
+            x_operator_key,
+            x_operator_role,
+            x_command_source,
+            required_permission=Permission.METRICS_READ,
+        )
+    if not authorized:
+        _audit_manual_command(
+            run_id="system",
+            action="metrics_export",
+            endpoint="/metrics/export",
+            authorized=False,
+            principal=principal,
+            reason=denial_reason,
+            outcome="denied",
+        )
+        return _error_response(403, "FORBIDDEN", "Operator permission denied")
+
+    # Import here to avoid circular imports
+    try:
+        from scheduler.jobs.metrics_exporter import trigger_metrics_export
+
+        result = trigger_metrics_export()
+        _audit_manual_command(
+            run_id="system",
+            action="metrics_export",
+            endpoint="/metrics/export",
+            authorized=True,
+            principal=principal,
+            outcome=result.get("status"),
+        )
+        return result
+    except ImportError:
+        return {"status": "error", "message": "Metrics exporter not available"}
+
+
 @app.get("/cron/jobs")
 def list_cron_jobs() -> dict[str, Any]:
     dispatcher = _get_cron_dispatcher()
@@ -810,10 +1067,29 @@ def list_cron_jobs() -> dict[str, Any]:
 
 @app.post("/cron/run-due", response_model=None)
 def run_due_cron_jobs(
+    http_request: Request,
     x_operator_key: str | None = Header(default=None, alias="X-Operator-Key"),
     x_operator_role: str | None = Header(default=None, alias="X-Operator-Role"),
     x_command_source: str | None = Header(default=None, alias="X-Command-Source"),
 ) -> Any:
+    # Try JWT authorization first if auth is enabled
+    if config.auth_enabled:
+        authorized, denial_reason, jwt_user = _authorize_jwt_request(
+            http_request,
+            Permission.CRON_TRIGGER,
+        )
+        if not authorized:
+            _audit_jwt_request(
+                run_id="system",
+                action="cron_run_due",
+                endpoint="/cron/run-due",
+                authorized=False,
+                user=jwt_user,
+                reason=denial_reason,
+                outcome="denied",
+            )
+            return _error_response(403, "FORBIDDEN", "Permission denied")
+
     authorized, denial_reason, principal = _authorize_manual_command(
         x_operator_key,
         x_operator_role,
@@ -846,12 +1122,31 @@ def run_due_cron_jobs(
 
 @app.post("/cron/jobs/{job_name}/trigger", response_model=None)
 def trigger_cron_job(
+    http_request: Request,
     job_name: str,
     request: CronManualTriggerRequest,
     x_operator_key: str | None = Header(default=None, alias="X-Operator-Key"),
     x_operator_role: str | None = Header(default=None, alias="X-Operator-Role"),
     x_command_source: str | None = Header(default=None, alias="X-Command-Source"),
 ) -> Any:
+    # Try JWT authorization first if auth is enabled
+    if config.auth_enabled:
+        authorized, denial_reason, jwt_user = _authorize_jwt_request(
+            http_request,
+            Permission.CRON_TRIGGER,
+        )
+        if not authorized:
+            _audit_jwt_request(
+                run_id=f"cron:{job_name}",
+                action="cron_trigger_job",
+                endpoint=f"/cron/jobs/{job_name}/trigger",
+                authorized=False,
+                user=jwt_user,
+                reason=denial_reason,
+                outcome="denied",
+            )
+            return _error_response(403, "FORBIDDEN", "Permission denied")
+
     authorized, denial_reason, principal = _authorize_manual_command(
         x_operator_key,
         x_operator_role,
@@ -966,6 +1261,7 @@ def get_run(run_id: str, tenant_id: str | None = Query(default=None)):
 
 @app.post("/runs/{run_id}/override")
 def override_run(
+    http_request: Request,
     run_id: str,
     command: OverrideCommand,
     x_operator_key: str | None = Header(default=None, alias="X-Operator-Key"),
@@ -974,6 +1270,25 @@ def override_run(
 ):
     action = command.action.strip().lower()
     reason = command.reason.strip()
+
+    # Try JWT authorization first if auth is enabled
+    if config.auth_enabled:
+        authorized, denial_reason, jwt_user = _authorize_jwt_request(
+            http_request,
+            Permission.OVERRIDE_EXECUTE,
+        )
+        if not authorized:
+            _audit_jwt_request(
+                run_id=run_id,
+                action=action or "unknown",
+                endpoint=f"/runs/{run_id}/override",
+                authorized=False,
+                user=jwt_user,
+                reason=denial_reason,
+                outcome="denied",
+            )
+            return _error_response(403, "FORBIDDEN", "Permission denied", run_id=run_id)
+
     authorized, denial_reason, principal = _authorize_manual_command(
         x_operator_key,
         x_operator_role,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,14 @@ class StorageBackend(ABC):
     def close(self) -> None:
         """Close any open connections."""
         raise NotImplementedError
+
+    def health_check(self) -> dict[str, Any]:
+        """Return a basic health check payload."""
+        return {
+            "healthy": True,
+            "backend": "unknown",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
 
 
 class JsonStorageBackend(StorageBackend):
@@ -82,6 +91,24 @@ class JsonStorageBackend(StorageBackend):
         payload = [item for item in items if isinstance(item, dict)]
         with self._lock:
             self._write_raw(payload)
+
+    def health_check(self) -> dict[str, Any]:
+        try:
+            self.read_all()
+            return {
+                "healthy": True,
+                "backend": "json",
+                "path": str(self._file_path),
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "healthy": False,
+                "backend": "json",
+                "path": str(self._file_path),
+                "error": str(exc),
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
 
     def close(self) -> None:
         pass  # No connections to close
@@ -171,6 +198,30 @@ class PostgresStorageBackend(StorageBackend):
         except Exception:
             self._conn.rollback()
 
+    def health_check(self) -> dict[str, Any]:
+        start = datetime.now(timezone.utc)
+        try:
+            self._ensure_connection()
+            if self._conn is None:
+                raise RuntimeError("Postgres connection not initialized")
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+            latency_ms = (datetime.now(timezone.utc) - start).total_seconds() * 1000
+            return {
+                "healthy": True,
+                "backend": "postgres",
+                "latency_ms": round(latency_ms, 2),
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "healthy": False,
+                "backend": "postgres",
+                "error": str(exc),
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+
     def close(self) -> None:
         if self._conn is not None:
             self._conn.close()
@@ -199,7 +250,6 @@ def get_storage_backend(
     if backend_type == "postgres":
         return PostgresStorageBackend(**kwargs)
     elif backend_type == "json":
-
         file_path = kwargs.get("file_path", ".hordeforge_data/storage.json")
         return JsonStorageBackend(file_path)
     else:

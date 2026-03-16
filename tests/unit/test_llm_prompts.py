@@ -107,21 +107,23 @@ class TestParseSpecOutput:
 
     def test_valid_spec_output(self):
         """Test parsing valid spec output."""
-        output = json.dumps({
-            "summary": "Test feature",
-            "requirements": [
-                {
-                    "id": "REQ-001",
-                    "description": "Test requirement",
-                    "test_criteria": "Run test",
-                    "priority": "must",
-                }
-            ],
-            "technical_notes": ["Note 1"],
-            "file_changes": [
-                {"path": "test.py", "change_type": "create", "description": "Test file"}
-            ],
-        })
+        output = json.dumps(
+            {
+                "summary": "Test feature",
+                "requirements": [
+                    {
+                        "id": "REQ-001",
+                        "description": "Test requirement",
+                        "test_criteria": "Run test",
+                        "priority": "must",
+                    }
+                ],
+                "technical_notes": ["Note 1"],
+                "file_changes": [
+                    {"path": "test.py", "change_type": "create", "description": "Test file"}
+                ],
+            }
+        )
         spec = parse_spec_output(output)
         assert spec["summary"] == "Test feature"
         assert len(spec["requirements"]) == 1
@@ -143,12 +145,14 @@ class TestParseSpecOutput:
 
     def test_missing_test_criteria_raises(self):
         """Test that missing test_criteria raises ValueError."""
-        output = json.dumps({
-            "summary": "Test",
-            "requirements": [{"description": "Test"}],
-            "technical_notes": [],
-            "file_changes": [],
-        })
+        output = json.dumps(
+            {
+                "summary": "Test",
+                "requirements": [{"description": "Test"}],
+                "technical_notes": [],
+                "file_changes": [],
+            }
+        )
         with pytest.raises(ValueError, match="test_criteria"):
             parse_spec_output(output)
 
@@ -164,12 +168,21 @@ class TestGenerateSpecWithRetry:
     def test_successful_generation(self):
         """Test successful spec generation on first try."""
         mock_llm = MagicMock()
-        mock_llm.complete.return_value = json.dumps({
-            "summary": "Test",
-            "requirements": [{"id": "REQ-001", "description": "Req", "test_criteria": "Test", "priority": "must"}],
-            "technical_notes": [],
-            "file_changes": [],
-        })
+        mock_llm.complete.return_value = json.dumps(
+            {
+                "summary": "Test",
+                "requirements": [
+                    {
+                        "id": "REQ-001",
+                        "description": "Req",
+                        "test_criteria": "Test",
+                        "priority": "must",
+                    }
+                ],
+                "technical_notes": [],
+                "file_changes": [],
+            }
+        )
 
         spec = generate_spec_with_retry(
             mock_llm,
@@ -186,12 +199,21 @@ class TestGenerateSpecWithRetry:
         mock_llm = MagicMock()
         mock_llm.complete.side_effect = [
             "not valid json",
-            json.dumps({
-                "summary": "Test",
-                "requirements": [{"id": "REQ-001", "description": "Req", "test_criteria": "Test", "priority": "must"}],
-                "technical_notes": [],
-                "file_changes": [],
-            }),
+            json.dumps(
+                {
+                    "summary": "Test",
+                    "requirements": [
+                        {
+                            "id": "REQ-001",
+                            "description": "Req",
+                            "test_criteria": "Test",
+                            "priority": "must",
+                        }
+                    ],
+                    "technical_notes": [],
+                    "file_changes": [],
+                }
+            ),
         ]
 
         spec = generate_spec_with_retry(mock_llm, summary="Test", requirements=["Req"], context={})
@@ -279,13 +301,15 @@ class TestParseCodeOutput:
 
     def test_valid_code_output(self):
         """Test parsing valid code output."""
-        output = json.dumps({
-            "files": [
-                {"path": "test.py", "change_type": "create", "content": "print('hello')"}
-            ],
-            "decisions": [],
-            "test_changes": [],
-        })
+        output = json.dumps(
+            {
+                "files": [
+                    {"path": "test.py", "change_type": "create", "content": "print('hello')"}
+                ],
+                "decisions": [],
+                "test_changes": [],
+            }
+        )
         result = parse_code_output(output)
         assert len(result["files"]) == 1
         assert result["files"][0]["path"] == "test.py"
@@ -298,10 +322,12 @@ class TestParseCodeOutput:
 
     def test_missing_content_raises(self):
         """Test that missing content in file raises ValueError."""
-        output = json.dumps({
-            "files": [{"path": "test.py", "change_type": "create"}],
-            "decisions": [],
-        })
+        output = json.dumps(
+            {
+                "files": [{"path": "test.py", "change_type": "create"}],
+                "decisions": [],
+            }
+        )
         with pytest.raises(ValueError, match="content"):
             parse_code_output(output)
 
@@ -312,11 +338,13 @@ class TestGenerateCodeWithRetry:
     def test_successful_generation(self):
         """Test successful code generation on first try."""
         mock_llm = MagicMock()
-        mock_llm.complete.return_value = json.dumps({
-            "files": [{"path": "test.py", "change_type": "create", "content": "x=1"}],
-            "decisions": [],
-            "test_changes": [],
-        })
+        mock_llm.complete.return_value = json.dumps(
+            {
+                "files": [{"path": "test.py", "change_type": "create", "content": "x=1"}],
+                "decisions": [],
+                "test_changes": [],
+            }
+        )
 
         result = generate_code_with_retry(
             mock_llm,

@@ -142,9 +142,7 @@ class TestReviewAgent:
         agent = ReviewAgent()
         context = {
             "code_patch": {
-                "files": [
-                    {"path": "test.py", "content": "x = 1", "change_type": "create"}
-                ]
+                "files": [{"path": "test.py", "content": "x = 1", "change_type": "create"}]
             }
         }
         result = agent.run(context)
@@ -195,7 +193,11 @@ class TestReviewAgent:
         context = {
             "code_patch": {
                 "files": [
-                    {"path": "config.py", "content": 'password = "secret123"', "change_type": "create"}
+                    {
+                        "path": "config.py",
+                        "content": 'password = "secret123"',
+                        "change_type": "create",
+                    }
                 ]
             }
         }
@@ -234,7 +236,9 @@ class TestReviewAgentIntegration:
     def test_policy_checks_structure(self):
         """Test that policy checks are properly structured."""
         agent = ReviewAgent()
-        context = {"code_patch": {"files": [{"path": "x.py", "content": "x=1", "change_type": "create"}]}}
+        context = {
+            "code_patch": {"files": [{"path": "x.py", "content": "x=1", "change_type": "create"}]}
+        }
 
         result = agent.run(context)
         artifacts = result.get("artifacts", [])

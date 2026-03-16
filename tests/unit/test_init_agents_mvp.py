@@ -26,9 +26,13 @@ def _step_result(status: str, artifact_type: str, content: dict) -> dict:
     }
 
 
-def test_repo_connector_reads_repo_context_and_returns_metadata():
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_repo_connector_reads_repo_context_and_returns_metadata():
     agent = RepoConnector()
-    result = agent.run(
+    result = await agent.run(
         {
             "repo_url": "https://github.com/acme/hordeforge.git",
             "github_token": "secret-token",
@@ -36,7 +40,7 @@ def test_repo_connector_reads_repo_context_and_returns_metadata():
     )
 
     assert result["status"] == "SUCCESS"
-    metadata = _artifact_content(result, "repository_metadata")
+    metadata = _artifact_content(result, "repository_data")
     assert metadata["repo_url"] == "https://github.com/acme/hordeforge.git"
     assert metadata["owner"] == "acme"
     assert metadata["repo_name"] == "hordeforge"
@@ -45,9 +49,10 @@ def test_repo_connector_reads_repo_context_and_returns_metadata():
     assert "secret-token" not in str(result)
 
 
-def test_repo_connector_supports_mock_mode():
+@pytest.mark.asyncio
+async def test_repo_connector_supports_mock_mode():
     agent = RepoConnector()
-    result = agent.run(
+    result = await agent.run(
         {
             "repo_url": "https://github.com/acme/hordeforge.git",
             "token": "abc",
@@ -55,7 +60,7 @@ def test_repo_connector_supports_mock_mode():
         }
     )
 
-    metadata = _artifact_content(result, "repository_metadata")
+    metadata = _artifact_content(result, "repository_data")
     assert metadata["mock_mode"] is True
     assert metadata["connection_mode"] == "mock"
 

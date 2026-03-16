@@ -84,9 +84,7 @@ class AgentBenchmark:
                     duration_ms=result_data["duration_ms"],
                     passed=result_data["passed"],
                     metrics=result_data.get("metrics", {}),
-                    timestamp=result_data.get(
-                        "timestamp", datetime.utcnow().isoformat()
-                    ),
+                    timestamp=result_data.get("timestamp", datetime.utcnow().isoformat()),
                     error=result_data.get("error"),
                 )
             )
@@ -99,9 +97,7 @@ class BenchmarkRegistry:
 
     def __init__(self, storage_path: str | None = None) -> None:
         self.storage_path = (
-            Path(storage_path)
-            if storage_path
-            else Path(".hordeforge_data/benchmarks")
+            Path(storage_path) if storage_path else Path(".hordeforge_data/benchmarks")
         )
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.benchmarks: dict[str, AgentBenchmark] = {}
@@ -133,16 +129,12 @@ class BenchmarkRegistry:
 
         return sorted(results, key=lambda x: x.run_at, reverse=True)
 
-    def get_latest_benchmark(
-        self, agent_name: str, version: str
-    ) -> AgentBenchmark | None:
+    def get_latest_benchmark(self, agent_name: str, version: str) -> AgentBenchmark | None:
         """Get the latest benchmark for an agent."""
         benchmarks = self.load_benchmark(agent_name, version)
         return benchmarks[0] if benchmarks else None
 
-    def compare_versions(
-        self, agent_name: str, version1: str, version2: str
-    ) -> dict[str, Any]:
+    def compare_versions(self, agent_name: str, version1: str, version2: str) -> dict[str, Any]:
         """Compare two versions of an agent."""
         bench1 = self.get_latest_benchmark(agent_name, version1)
         bench2 = self.get_latest_benchmark(agent_name, version2)
@@ -158,9 +150,7 @@ class BenchmarkRegistry:
             "score2": bench2.overall_score,
             "improvement": bench2.overall_score - bench1.overall_score,
             "improvement_percent": (
-                (bench2.overall_score - bench1.overall_score)
-                / bench1.overall_score
-                * 100
+                (bench2.overall_score - bench1.overall_score) / bench1.overall_score * 100
                 if bench1.overall_score > 0
                 else 0
             ),

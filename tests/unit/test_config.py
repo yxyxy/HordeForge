@@ -14,6 +14,7 @@ def test_run_config_uses_defaults_when_env_is_missing(monkeypatch):
     monkeypatch.delenv("HORDEFORGE_ENABLE_DYNAMIC_FALLBACK", raising=False)
     monkeypatch.delenv("HORDEFORGE_WEBHOOK_SECRET", raising=False)
     monkeypatch.delenv("HORDEFORGE_STORAGE_DIR", raising=False)
+    monkeypatch.delenv("HORDEFORGE_QUEUE_BACKEND", raising=False)
     monkeypatch.delenv("HORDEFORGE_IDEMPOTENCY_TTL_SECONDS", raising=False)
     monkeypatch.delenv("HORDEFORGE_OPERATOR_API_KEY", raising=False)
     monkeypatch.delenv("HORDEFORGE_OPERATOR_ALLOWED_ROLES", raising=False)
@@ -36,6 +37,7 @@ def test_run_config_uses_defaults_when_env_is_missing(monkeypatch):
     assert config.enable_dynamic_fallback is True
     assert config.webhook_secret == "local-dev-secret"
     assert config.storage_dir == ".hordeforge_data"
+    assert config.queue_backend == "memory"
     assert config.idempotency_ttl_seconds == 3600
     assert config.operator_api_key == "local-operator-key"
     assert config.operator_allowed_roles == ("operator",)
@@ -58,6 +60,7 @@ def test_run_config_reads_values_from_env(monkeypatch):
     monkeypatch.setenv("HORDEFORGE_ENABLE_DYNAMIC_FALLBACK", "0")
     monkeypatch.setenv("HORDEFORGE_WEBHOOK_SECRET", "top-secret")
     monkeypatch.setenv("HORDEFORGE_STORAGE_DIR", ".tmp-hf-storage")
+    monkeypatch.setenv("HORDEFORGE_QUEUE_BACKEND", "redis")
     monkeypatch.setenv("HORDEFORGE_IDEMPOTENCY_TTL_SECONDS", "120")
     monkeypatch.setenv("HORDEFORGE_OPERATOR_API_KEY", "operator-secret")
     monkeypatch.setenv("HORDEFORGE_OPERATOR_ALLOWED_ROLES", "operator,admin,operator")
@@ -83,6 +86,7 @@ def test_run_config_reads_values_from_env(monkeypatch):
     assert config.enable_dynamic_fallback is False
     assert config.webhook_secret == "top-secret"
     assert config.storage_dir == ".tmp-hf-storage"
+    assert config.queue_backend == "redis"
     assert config.idempotency_ttl_seconds == 120
     assert config.operator_api_key == "operator-secret"
     assert config.operator_allowed_roles == ("operator", "admin")

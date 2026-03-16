@@ -1,7 +1,11 @@
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+
+os.environ["HORDEFORGE_STORAGE_BACKEND"] = "json"
+os.environ["HORDEFORGE_QUEUE_BACKEND"] = "memory"
 
 import scheduler.gateway as gateway
 from scheduler.gateway import (

@@ -80,3 +80,36 @@ def test_get_storage_backend_unknown():
     """Test factory rejects unknown backend."""
     with pytest.raises(ValueError, match="Unknown storage backend"):
         get_storage_backend("unknown_backend")
+
+
+def test_get_storage_backend_uses_env_json(monkeypatch):
+    """Factory should respect HORDEFORGE_STORAGE_BACKEND env var."""
+    monkeypatch.setenv("HORDEFORGE_STORAGE_BACKEND", "json")
+    backend = get_storage_backend()
+    assert isinstance(backend, JsonStorageBackend)
+    backend.close()
+
+
+def test_get_storage_backend_uses_env_postgres(monkeypatch):
+    """Factory should respect HORDEFORGE_STORAGE_BACKEND=postgres."""
+    import storage.backends as storage_backends
+
+    class DummyBackend(storage_backends.StorageBackend):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def read_all(self):
+            return []
+
+        def write_all(self, items):
+            self.items = items
+
+        def close(self):
+            pass
+
+    monkeypatch.setenv("HORDEFORGE_STORAGE_BACKEND", "postgres")
+    monkeypatch.setattr(storage_backends, "PostgresStorageBackend", DummyBackend)
+
+    backend = get_storage_backend()
+    assert isinstance(backend, DummyBackend)
+    backend.close()

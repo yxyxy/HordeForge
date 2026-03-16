@@ -465,10 +465,7 @@ class LLMRouter:
             ValueError: If task is unknown
         """
         if task not in self._routing:
-            raise ValueError(
-                f"Unknown task: {task}. "
-                f"Available: {list(self._routing.keys())}"
-            )
+            raise ValueError(f"Unknown task: {task}. Available: {list(self._routing.keys())}")
 
         # Return cached wrapper if available
         if task in self._cache:
@@ -494,15 +491,11 @@ class LLMRouter:
                     f"trying fallback: {fallback_task}"
                 )
                 return self.for_task(fallback_task)
-            raise RuntimeError(
-                f"No LLM provider available for task: {task}"
-            )
+            raise RuntimeError(f"No LLM provider available for task: {task}")
 
         # Cache the wrapper
         self._cache[task] = wrapper
-        logger.info(
-            f"Routed task '{task}' to {provider}/{model}: {config['description']}"
-        )
+        logger.info(f"Routed task '{task}' to {provider}/{model}: {config['description']}")
 
         return wrapper
 
@@ -592,7 +585,10 @@ SPEC_OUTPUT_SCHEMA = {
                 "properties": {
                     "id": {"type": "string"},
                     "description": {"type": "string"},
-                    "test_criteria": {"type": "string", "description": "How to verify this requirement"},
+                    "test_criteria": {
+                        "type": "string",
+                        "description": "How to verify this requirement",
+                    },
                     "priority": {"type": "string", "enum": ["must", "should", "could"]},
                 },
             },
@@ -835,7 +831,9 @@ def parse_spec_output(output: str, validate_schema: bool = True) -> dict[str, An
         try:
             jsonschema.validate(spec, SPEC_OUTPUT_SCHEMA)
         except jsonschema.ValidationError as e:
-            raise ValueError(f"Schema validation failed: {e.message} at {'.'.join(str(p) for p in e.path)}") from e
+            raise ValueError(
+                f"Schema validation failed: {e.message} at {'.'.join(str(p) for p in e.path)}"
+            ) from e
 
     return spec
 
@@ -972,10 +970,10 @@ def build_code_prompt(
     template = f"""You are a senior {language.title()} engineer. Generate code to satisfy the specification.
 
 ## Language Standards
-- Style: {standards['style']}
-- Typing: {standards['typing']}
-- Docstrings: {standards['docstrings']}
-- Imports: {standards['imports']}
+- Style: {standards["style"]}
+- Typing: {standards["typing"]}
+- Docstrings: {standards["docstrings"]}
+- Imports: {standards["imports"]}
 
 ## Specification
 {json.dumps(spec, indent=2)}

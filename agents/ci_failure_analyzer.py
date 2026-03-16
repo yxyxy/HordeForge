@@ -60,6 +60,154 @@ SEVERITY_MAP = {
 }
 
 # =========================================================================
+# Log parsing utilities
+# =========================================================================
+
+
+def parse_logs(log_text: str) -> list[str]:
+    """
+    Parse CI logs and extract error messages.
+
+    Args:
+        log_text: Raw log text to parse
+
+    Returns:
+        List of extracted error messages
+    """
+    if not log_text:
+        return []
+
+    errors = []
+
+    # Pattern to match common error formats
+    error_patterns = [
+        r"(error|exception|fail(?:ure|ed))[:\-\s].*",  # General error pattern
+        r".*(error|exception|fail(?:ure|ed)).*",  # Errors anywhere in line
+        r"^.*[Ee]rror.*$",  # Lines containing 'error'
+        r"^.*[Ff]ail.*$",  # Lines containing 'fail'
+        r"^.*[Ee]xception.*$",  # Lines containing 'exception'
+    ]
+
+    lines = log_text.split("\n")
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        for pattern in error_patterns:
+            match = re.search(pattern, line, re.IGNORECASE)
+            if match and match.group(0) not in errors:
+                errors.append(match.group(0))
+
+    return errors
+
+
+# =========================================================================
+# Flaky test detection
+# =========================================================================
+
+
+def detect_flaky_tests(log_text: str) -> list[str]:
+    """
+    Detect flaky tests from CI logs.
+
+    Args:
+        log_text: Raw log text to analyze
+
+    Returns:
+        List of detected flaky test names
+    """
+    if not log_text:
+        return []
+
+    flaky_indicators = [
+        r"(flaky|intermittent|non-deterministic|random failure)",
+        r"(passed on retry|failed only sometimes|sometimes fails)",
+        r"(retry|re-run|rerun).*test",
+        r"test.*failed.*but.*passed",
+        r"(unstable|inconsistent).*test",
+    ]
+
+    detected_tests = []
+
+    # Look for test names that match flaky patterns
+    test_name_patterns = [
+        r"[Tt]est\w+",  # Standard test naming
+        r"\w+Test",  # Test suffix
+        r'"[^"]*test[^"]*"',  # Test names in quotes
+        r"'[^']*test[^']*'",  # Test names in single quotes
+    ]
+
+    lines = log_text.split("\n")
+    for line in lines:
+        line_lower = line.lower()
+
+        # Check if line contains flaky indicators
+        is_flaky_line = any(re.search(indicator, line_lower) for indicator in flaky_indicators)
+
+        if is_flaky_line:
+            # Extract potential test names from the line
+            for pattern in test_name_patterns:
+                matches = re.findall(pattern, line)
+                for match in matches:
+                    clean_match = match.strip("\"'")
+                    if clean_match not in detected_tests:
+                        detected_tests.append(clean_match)
+
+    return detected_tests
+
+
+# =========================================================================
+# Infrastructure error detection
+# =========================================================================
+
+
+def detect_infra_errors(log_text: str) -> list[str]:
+    """
+    Detect infrastructure-related errors from CI logs.
+
+    Args:
+        log_text: Raw log text to analyze
+
+    Returns:
+        List of detected infrastructure error descriptions
+    """
+    if not log_text:
+        return []
+
+    infra_patterns = [
+        r"(timeout|timed out|connection.*timeout)",
+        r"(network.*error|network.*failure|connection.*refused)",
+        r"(dns.*error|resolve.*error)",
+        r"(out of memory|oom|memory.*limit)",
+        r"(disk.*full|storage.*exceeded|quota exceeded)",
+        r"(permission.*denied|access.*denied)",
+        r"(authentication.*failed|auth.*failed)",
+        r"(ssl.*error|tls.*error|certificate.*error)",
+        r"(proxy.*error|firewall.*error)",
+        r"(service.*unavailable|server.*down)",
+        r"(build agent|runner|executor).*error",
+        r"(container|pod|k8s).*failed",
+        r"(docker.*error|image.*pull.*failed)",
+    ]
+
+    infra_errors = []
+
+    lines = log_text.split("\n")
+    for line in lines:
+        line_lower = line.lower().strip()
+        if not line_lower:
+            continue
+
+        for pattern in infra_patterns:
+            match = re.search(pattern, line_lower)
+            if match and match.group(0) not in infra_errors:
+                infra_errors.append(match.group(0))
+
+    return infra_errors
+
+
+# =========================================================================
 # Language detection (basic heuristics)
 # =========================================================================
 
@@ -69,7 +217,7 @@ def detect_language(text: str) -> str:
     if not text:
         return "unknown"
     t = text.lower()
-    if "traceback (most recent call last)" in t or "file \"" in t and ".py" in t:
+    if "traceback (most recent call last)" in t or 'file "' in t and ".py" in t:
         return "python"
     if ".js" in t or "node_modules" in t or "unexpected token" in t:
         return "javascript"
@@ -268,7 +416,10 @@ def classify_failure_text(text: str) -> str:
 # =========================================================================
 
 
-class CiFailureAnalyzer:
+from agents.base import BaseAgent
+
+
+class CiFailureAnalyzer(BaseAgent):
     name = "ci_failure_analyzer"
     description = "Parses CI failures with language-aware classification, fingerprinting and root-cause selection."
 
@@ -283,9 +434,7 @@ class CiFailureAnalyzer:
         per_job: list[str] = []
         for job in failed_jobs:
             # combine job name, reason, logs — job-level only
-            text = " ".join(
-                str(job.get(k, "") or "") for k in ("name", "reason", "logs")
-            ).strip()
+            text = " ".join(str(job.get(k, "") or "") for k in ("name", "reason", "logs")).strip()
             label = classify_failure_text(text)
             per_job.append(label)
 
@@ -315,7 +464,11 @@ class CiFailureAnalyzer:
             )
 
         failed_jobs_raw = ci_run.get("failed_jobs")
-        failed_jobs = [j for j in failed_jobs_raw if isinstance(j, dict)] if isinstance(failed_jobs_raw, list) else []
+        failed_jobs = (
+            [j for j in failed_jobs_raw if isinstance(j, dict)]
+            if isinstance(failed_jobs_raw, list)
+            else []
+        )
 
         # Classify root cause (per-job + pick most severe)
         classification = self._classify_failure(failed_jobs)
@@ -338,6 +491,11 @@ class CiFailureAnalyzer:
         detected_language = detect_language(combined_logs)
         fingerprint = _fingerprint(combined_logs) if combined_logs else None
 
+        # Perform additional analysis using our new functions
+        parsed_errors = parse_logs(combined_logs)
+        flaky_tests = detect_flaky_tests(combined_logs)
+        infra_errors = detect_infra_errors(combined_logs)
+
         analysis = {
             "classification": classification,
             "severity": severity,
@@ -347,6 +505,9 @@ class CiFailureAnalyzer:
             "ci_status": ci_run.get("status", "unknown"),
             "language": detected_language,
             "fingerprint": fingerprint,
+            "parsed_errors": parsed_errors,
+            "flaky_tests": flaky_tests,
+            "infra_errors": infra_errors,
         }
 
         return build_agent_result(
@@ -360,6 +521,9 @@ class CiFailureAnalyzer:
                 f"severity={severity}",
                 f"language={detected_language}",
                 f"fingerprint={fingerprint}",
+                f"parsed_errors_count={len(parsed_errors)}",
+                f"flaky_tests_count={len(flaky_tests)}",
+                f"infra_errors_count={len(infra_errors)}",
             ],
             next_actions=["test_fixer"],
         )

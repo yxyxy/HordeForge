@@ -113,7 +113,10 @@ class TestPatchWorkflowOrchestrator:
         )
         mock_client.create_branch.return_value = {"ref": "refs/heads/feature-123"}
         mock_client.create_or_update_file.return_value = {"commit": {"sha": "commit123"}}
-        mock_client.create_pr.return_value = {"number": 42, "html_url": "https://github.com/test/pr/42"}
+        mock_client.create_pr.return_value = {
+            "number": 42,
+            "html_url": "https://github.com/test/pr/42",
+        }
 
         files = [
             FileChange(path="test.py", content="print('hello')", change_type="create"),
@@ -202,7 +205,10 @@ class TestApplyCodePatch:
         )
         mock_client.create_branch.return_value = {}
         mock_client.create_or_update_file.return_value = {"commit": {"sha": "commit123"}}
-        mock_client.create_pr.return_value = {"number": 1, "html_url": "https://github.com/test/pr/1"}
+        mock_client.create_pr.return_value = {
+            "number": 1,
+            "html_url": "https://github.com/test/pr/1",
+        }
 
         code_result = {
             "files": [{"path": "test.py", "content": "print('test')", "change_type": "create"}]

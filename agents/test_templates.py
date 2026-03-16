@@ -66,7 +66,7 @@ if __name__ == "__main__":
 
 def get_javascript_jest_template() -> str:
     """Get JavaScript/TypeScript Jest test template."""
-    return '''describe("{class_name}", () => {{
+    return """describe("{class_name}", () => {{
   beforeEach(() => {{
     // Setup
   }});
@@ -83,12 +83,12 @@ def get_javascript_jest_template() -> str:
     }});
   }});
 }});
-'''
+"""
 
 
 def get_typescript_jest_template() -> str:
     """Get TypeScript Jest test template."""
-    return '''describe("{class_name}", () => {{
+    return """describe("{class_name}", () => {{
   beforeEach(() => {{
     // Setup
   }});
@@ -109,12 +109,12 @@ def get_typescript_jest_template() -> str:
     }});
   }});
 }});
-'''
+"""
 
 
 def get_go_test_template() -> str:
     """Get Go test template."""
-    return '''package {package_name}
+    return """package {package_name}
 
 import (
     "testing"
@@ -133,12 +133,12 @@ func Benchmark{test_name}(b *testing.B) {{
         // Run the test
     }}
 }}
-'''
+"""
 
 
 def get_ruby_rspec_template() -> str:
     """Get Ruby RSpec test template."""
-    return '''RSpec.describe {class_name} do
+    return """RSpec.describe {class_name} do
   let(:subject) {{ described_class.new }}
 
   before do
@@ -156,7 +156,7 @@ def get_ruby_rspec_template() -> str:
     end
   end
 end
-'''
+"""
 
 
 # Mapping of language/framework to template getter

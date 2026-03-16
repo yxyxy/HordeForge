@@ -13,7 +13,9 @@
 ## 2. Обязательный интерфейс
 
 ```python
-class Agent:
+from agents.base import BaseAgent
+
+class Agent(BaseAgent):
     name: str
     description: str
 
@@ -22,11 +24,13 @@ class Agent:
 ```
 
 Минимально допустимый вход: `context: dict`.
+Базовый контракт реализован в `agents/base.py::BaseAgent`.
 
 ## 3. AgentResult (обязательная структура)
 
 ```json
 {
+  "schema_version": "1.0",
   "status": "SUCCESS",
   "artifacts": [],
   "decisions": [],
@@ -42,6 +46,9 @@ class Agent:
 - `decisions` — ключевые инженерные решения
 - `logs` — диагностические сообщения
 - `next_actions` — рекомендуемые следующие шаги
+- `schema_version` — опционально, если указан, должен быть `"1.0"` (см. `contracts/schemas/agent_result.v1.schema.json`)
+- `validation_errors` — опционально, список ошибок валидации (для non-strict режима)
+- `test_results` — опционально, агрегированные результаты тестов
 
 ## 4. Artifact format
 
@@ -55,6 +62,16 @@ class Agent:
   }
 }
 ```
+
+### Привязка к схемам контрактов
+
+Runtime валидирует `artifacts[*].content` по JSON-схемам из `contracts/schemas/`.
+Текущая карта типов артефактов:
+
+- `dod` → `context.dod.v1.schema.json`
+- `spec` → `context.spec.v1.schema.json`
+- `tests` → `context.tests.v1.schema.json`
+- `code_patch` → `context.code_patch.v1.schema.json`
 
 ## 5. Decision format
 
@@ -92,30 +109,54 @@ class Agent:
 
 ## 8. Совместимость с pipeline runner
 
-Текущий раннер ожидает:
+Текущий раннер разрешает агенты через реестр (`agents/registry/`), а не через dynamic import.
 
-1. module name == `agent` в pipeline yaml
-2. класс по имени из `snake_case -> CamelCase`
-3. метод `run(...)`
+Ожидания:
+
+1. `agent` в YAML должен быть зарегистрирован в `agents/registry`.
+2. класс агента наследует `BaseAgent` и реализует `run(...)`.
 
 Пример:
 
 - `agent: test_generator`
 - файл: `agents/test_generator.py`
-- класс: `TestGenerator`
+- класс: `TestGenerator` (имя класса свободно, но единообразие желательно)
 
 ## 9. Регистрация агентов (целевая)
 
-Вместо неявного dynamic import рекомендуется registry:
+В проекте есть два уровня реестров:
+
+### Runtime-реестр (используется orchestrator)
 
 ```python
-AGENT_REGISTRY = {
-    "dod_extractor": DoDExtractor,
-    "test_generator": TestGenerator,
-}
+from agents.registry import AGENT_REGISTRY, register_default_agents
+
+register_default_agents()  # заполняет runtime mapping
 ```
 
-До внедрения registry надо соблюдать naming conventions из раздела 8.
+### Metadata-реестр (контракты, категории, валидация)
+
+```python
+from registry.agents import AgentRegistry, AgentMetadata
+from registry.contracts import ContractRegistry
+from registry.agent_category import AgentCategory
+
+contract_registry = ContractRegistry()
+contract_registry.autoload_schemas()
+
+agent_registry = AgentRegistry(contract_registry=contract_registry)
+agent_registry.register(
+    AgentMetadata(
+        name="dod_extractor",
+        agent_class=DodExtractor,
+        input_contract="context.dod.v1",
+        output_contract="context.dod.v1",
+        category=AgentCategory.PLANNING,
+    )
+)
+```
+
+Metadata-реестр используется для валидации контрактов и генерации документации.
 
 ## 10. Тестирование агентов
 

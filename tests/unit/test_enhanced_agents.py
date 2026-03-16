@@ -80,7 +80,11 @@ def test_enhanced_code_generator_with_spec():
                     "content": {
                         "summary": "API feature",
                         "file_changes": [
-                            {"path": "src/api.py", "change_type": "create", "description": "API module"}
+                            {
+                                "path": "src/api.py",
+                                "change_type": "create",
+                                "description": "API module",
+                            }
                         ],
                     },
                 }

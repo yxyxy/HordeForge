@@ -1,29 +1,37 @@
-﻿# Subtasks Index (BDD + TDD)
+# Subtasks Index (BDD + TDD)
 
-Всего создано файлов подзадач: 414
+Всего создано файлов подзадач: 454
 
 | Task ID | Phase | Subtasks | Directory |
 |---|---|---:|---|
-
-| HF-P6-001 | P6 | 5 | development_tasks\subtasks\p6\HF-P6-001 |
-| HF-P6-002 | P6 | 5 | development_tasks\subtasks\p6\HF-P6-002 |
-| HF-P6-003 | P6 | 5 | development_tasks\subtasks\p6\HF-P6-003 |
-
-| HF-P7-001 | P7 | 4 | development_tasks\subtasks\p7\HF-P7-001 |
-| HF-P7-002 | P7 | 4 | development_tasks\subtasks\p7\HF-P7-002 |
-| HF-P7-003 | P7 | 4 | development_tasks\subtasks\p7\HF-P7-003 |
-| HF-P7-004 | P7 | 4 | development_tasks\subtasks\p7\HF-P7-004 |
-| HF-P7-005 | P7 | 4 | development_tasks\subtasks\p7\HF-P7-005 |
-| HF-P7-006 | P7 | 3 | development_tasks\subtasks\p7\HF-P7-006 |
-| HF-P7-007 | P7 | 4 | development_tasks\subtasks\p7\HF-P7-007 |
-| HF-P7-008 | P7 | 3 | development_tasks\subtasks\p7\HF-P7-008 |
-| HF-P8-001 | P8 | 3 | development_tasks\subtasks\p8\HF-P8-001 |
-| HF-P8-002 | P8 | 3 | development_tasks\subtasks\p8\HF-P8-002 |
-| HF-P9-001 | P9 | 3 | development_tasks\subtasks\p9\HF-P9-001 |
-| HF-P9-002 | P9 | 3 | development_tasks\subtasks\p9\HF-P9-002 |
-| HF-P10-001 | P10 | 3 | development_tasks\subtasks\p10\HF-P10-001 |
-| HF-P10-002 | P10 | 2 | development_tasks\subtasks\p10\HF-P10-002 |
-| HF-P10-003 | P10 | 2 | development_tasks\subtasks\p10\HF-P10-003 |
+| HF-P11-017 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-001 |
+| HF-P11-018 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-002 |
+| HF-P11-019 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-003 |
+| HF-P11-020 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-004 |
+| HF-P11-021 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-005 |
+| HF-P11-022 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-006 |
+| HF-P11-015 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-007 |
+| HF-P11-016 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-008 |
+| HF-P11-017 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-009 |
+| HF-P11-018 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-010 |
+| HF-P11-019 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-011 |
+| HF-P11-020 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-012 |
+| HF-P11-021 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-013 |
+| HF-P11-022 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-014 |
+| HF-P11-015 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-015 |
+| HF-P11-016 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-016 |
+| HF-P11-017 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-017 |
+| HF-P11-018 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-018 |
+| HF-P11-019 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-019 |
+| HF-P11-020 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-020 |
+| HF-P11-021 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-021 |
+| HF-P11-022 | P11 | 3 | development_tasks\subtasks\p11\HF-P11-022 |
+| HF-P14-001 | P14 | 3 | development_tasks\subtasks\p14\HF-P14-001 |
+| HF-P14-002 | P14 | 3 | development_tasks\subtasks\p14\HF-P14-002 |
+| HF-P14-003 | P14 | 3 | development_tasks\subtasks\p14\HF-P14-003 |
+| HF-P14-004 | P14 | 3 | development_tasks\subtasks\p14\HF-P14-004 |
+| HF-P14-005 | P14 | 3 | development_tasks\subtasks\p14\HF-P14-005 |
+| HF-P14-006 | P14 | 3 | development_tasks\subtasks\p14\HF-P14-006 |
 
 ## Правила
 

@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-K8S_AVAILABLE = False # availability is checked via scheduler.k8s.client.K8S_AVAILABLE in tests below.
+K8S_AVAILABLE = (
+    False  # availability is checked via scheduler.k8s.client.K8S_AVAILABLE in tests below.
+)
 
 
 class TestKubernetesManifests:
@@ -61,7 +63,9 @@ class TestKubernetesManifests:
         with open(deployment_path) as f:
             deployment = yaml.safe_load(f)
 
-        containers = deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        containers = (
+            deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        )
         assert len(containers) > 0
         ports = containers[0].get("ports", [])
         assert len(ports) > 0
@@ -154,6 +158,7 @@ class TestK8sClient:
         """Test kubernetes client can be imported."""
         try:
             from scheduler.k8s.client import K8S_AVAILABLE, K8sClient
+
             if not K8S_AVAILABLE:
                 pytest.skip("kubernetes library not installed")
             assert K8sClient is not None
@@ -164,6 +169,7 @@ class TestK8sClient:
         """Test creating a deployment via client."""
         try:
             from scheduler.k8s.client import K8S_AVAILABLE, K8sClient
+
             if not K8S_AVAILABLE:
                 pytest.skip("kubernetes library not installed")
             client = K8sClient()
@@ -175,6 +181,7 @@ class TestK8sClient:
         """Test scaling a deployment."""
         try:
             from scheduler.k8s.client import K8S_AVAILABLE, K8sClient
+
             if not K8S_AVAILABLE:
                 pytest.skip("kubernetes library not installed")
             client = K8sClient()
@@ -195,7 +202,9 @@ class TestResourceManagement:
         with open(deployment_path) as f:
             deployment = yaml.safe_load(f)
 
-        containers = deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        containers = (
+            deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        )
         if containers:
             resources = containers[0].get("resources", {})
             assert "limits" in resources or "requests" in resources
@@ -209,11 +218,18 @@ class TestResourceManagement:
         with open(deployment_path) as f:
             deployment = yaml.safe_load(f)
 
-        containers = deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        containers = (
+            deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        )
         if containers:
             liveness = containers[0].get("livenessProbe", {})
             # Liveness probe is optional but recommended
-            assert "httpGet" in liveness or "tcpSocket" in liveness or "exec" in liveness or liveness == {}
+            assert (
+                "httpGet" in liveness
+                or "tcpSocket" in liveness
+                or "exec" in liveness
+                or liveness == {}
+            )
 
     def test_readiness_probe_configured(self):
         """Test that readiness probe is configured."""
@@ -224,8 +240,15 @@ class TestResourceManagement:
         with open(deployment_path) as f:
             deployment = yaml.safe_load(f)
 
-        containers = deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        containers = (
+            deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        )
         if containers:
             readiness = containers[0].get("readinessProbe", {})
             # Readiness probe is optional but recommended
-            assert "httpGet" in readiness or "tcpSocket" in readiness or "exec" in readiness or readiness == {}
+            assert (
+                "httpGet" in readiness
+                or "tcpSocket" in readiness
+                or "exec" in readiness
+                or readiness == {}
+            )

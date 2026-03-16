@@ -52,7 +52,9 @@ class CostRecord:
         """Calculate cost based on token counts and pricing."""
         effective_pricing = pricing or DEFAULT_PRICING
 
-        provider_pricing = effective_pricing.get(self.provider, effective_pricing.get("generic", {}))
+        provider_pricing = effective_pricing.get(
+            self.provider, effective_pricing.get("generic", {})
+        )
         model_pricing = provider_pricing.get(self.model, provider_pricing.get("default", {}))
 
         input_rate = model_pricing.get("input", 1.0)
@@ -113,7 +115,9 @@ class CostTracker:
         self.logger = logging.getLogger("hordeforge.cost")
         self._lock = RLock()
         self._records: list[CostRecord] = []
-        self._budget_limit_usd = budget_limit_usd if budget_limit_usd and budget_limit_usd > 0 else None
+        self._budget_limit_usd = (
+            budget_limit_usd if budget_limit_usd and budget_limit_usd > 0 else None
+        )
         self._pricing = pricing or DEFAULT_PRICING
 
     @staticmethod

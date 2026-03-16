@@ -6,44 +6,112 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
-from importlib import import_module
 from typing import Any
 from uuid import uuid4
 
-from agents.registry import AGENT_REGISTRY, AgentRegistry
 from logging_utils import redact_mapping
 from orchestrator.context import ExecutionContext
 from orchestrator.loader import StepDefinition
 from orchestrator.state import PipelineRunState
 from orchestrator.status import StepStatus
 from orchestrator.validation import RuntimeSchemaValidator
+from registry.agents import AgentMetadata, AgentRegistry
+from registry.bootstrap import init_registries
+from registry.runtime_adapter import RuntimeRegistryAdapter
 
 
 class StepExecutor:
     def __init__(
         self,
-        agent_factory: Callable[[str], Any] | None = None,
         *,
-        agent_registry: AgentRegistry | None = None,
-        enable_dynamic_fallback: bool = True,
-        fallback_allowlist: set[str] | None = None,
+        agent_registry: RuntimeRegistryAdapter | AgentRegistry | None = None,
+        agent_factory: Callable[[str], Any] | None = None,
         schema_validator: RuntimeSchemaValidator | None = None,
         strict_schema_validation: bool = True,
         schema_dir: str = "contracts/schemas",
     ):
-        self.agent_factory = agent_factory
-        self._uses_custom_factory = agent_factory is not None
-        self.agent_registry = agent_registry or AGENT_REGISTRY
-        self.enable_dynamic_fallback = enable_dynamic_fallback
-        self.fallback_allowlist = (
-            set(fallback_allowlist) if fallback_allowlist is not None else None
-        )
+        if agent_registry is not None:
+            if isinstance(agent_registry, RuntimeRegistryAdapter):
+                self.agent_registry = agent_registry
+            elif isinstance(agent_registry, AgentRegistry):
+                self.agent_registry = RuntimeRegistryAdapter(agent_registry)
+            else:
+                self.agent_registry = agent_registry
+        elif agent_factory is not None:
+            base_registry = RuntimeRegistryAdapter(AgentRegistry())
+            self.agent_registry = self._create_registry_from_factory(base_registry, agent_factory)
+        else:
+            registries = init_registries(contracts_dir=schema_dir)
+            self.agent_registry = RuntimeRegistryAdapter(registries["agent_registry"])
+
         self.strict_schema_validation = strict_schema_validation
         self.schema_validator = schema_validator or RuntimeSchemaValidator(
             schema_dir=schema_dir,
             strict_mode=strict_schema_validation,
         )
         self.logger = logging.getLogger("hordeforge.orchestrator.step_executor")
+
+    def _create_registry_from_factory(self, base_registry, factory):
+        """Создает обертку реестра, который использует фабрику для создания агентов."""
+
+        # Создаем обертку вокруг базового реестра, которая может динамически регистрировать агентов
+        class DynamicRegistryWrapper:
+            def __init__(self, base_reg, factory_func):
+                self.base_registry = base_reg
+                self.factory = factory_func
+                self.dynamic_agents = {}
+
+            def has(self, agent_name: str) -> bool:
+                # Проверяем сначала в базовом реестре, затем пробуем фабрику
+                if self.base_registry.has(agent_name):
+                    return True
+
+                # Пробуем создать агент через фабрику, чтобы проверить его наличие
+                try:
+                    agent = self.factory(agent_name)
+                    # Сохраняем агент во временный кэш
+                    self.dynamic_agents[agent_name] = lambda: agent
+                    return True
+                except Exception:
+                    return False
+
+            def create(self, agent_name: str) -> Any:
+                # Если агент в базовом реестре - используем его
+                if self.base_registry.has(agent_name):
+                    return self.base_registry.create(agent_name)
+
+                # Если агент был создан ранее через фабрику - используем кэшированную версию
+                if agent_name in self.dynamic_agents:
+                    return self.dynamic_agents[agent_name]()
+
+                # Иначе создаем через фабрику и кэшируем
+                agent = self.factory(agent_name)
+                self.dynamic_agents[agent_name] = lambda: agent
+                return agent
+
+            def get(self, agent_name: str):
+                # Для совместимости с интерфейсом AgentRegistry
+                if self.base_registry.has(agent_name):
+                    item = self.base_registry.get(agent_name)
+                    if isinstance(item, AgentMetadata):
+                        return item.agent_class
+                    return item
+
+                if agent_name in self.dynamic_agents:
+                    # Возвращаем класс агента, а не экземпляр
+                    agent_instance = self.dynamic_agents[agent_name]()
+                    return agent_instance.__class__
+
+                # Если агент не существует, пробуем создать через фабрику
+                try:
+                    agent = self.factory(agent_name)
+                    self.dynamic_agents[agent_name] = lambda: agent
+                    return agent.__class__
+                except Exception:
+                    # Если агент не существует, вызываем исключение как в оригинальном методе
+                    raise KeyError(f"Agent '{agent_name}' is not registered") from None
+
+        return DynamicRegistryWrapper(base_registry, factory)
 
     @staticmethod
     def _now_iso() -> str:
@@ -65,42 +133,62 @@ class StepExecutor:
         }
         self.logger.log(level, json.dumps(payload, ensure_ascii=False))
 
-    @staticmethod
-    def _dynamic_import_agent(agent_name: str) -> Any:
-        module = import_module(f"agents.{agent_name}")
-        class_name = "".join(part.capitalize() for part in agent_name.split("_"))
-        if not hasattr(module, class_name):
-            raise AttributeError(f"Class '{class_name}' not found in module agents.{agent_name}")
-        agent_class = getattr(module, class_name)
-        return agent_class()
-
-    def _fallback_allowed(self, agent_name: str) -> bool:
-        if not self.enable_dynamic_fallback:
-            return False
-        if self.fallback_allowlist is None:
-            return True
-        return agent_name in self.fallback_allowlist
-
-    def _default_agent_factory(self, agent_name: str, run_id: str) -> Any:
-        if self.agent_registry.has(agent_name):
-            return self.agent_registry.create(agent_name)
-
-        if not self._fallback_allowed(agent_name):
-            raise LookupError(
-                f"Agent '{agent_name}' not found in registry and dynamic fallback is disabled"
-            )
-
-        self._log_event(
-            logging.WARNING,
-            run_id,
-            "agent_registry_fallback",
-            agent=agent_name,
-            reason="missing_registry_entry",
-        )
-        agent = self._dynamic_import_agent(agent_name)
+    def _get_agent_from_registry(self, agent_name: str, run_id: str) -> Any:
+        """Получить агент из реестра, с обработкой ошибок для незарегистрированных агентов."""
         if not self.agent_registry.has(agent_name):
-            self.agent_registry.register(agent_name, agent.__class__)
-        return agent
+            error_msg = f"Agent '{agent_name}' is not registered in AgentRegistry"
+            self._log_event(
+                logging.ERROR,
+                run_id,
+                "agent_not_found_in_registry",
+                agent=agent_name,
+                error=error_msg,
+            )
+            raise LookupError(error_msg)
+
+        return self.agent_registry.create(agent_name)
+
+    @staticmethod
+    def _normalize_agent_output(output: dict[str, Any]) -> dict[str, Any]:
+        """
+        Нормализует результат агента, чтобы он соответствовал схеме.
+        Удаляет дополнительные поля, которые не предусмотрены схемой.
+        """
+        # Определяем допустимые поля в соответствии со схемой
+        allowed_keys = {
+            "status",
+            "artifacts",
+            "decisions",
+            "logs",
+            "next_actions",
+            "validation_errors",
+            "test_results",
+            "schema_version",
+        }
+
+        # Создаем новый словарь только с разрешенными ключами
+        normalized = {}
+        for key in allowed_keys:
+            if key in output:
+                normalized[key] = output[key]
+
+        # Если обязательные поля отсутствуют, добавляем их со значениями по умолчанию
+        if "status" not in normalized:
+            normalized["status"] = output.get("status", "FAILED")
+
+        if "artifacts" not in normalized:
+            normalized["artifacts"] = output.get("artifacts", [])
+
+        if "decisions" not in normalized:
+            normalized["decisions"] = output.get("decisions", [])
+
+        if "logs" not in normalized:
+            normalized["logs"] = output.get("logs", ["Normalized by StepExecutor"])
+
+        if "next_actions" not in normalized:
+            normalized["next_actions"] = output.get("next_actions", [])
+
+        return normalized
 
     @staticmethod
     def _normalize_step_status(raw_status: str | None) -> StepStatus:
@@ -124,6 +212,24 @@ class StepExecutor:
     def _run_agent(
         agent: Any, payload: dict[str, Any], timeout_seconds: float | None
     ) -> dict[str, Any]:
+        import asyncio
+        import inspect
+
+        # Check if agent.run is a coroutine (async method)
+        if inspect.iscoroutinefunction(agent.run):
+            if timeout_seconds is None:
+                return asyncio.run(agent.run(payload))
+            else:
+                # For async agents with timeout, run in event loop with timeout
+                async def run_with_timeout():
+                    return await asyncio.wait_for(
+                        agent.run(payload),
+                        timeout=timeout_seconds,
+                    )
+
+                return asyncio.run(run_with_timeout())
+
+        # Synchronous agent
         if timeout_seconds is None:
             return agent.run(payload)
 
@@ -170,31 +276,53 @@ class StepExecutor:
 
         error_message: str | None = None
         try:
-            if self._uses_custom_factory and self.agent_factory is not None:
-                agent = self.agent_factory(step.agent)
-            else:
-                agent = self._default_agent_factory(step.agent, run_id)
+            # Всегда получаем агент через реестр, без возможности прямого создания
+            agent = self._get_agent_from_registry(step.agent, run_id)
             output = self._run_agent(agent, context.state, step.timeout_seconds)
             if not isinstance(output, dict):
                 raise TypeError("Agent output must be a dict")
+
+            # Сначала проверяем схему с оригинальным результатом
             validation_errors = self.schema_validator.validate_step_output(step.name, output)
             if validation_errors:
-                existing_errors = output.get("validation_errors")
+                # Если есть ошибки валидации, нормализуем результат и добавляем ошибки
+                normalized_output = self._normalize_agent_output(output)
+                existing_errors = normalized_output.get("validation_errors", [])
                 normalized_errors = (
                     list(existing_errors) if isinstance(existing_errors, list) else []
                 )
                 normalized_errors.extend(validation_errors)
-                output["validation_errors"] = normalized_errors
-                error_message = "; ".join(validation_errors)
-                self._log_event(
-                    logging.WARNING,
-                    run_id,
-                    "step_validation_warning",
-                    step_name=step.name,
-                    agent=step.agent,
-                    validation_error_count=len(validation_errors),
-                    strict_mode=self.strict_schema_validation,
-                )
+                normalized_output["validation_errors"] = normalized_errors
+                output = normalized_output
+                if self.strict_schema_validation:
+                    # В строгом режиме валидации возвращаем ошибку
+                    error_message = "; ".join(validation_errors)
+                    self._log_event(
+                        logging.WARNING,
+                        run_id,
+                        "step_validation_error",
+                        step_name=step.name,
+                        agent=step.agent,
+                        validation_error_count=len(validation_errors),
+                        strict_mode=self.strict_schema_validation,
+                    )
+                    output = self._error_result(f"Schema validation failed: {error_message}")
+                else:
+                    # В нестрогом режиме продолжаем с нормализованным результатом
+                    error_message = "; ".join(validation_errors)
+                    self._log_event(
+                        logging.WARNING,
+                        run_id,
+                        "step_validation_warning",
+                        step_name=step.name,
+                        agent=step.agent,
+                        validation_error_count=len(validation_errors),
+                        strict_mode=self.strict_schema_validation,
+                    )
+            else:
+                # Если ошибок валидации нет, нормализуем результат для согласованности
+                output = self._normalize_agent_output(output)
+
             step_status = self._normalize_step_status(output.get("status"))
         except Exception as exc:  # pylint: disable=broad-except
             error_message = str(exc)

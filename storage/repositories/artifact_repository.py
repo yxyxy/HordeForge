@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterable
 from pathlib import Path
 
+from storage.backends import StorageBackend, get_storage_backend
 from storage.models import ArtifactRecord
-from storage.persistence import JsonStore
+
+_DEFAULT_TABLE_NAME = "hordeforge_artifacts"
 
 
 class ArtifactRepository:
@@ -15,9 +18,21 @@ class ArtifactRepository:
         *,
         max_artifact_bytes: int = 200_000,
         allowed_artifact_types: Iterable[str] | None = None,
+        backend: StorageBackend | None = None,
+        backend_type: str | None = None,
+        table_name: str | None = None,
     ) -> None:
-        path = Path(storage_dir) / "artifacts.json"
-        self.store = JsonStore(path)
+        if backend is None:
+            resolved_type = backend_type or os.getenv("HORDEFORGE_STORAGE_BACKEND", "json")
+            if resolved_type == "json":
+                path = Path(storage_dir) / "artifacts.json"
+                backend = get_storage_backend("json", file_path=path)
+            else:
+                backend = get_storage_backend(
+                    resolved_type,
+                    table_name=table_name or _DEFAULT_TABLE_NAME,
+                )
+        self.store = backend
         self.max_artifact_bytes = max(1, int(max_artifact_bytes))
         if allowed_artifact_types is None:
             self.allowed_artifact_types = None

@@ -4,6 +4,7 @@ Revision ID: 20260310_02
 Revises: 20260310_01
 Create Date: 2026-03-10 00:10:00
 """
+
 from __future__ import annotations
 
 import json
@@ -126,8 +127,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     connection = op.get_bind()
     connection.execute(
-        sa.text(
-            "DELETE FROM artifacts WHERE run_id = 'seed:default' AND step_name = 'seed'"
-        )
+        sa.text("DELETE FROM artifacts WHERE run_id = 'seed:default' AND step_name = 'seed'")
     )
     connection.execute(sa.text("DELETE FROM runs WHERE run_id = 'seed:default'"))

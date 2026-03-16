@@ -84,9 +84,7 @@ class LoadTester:
                 method=self._config.method,
             )
 
-            with urllib.request.urlopen(
-                req, timeout=self._config.timeout_seconds
-            ) as response:
+            with urllib.request.urlopen(req, timeout=self._config.timeout_seconds) as response:
                 result["status_code"] = response.status
                 result["success"] = 200 <= response.status < 300
 
@@ -112,8 +110,7 @@ class LoadTester:
 
         with ThreadPoolExecutor(max_workers=self._config.concurrency) as executor:
             futures = [
-                executor.submit(self._make_request, i)
-                for i in range(self._config.total_requests)
+                executor.submit(self._make_request, i) for i in range(self._config.total_requests)
             ]
 
             for future in as_completed(futures):
@@ -192,20 +189,14 @@ BASELINE_THRESHOLDS = {
 
 def evaluate_load_test_result(result: LoadTestResult) -> dict[str, Any]:
     """Evaluate load test against baseline thresholds."""
-    error_rate = (
-        result.failed_requests / result.total_requests
-        if result.total_requests > 0
-        else 0
-    )
+    error_rate = result.failed_requests / result.total_requests if result.total_requests > 0 else 0
 
     passed = {
         "requests_per_second": result.requests_per_second
         >= BASELINE_THRESHOLDS["min_requests_per_second"],
-        "p95_latency": result.latency_ms["p95"]
-        <= BASELINE_THRESHOLDS["max_p95_latency_ms"],
+        "p95_latency": result.latency_ms["p95"] <= BASELINE_THRESHOLDS["max_p95_latency_ms"],
         "error_rate": error_rate <= BASELINE_THRESHOLDS["max_error_rate"],
-        "mean_latency": result.latency_ms["mean"]
-        <= BASELINE_THRESHOLDS["max_mean_latency_ms"],
+        "mean_latency": result.latency_ms["mean"] <= BASELINE_THRESHOLDS["max_mean_latency_ms"],
     }
 
     all_passed = all(passed.values())
@@ -219,9 +210,7 @@ def evaluate_load_test_result(result: LoadTestResult) -> dict[str, Any]:
     }
 
 
-def _get_recommendations(
-    passed: dict[str, bool], result: LoadTestResult
-) -> list[str]:
+def _get_recommendations(passed: dict[str, bool], result: LoadTestResult) -> list[str]:
     """Generate recommendations based on test results."""
     recommendations = []
 
@@ -239,13 +228,10 @@ def _get_recommendations(
 
     if not passed["error_rate"]:
         error_rate = (
-            result.failed_requests / result.total_requests
-            if result.total_requests > 0
-            else 0
+            result.failed_requests / result.total_requests if result.total_requests > 0 else 0
         )
         recommendations.append(
-            f"High error rate: {error_rate*100:.1f}%. "
-            "Review error logs and fix stability issues."
+            f"High error rate: {error_rate * 100:.1f}%. Review error logs and fix stability issues."
         )
 
     if not passed["mean_latency"]:

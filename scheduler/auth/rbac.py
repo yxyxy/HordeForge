@@ -49,38 +49,44 @@ class Permission(str, Enum):
 
 # Role to permissions mapping
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
-    Role.ADMIN: frozenset({
-        Permission.PIPELINE_RUN,
-        Permission.PIPELINE_READ,
-        Permission.PIPELINE_CANCEL,
-        Permission.OVERRIDE_EXECUTE,
-        Permission.CRON_TRIGGER,
-        Permission.CRON_READ,
-        Permission.QUEUE_DRAIN,
-        Permission.QUEUE_READ,
-        Permission.RUNS_READ,
-        Permission.RUNS_WRITE,
-        Permission.METRICS_READ,
-        Permission.ADMIN_ACCESS,
-    }),
-    Role.OPERATOR: frozenset({
-        Permission.PIPELINE_RUN,
-        Permission.PIPELINE_READ,
-        Permission.OVERRIDE_EXECUTE,
-        Permission.CRON_TRIGGER,
-        Permission.CRON_READ,
-        Permission.QUEUE_DRAIN,
-        Permission.QUEUE_READ,
-        Permission.RUNS_READ,
-        Permission.METRICS_READ,
-    }),
-    Role.VIEWER: frozenset({
-        Permission.PIPELINE_READ,
-        Permission.CRON_READ,
-        Permission.QUEUE_READ,
-        Permission.RUNS_READ,
-        Permission.METRICS_READ,
-    }),
+    Role.ADMIN: frozenset(
+        {
+            Permission.PIPELINE_RUN,
+            Permission.PIPELINE_READ,
+            Permission.PIPELINE_CANCEL,
+            Permission.OVERRIDE_EXECUTE,
+            Permission.CRON_TRIGGER,
+            Permission.CRON_READ,
+            Permission.QUEUE_DRAIN,
+            Permission.QUEUE_READ,
+            Permission.RUNS_READ,
+            Permission.RUNS_WRITE,
+            Permission.METRICS_READ,
+            Permission.ADMIN_ACCESS,
+        }
+    ),
+    Role.OPERATOR: frozenset(
+        {
+            Permission.PIPELINE_RUN,
+            Permission.PIPELINE_READ,
+            Permission.OVERRIDE_EXECUTE,
+            Permission.CRON_TRIGGER,
+            Permission.CRON_READ,
+            Permission.QUEUE_DRAIN,
+            Permission.QUEUE_READ,
+            Permission.RUNS_READ,
+            Permission.METRICS_READ,
+        }
+    ),
+    Role.VIEWER: frozenset(
+        {
+            Permission.PIPELINE_READ,
+            Permission.CRON_READ,
+            Permission.QUEUE_READ,
+            Permission.RUNS_READ,
+            Permission.METRICS_READ,
+        }
+    ),
 }
 
 

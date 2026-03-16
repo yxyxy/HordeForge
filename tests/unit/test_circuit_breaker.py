@@ -21,9 +21,7 @@ def test_circuit_breaker_closed_state():
 
 def test_circuit_breaker_opens_after_threshold():
     """Test circuit breaker opens after failure threshold."""
-    cb = CircuitBreaker(
-        "test-fail", CircuitBreakerConfig(failure_threshold=3, timeout_seconds=60)
-    )
+    cb = CircuitBreaker("test-fail", CircuitBreakerConfig(failure_threshold=3, timeout_seconds=60))
 
     def failing_func():
         raise ValueError("failure")
@@ -78,9 +76,7 @@ def test_circuit_breaker_recovers():
     """Test circuit breaker recovers after success in half-open."""
     cb = CircuitBreaker(
         "test-recover",
-        CircuitBreakerConfig(
-            failure_threshold=1, success_threshold=2, timeout_seconds=0.1
-        ),
+        CircuitBreakerConfig(failure_threshold=1, success_threshold=2, timeout_seconds=0.1),
     )
 
     def failing_func():
@@ -127,9 +123,7 @@ def test_circuit_breaker_registry():
 
 def test_circuit_breaker_reset():
     """Test circuit breaker reset."""
-    cb = CircuitBreaker(
-        "test-reset", CircuitBreakerConfig(failure_threshold=1, timeout_seconds=60)
-    )
+    cb = CircuitBreaker("test-reset", CircuitBreakerConfig(failure_threshold=1, timeout_seconds=60))
 
     def failing_func():
         raise ValueError("failure")

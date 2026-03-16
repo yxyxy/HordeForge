@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from agents.registry import AGENT_REGISTRY
 from orchestrator.engine import OrchestratorEngine
 from orchestrator.executor import StepExecutor
+from registry.agents import AgentRegistry, register_agents
+from registry.runtime_adapter import RuntimeRegistryAdapter
 
 
 def _artifact_content(result: dict[str, Any], artifact_type: str) -> dict[str, Any]:
@@ -14,6 +15,12 @@ def _artifact_content(result: dict[str, Any], artifact_type: str) -> dict[str, A
             if isinstance(content, dict):
                 return content
     raise AssertionError(f"Artifact '{artifact_type}' is missing.")
+
+
+def _runtime_registry() -> RuntimeRegistryAdapter:
+    registry = AgentRegistry()
+    register_agents(registry)
+    return RuntimeRegistryAdapter(registry)
 
 
 class InvalidSchemaAgent:
@@ -80,10 +87,12 @@ def test_feature_pipeline_integration_happy_path_runs_fix_loop_to_green():
 
 
 def test_feature_pipeline_integration_validation_failure_stops_execution():
+    runtime_registry = _runtime_registry()
+
     def agent_factory(agent_name: str) -> Any:
         if agent_name == "specification_writer":
             return InvalidSchemaAgent()
-        return AGENT_REGISTRY.create(agent_name)
+        return runtime_registry.create(agent_name)
 
     engine = OrchestratorEngine(
         pipelines_dir="pipelines",
@@ -130,10 +139,12 @@ def test_ci_fix_pipeline_integration_full_flow_from_ci_failure_event():
 
 
 def test_ci_fix_pipeline_integration_close_status_branch_when_ci_stays_red():
+    runtime_registry = _runtime_registry()
+
     def agent_factory(agent_name: str) -> Any:
         if agent_name == "test_runner":
             return AlwaysRedTestRunner()
-        return AGENT_REGISTRY.create(agent_name)
+        return runtime_registry.create(agent_name)
 
     engine = OrchestratorEngine(
         pipelines_dir="pipelines",

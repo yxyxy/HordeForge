@@ -1,6 +1,5 @@
 """Unit tests for language-aware test generation (HF-P5-004)."""
 
-
 from agents.test_generator import (
     LANGUAGE_EXTENSIONS,
     TEST_PATTERNS,
@@ -74,17 +73,13 @@ class TestFrameworkDetection:
     def test_detect_jest(self):
         """Test Jest detection from package.json."""
         repo_config = {
-            "package_json": {
-                "devDependencies": {"jest": "^29.0.0", "@types/jest": "^29.0.0"}
-            }
+            "package_json": {"devDependencies": {"jest": "^29.0.0", "@types/jest": "^29.0.0"}}
         }
         assert detect_framework("javascript", repo_config) == "jest"
 
     def test_detect_vitest(self):
         """Test Vitest detection."""
-        repo_config = {
-            "package_json": {"devDependencies": {"vitest": "^1.0.0"}}
-        }
+        repo_config = {"package_json": {"devDependencies": {"vitest": "^1.0.0"}}}
         assert detect_framework("typescript", repo_config) == "vitest"
 
     def test_no_framework_config(self):
@@ -201,11 +196,11 @@ class TestAdaptTestToPatterns:
 
     def test_add_fixtures_when_needed(self):
         """Test that fixtures are added when project uses them."""
-        test_content = '''import pytest
+        test_content = """import pytest
 
 def test_example():
     pass
-'''
+"""
         patterns = {"uses_fixtures": True, "uses_mocks": False}
         adapted = adapt_test_to_patterns(test_content, patterns, "python", "pytest")
 
@@ -213,11 +208,11 @@ def test_example():
 
     def test_add_mocks_when_needed(self):
         """Test that mocks are added when project uses them."""
-        test_content = '''import pytest
+        test_content = """import pytest
 
 def test_example():
     pass
-'''
+"""
         patterns = {"uses_fixtures": False, "uses_mocks": True}
         adapted = adapt_test_to_patterns(test_content, patterns, "python", "pytest")
 
@@ -225,11 +220,11 @@ def test_example():
 
     def test_no_change_when_no_patterns(self):
         """Test that content stays unchanged when no patterns detected."""
-        test_content = '''import pytest
+        test_content = """import pytest
 
 def test_example():
     pass
-'''
+"""
         patterns = {"uses_fixtures": False, "uses_mocks": False}
         adapted = adapt_test_to_patterns(test_content, patterns, "python", "pytest")
 

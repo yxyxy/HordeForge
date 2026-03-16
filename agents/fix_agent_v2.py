@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
 from agents.llm_wrapper import get_llm_wrapper
 from agents.test_executor import (
@@ -11,7 +12,7 @@ from agents.test_executor import (
 )
 
 
-class EnhancedFixAgent:
+class EnhancedFixAgent(BaseAgent):
     """Production-ready fix agent with LLM-based iterative fixing."""
 
     name = "fix_agent"
@@ -234,7 +235,11 @@ class EnhancedFixAgent:
                 iteration=iteration,
                 error=llm_error,
             )
-            reason = f"Deterministic fix generated (iteration {iteration})." if llm_error else f"Fix patch generated (iteration {iteration})."
+            reason = (
+                f"Deterministic fix generated (iteration {iteration})."
+                if llm_error
+                else f"Fix patch generated (iteration {iteration})."
+            )
             confidence = 0.75
 
         return build_agent_result(
@@ -247,7 +252,9 @@ class EnhancedFixAgent:
                 f"Fix iteration {iteration}: {failed_count} failures detected.",
                 f"Remaining after fix: {patch.get('remaining_failures', '?')}",
             ],
-            next_actions=["test_runner"] if patch.get("remaining_failures", 0) > 0 else ["review_agent"],
+            next_actions=["test_runner"]
+            if patch.get("remaining_failures", 0) > 0
+            else ["review_agent"],
         )
 
     def _generate_llm_fix(
@@ -292,7 +299,9 @@ class EnhancedFixAgent:
             if test_files:
                 test_code_context = "\n## Relevant Test Code\n"
                 for tf in test_files[:2]:
-                    test_code_context += f"### {tf['path']}\n```\n{tf.get('content', '')[:500]}\n```\n"
+                    test_code_context += (
+                        f"### {tf['path']}\n```\n{tf.get('content', '')[:500]}\n```\n"
+                    )
 
         prompt = f"""You are a senior software engineer. Fix the failing tests.
 
@@ -304,13 +313,13 @@ class EnhancedFixAgent:
 
 {error_context}
 
-{spec.get('summary', '') if spec else ''}
+{spec.get("summary", "") if spec else ""}
 
 ## Requirements
-{json.dumps(spec.get('requirements', []), indent=2) if spec else 'N/A'}
+{json.dumps(spec.get("requirements", []), indent=2) if spec else "N/A"}
 
 ## Current Code Changes
-{json.dumps(current_code.get('files', []), indent=2) if current_code else 'N/A'}
+{json.dumps(current_code.get("files", []), indent=2) if current_code else "N/A"}
 
 {test_code_context}
 

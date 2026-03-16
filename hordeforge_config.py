@@ -91,6 +91,7 @@ class RunConfig:
     enable_dynamic_fallback: bool
     webhook_secret: str
     storage_dir: str
+    queue_backend: str
     idempotency_ttl_seconds: int
     operator_api_key: str
     operator_allowed_roles: tuple[str, ...]
@@ -102,6 +103,22 @@ class RunConfig:
     retention_logs_days: int
     retention_artifacts_days: int
     retention_audit_days: int
+    # Auth configuration
+    auth_enabled: bool
+    jwt_secret_key: str
+    jwt_algorithm: str
+    jwt_issuer: str | None
+    jwt_audience: str | None
+    session_ttl_seconds: int
+    auth_public_paths: tuple[str, ...]
+    # Observability configuration
+    metrics_exporter: str
+    metrics_export_interval_seconds: int
+    prometheus_pushgateway_url: str
+    datadog_api_key: str
+    datadog_app_key: str
+    datadog_site: str
+    audit_log_dir: str
 
     @classmethod
     def from_env(cls) -> RunConfig:
@@ -117,6 +134,7 @@ class RunConfig:
         enable_dynamic_fallback = _get_bool_env("HORDEFORGE_ENABLE_DYNAMIC_FALLBACK", True)
         webhook_secret = os.getenv("HORDEFORGE_WEBHOOK_SECRET", "local-dev-secret")
         storage_dir = os.getenv("HORDEFORGE_STORAGE_DIR", ".hordeforge_data")
+        queue_backend = os.getenv("HORDEFORGE_QUEUE_BACKEND", "memory").strip().lower() or "memory"
         idempotency_ttl_raw = os.getenv("HORDEFORGE_IDEMPOTENCY_TTL_SECONDS", "3600")
         operator_api_key = os.getenv("HORDEFORGE_OPERATOR_API_KEY", "local-operator-key")
         operator_allowed_roles = _get_csv_env("HORDEFORGE_OPERATOR_ALLOWED_ROLES", ("operator",))
@@ -138,6 +156,33 @@ class RunConfig:
         except ValueError:
             idempotency_ttl_seconds = 3600
 
+        # Auth configuration
+        auth_enabled = _get_bool_env("HORDEFORGE_AUTH_ENABLED", False)
+        jwt_secret_key = os.getenv(
+            "HORDEFORGE_JWT_SECRET_KEY", "dev-jwt-secret-change-in-production"
+        )
+        jwt_algorithm = os.getenv("HORDEFORGE_JWT_ALGORITHM", "HS256")
+        jwt_issuer = os.getenv("HORDEFORGE_JWT_ISSUER", None)
+        jwt_audience = os.getenv("HORDEFORGE_JWT_AUDIENCE", None)
+        session_ttl_seconds = _get_int_env("HORDEFORGE_SESSION_TTL_SECONDS", 3600, minimum=60)
+        auth_public_paths = _get_csv_env(
+            "HORDEFORGE_AUTH_PUBLIC_PATHS",
+            ("/health", "/ready", "/metrics", "/docs", "/openapi.json", "/redoc"),
+        )
+
+        # Observability configuration
+        metrics_exporter = os.getenv("HORDEFORGE_METRICS_EXPORTER", "")
+        metrics_export_interval_seconds = _get_int_env(
+            "HORDEFORGE_METRICS_EXPORT_INTERVAL_SECONDS", 60, minimum=10
+        )
+        prometheus_pushgateway_url = os.getenv(
+            "HORDEFORGE_PROMETHEUS_PUSHGATEWAY_URL", "http://localhost:9091"
+        )
+        datadog_api_key = os.getenv("HORDEFORGE_DATADOG_API_KEY", "")
+        datadog_app_key = os.getenv("HORDEFORGE_DATADOG_APP_KEY", "")
+        datadog_site = os.getenv("HORDEFORGE_DATADOG_SITE", "datadoghq.com")
+        audit_log_dir = os.getenv("HORDEFORGE_AUDIT_LOG_DIR", ".hordeforge_data/audit")
+
         return cls(
             gateway_url=gateway_url,
             pipelines_dir=pipelines_dir,
@@ -151,6 +196,7 @@ class RunConfig:
             enable_dynamic_fallback=enable_dynamic_fallback,
             webhook_secret=webhook_secret,
             storage_dir=storage_dir,
+            queue_backend=queue_backend,
             idempotency_ttl_seconds=idempotency_ttl_seconds,
             operator_api_key=operator_api_key,
             operator_allowed_roles=operator_allowed_roles,
@@ -162,4 +208,18 @@ class RunConfig:
             retention_logs_days=retention_logs_days,
             retention_artifacts_days=retention_artifacts_days,
             retention_audit_days=retention_audit_days,
+            auth_enabled=auth_enabled,
+            jwt_secret_key=jwt_secret_key,
+            jwt_algorithm=jwt_algorithm,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+            session_ttl_seconds=session_ttl_seconds,
+            auth_public_paths=auth_public_paths,
+            metrics_exporter=metrics_exporter,
+            metrics_export_interval_seconds=metrics_export_interval_seconds,
+            prometheus_pushgateway_url=prometheus_pushgateway_url,
+            datadog_api_key=datadog_api_key,
+            datadog_app_key=datadog_app_key,
+            datadog_site=datadog_site,
+            audit_log_dir=audit_log_dir,
         )

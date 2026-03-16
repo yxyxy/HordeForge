@@ -10,11 +10,23 @@
 
 ```text
 HordeForge/
-├── api/
-│   ├── __init__.py
-│   ├── event_router.py
-│   ├── main.py
-│   └── security.py
+├── .dockerignore
+├── .env.example
+├── .gitignore
+├── .pre-commit-config.yaml
+├── alembic.ini
+├── cli.py
+├── docker-compose.yml
+├── Dockerfile
+├── hordeforge_config.py
+├── KODA.md
+├── logging_utils.py
+├── Makefile
+├── pyproject.toml
+├── README.md
+├── requirements-dev.txt
+├── requirements.txt
+├── setup.py
 ├── agents/
 │   ├── __init__.py
 │   ├── architecture_evaluator.py
@@ -22,30 +34,48 @@ HordeForge/
 │   ├── bdd_generator.py
 │   ├── benchmarks.py
 │   ├── ci_failure_analyzer.py
+│   ├── ci_monitor_agent/
+│   │   ├── __init__.py
+│   │   ├── agent.py
+│   │   ├── ci_clients/
+│   │   │   ├── __init__.py
+│   │   │   ├── gitlab_client.py
+│   │   │   └── jenkins_client.py
+│   │   ├── prompts/
+│   │   │   └── __init__.py
+│   │   └── schemas.py
 │   ├── code_generator.py
-│   ├── code_generator_v2.py
 │   ├── context_utils.py
+│   ├── dependency_checker_agent/
+│   │   ├── __init__.py
+│   │   ├── agent.py
+│   │   ├── prompts/
+│   │   │   └── __init__.py
+│   │   └── schemas.py
 │   ├── dod_extractor.py
-│   ├── fix_agent.py
 │   ├── fix_agent_v2.py
+│   ├── fix_agent.py
 │   ├── fix_loop.py
 │   ├── github_client.py
 │   ├── issue_closer.py
+│   ├── issue_scanner.py
 │   ├── language_detector.py
 │   ├── live_merge.py
 │   ├── live_review.py
 │   ├── llm_wrapper.py
 │   ├── memory_agent.py
+│   ├── patch_workflow_orchestrator.py
 │   ├── patch_workflow.py
 │   ├── pipeline_initializer.py
 │   ├── pipeline_runner.py
 │   ├── pr_merge_agent.py
 │   ├── rag_initializer.py
-│   ├── registry.py
+│   ├── registry/
+│   │   └── __init__.py
 │   ├── repo_connector.py
 │   ├── review_agent.py
-│   ├── specification_writer.py
 │   ├── specification_writer_v2.py
+│   ├── specification_writer.py
 │   ├── stub_agent.py
 │   ├── task_decomposer.py
 │   ├── test_analyzer.py
@@ -53,8 +83,28 @@ HordeForge/
 │   ├── test_generator.py
 │   ├── test_runner.py
 │   └── test_templates.py
+├── api/
+│   ├── __init__.py
+│   ├── event_router.py
+│   ├── main.py
+│   └── security.py
 ├── contracts/
+│   ├── architect.schema.json
 │   └── schemas/
+│       ├── agent_result.v1.schema.json
+│       ├── context.code_patch.v1.schema.json
+│       ├── context.dod.v1.schema.json
+│       ├── context.spec.v1.schema.json
+│       ├── context.tests.v1.schema.json
+│       └── README.md
+├── development_tasks/
+│   ├── 00_master_roadmap.md
+│   ├── 99_task_template.md
+│   ├── production_gap_analysis.md
+│   ├── README.md
+│   └── subtasks/
+│       ├── INDEX.md
+│       └── p11/
 ├── docs/
 │   ├── AGENT_SPEC.md
 │   ├── ARCHITECTURE.md
@@ -62,12 +112,47 @@ HordeForge/
 │   ├── features.md
 │   ├── FR_NFR.md
 │   ├── get_started.md
+│   ├── operations_runbook.md
 │   ├── quick_start.md
 │   ├── REPO_STRUCTURE.md
 │   ├── scheduler_integration.md
 │   ├── security_notes.md
-│   ├── operations_runbook.md
 │   └── use_cases.md
+├── examples/
+│   └── memory_agent_demo.py
+├── kubernetes/
+│   ├── base/
+│   │   ├── deployment.yaml
+│   │   ├── ingress.yaml
+│   │   └── service.yaml
+│   └── hordeforge/
+│       ├── Chart.yaml
+│       ├── templates/
+│       │   ├── _helpers.tpl
+│       │   ├── deployment.yaml
+│       │   ├── ingress.yaml
+│       │   └── service.yaml
+│       └── values.yaml
+├── migrations/
+│   ├── env.py
+│   ├── README.md
+│   ├── script.py.mako
+│   └── versions/
+│       ├── 20260310_01_initial_storage.py
+│       └── 20260310_02_seed_defaults.py
+├── observability/
+│   ├── __init__.py
+│   ├── agent_benchmarks.py
+│   ├── alerting.py
+│   ├── alerts.py
+│   ├── audit_logger.py
+│   ├── benchmarking.py
+│   ├── circuit_breaker.py
+│   ├── cost_tracker.py
+│   ├── dashboard_exporter.py
+│   ├── exporters.py
+│   ├── load_testing.py
+│   └── metrics.py
 ├── orchestrator/
 │   ├── __init__.py
 │   ├── context.py
@@ -88,6 +173,12 @@ HordeForge/
 │   ├── dependency_check_pipeline.yaml
 │   ├── feature_pipeline.yaml
 │   └── init_pipeline.yaml
+├── registry/
+│   ├── agents.py
+│   ├── agent_category.py
+│   ├── bootstrap.py
+│   ├── contracts.py
+│   └── pipelines.py
 ├── rag/
 │   ├── __init__.py
 │   ├── embeddings.py
@@ -95,81 +186,73 @@ HordeForge/
 │   ├── retriever.py
 │   └── sources/
 │       ├── __init__.py
-│       ├── mock_data.py
-│       └── mock_docs/
+│       └── mock_data.py
 ├── rules/
 │   ├── __init__.py
-│   ├── loader.py
 │   ├── coding_rules.md
-│   ├── testing_rules.md
-│   └── security_rules.md
+│   ├── loader.py
+│   ├── security_rules.md
+│   └── testing_rules.md
 ├── scheduler/
 │   ├── __init__.py
+│   ├── auth/
 │   ├── cron_dispatcher.py
 │   ├── cron_runtime.py
 │   ├── gateway.py
 │   ├── idempotency.py
 │   ├── jobs/
-│   │   ├── __init__.py
-│   │   ├── ci_monitor.py
-│   │   ├── dependency_checker.py
-│   │   └── issue_scanner.py
+│   ├── k8s/
 │   ├── queue_backends.py
+│   ├── rate_limiter_middleware.py
+│   ├── rate_limiter.py
 │   ├── schedule_registry.py
 │   ├── task_queue.py
 │   └── tenant_registry.py
+├── scripts/
+│   ├── backup/
+│   ├── cleanup/
+│   ├── restore/
+│   ├── generate_agent_docs.py
+│   ├── generate_pipeline_docs.py
+│   ├── generate_pipeline_graph.py
+│   └── update_agents_base_class.py
+├── src/
 ├── storage/
 │   ├── __init__.py
 │   ├── backends.py
 │   ├── models.py
 │   ├── persistence.py
-│   └── repositories/
-│       ├── __init__.py
-│       ├── artifact_repository.py
-│       ├── run_repository.py
-│       └── step_log_repository.py
-├── observability/
-│   ├── __init__.py
-│   ├── agent_benchmarks.py
-│   ├── alerts.py
-│   ├── audit_logger.py
-│   ├── benchmarking.py
-│   ├── circuit_breaker.py
-│   ├── cost_tracker.py
-│   ├── dashboard_exporter.py
-│   ├── exporters.py
-│   ├── load_testing.py
-│   └── metrics.py
+│   ├── repositories/
+│   │   ├── artifact_repository.py
+│   │   ├── run_repository.py
+│   │   └── step_log_repository.py
+│   └── sql_models.py
 ├── templates/
 │   ├── config.yaml
 │   └── pipeline.yaml
+├── tools/
+│   └── visualize_architecture.py
 ├── tests/
 │   ├── integration/
-│   │   ├── test_cli_gateway_orchestrator_smoke.py
-│   │   ├── test_e2e_agent_quality.py
-│   │   ├── test_e2e_pipeline.py
-│   │   ├── test_gateway_load_baseline.py
-│   │   ├── test_pipelines_integration.py
-│   │   └── test_webhook_cron_e2e.py
 │   └── unit/
-│       └── (60+ тестов)
-├── development_tasks/
-│   ├── (файлы roadmap и closeout)
-│   └── subtasks/
-├── .pre-commit-config.yaml
-├── .dockerignore
-├── .env.example
-├── docker-compose.yml
-├── Dockerfile
-├── Makefile
-├── cli.py
-├── hordeforge_config.py
-├── logging_utils.py
-├── pyproject.toml
-├── requirements.txt
-├── requirements-dev.txt
-├── setup.py
-└── README.md
+└── .clinerules/
+    ├── 00_project.md
+    ├── 01_architecture.md
+    ├── 02_agents.md
+    ├── 03_code_style.md
+    ├── 04_testing.md
+    ├── 05_pipeline.md
+    ├── 06_github_workflow.md
+    ├── 07_safety.md
+    ├── 10_dev_loop.md
+    ├── 13_refactoring_rules.md
+    ├── 14_file_edit_rules.md
+    ├── 15_fix_loop_rules.md
+    ├── 17_import_rules.md
+    ├── 18_loop_prevention.md
+    ├── 19_stop_condition.md
+    ├── 97_edit_strategy.md
+    └── 99_ai_behavior.md
 ```
 
 ## 2. To-Be (целевая структура)

@@ -187,7 +187,7 @@ class DashboardExporter:
                         {
                             "name": "tenant_id",
                             "type": "query",
-                            "query": 'group by(tenant_id) (hordeforge_total_cost_usd)',
+                            "query": "group by(tenant_id) (hordeforge_total_cost_usd)",
                             "refresh": 1,
                         }
                     ]
@@ -225,9 +225,21 @@ DEFAULT_DASHBOARD_CONFIGS = {
         "description": "Cost monitoring dashboard for HordeForge multi-tenant pipeline orchestration",
         "widgets": [
             {"type": "timeseries", "metric": "hordeforge.total_cost_usd", "title": "Total Cost"},
-            {"type": "timeseries", "metric": "hordeforge.total_input_tokens", "title": "Input Tokens"},
-            {"type": "timeseries", "metric": "hordeforge.total_output_tokens", "title": "Output Tokens"},
-            {"type": "alert_value", "metric": "hordeforge.budget_used_percent", "title": "Budget Used %"},
+            {
+                "type": "timeseries",
+                "metric": "hordeforge.total_input_tokens",
+                "title": "Input Tokens",
+            },
+            {
+                "type": "timeseries",
+                "metric": "hordeforge.total_output_tokens",
+                "title": "Output Tokens",
+            },
+            {
+                "type": "alert_value",
+                "metric": "hordeforge.budget_used_percent",
+                "title": "Budget Used %",
+            },
         ],
     },
     "grafana": {

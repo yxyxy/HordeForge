@@ -1,9 +1,10 @@
 """Initial storage schema.
 
 Revision ID: 20260310_01
-Revises: 
+Revises:
 Create Date: 2026-03-10 00:00:00
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa

@@ -180,9 +180,7 @@ class PatchWorkflowOrchestrator:
                 try:
                     file_info = self.client.get_file_content(fc.path)
                     fc.sha = file_info.get("sha")
-                    self.logger.warning(
-                        f"File {fc.path} exists, will update (SHA: {fc.sha})"
-                    )
+                    self.logger.warning(f"File {fc.path} exists, will update (SHA: {fc.sha})")
                     fc.change_type = "modify"
                 except GitHubNotFoundError:
                     pass  # New file - good
@@ -194,7 +192,9 @@ class PatchWorkflowOrchestrator:
             fc: File change to apply
             branch: Branch to apply change to
         """
-        commit_message = f"{self.config.commit_message_prefix}{fc.change_type.capitalize()} {fc.path}"
+        commit_message = (
+            f"{self.config.commit_message_prefix}{fc.change_type.capitalize()} {fc.path}"
+        )
 
         if fc.change_type == "delete":
             self.logger.info(f"Deleting file: {fc.path}")

@@ -48,8 +48,7 @@ class LiveReviewer:
         """Submit a review to a pull request."""
         try:
             formatted_comments = [
-                {"path": c.path, "line": c.line, "body": c.body}
-                for c in comments
+                {"path": c.path, "line": c.line, "body": c.body} for c in comments
             ]
 
             response = self.client.submit_review(

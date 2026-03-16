@@ -198,7 +198,10 @@ class GitHubClient:
             result = self._request(method, path, payload=payload, params=params)
             return {
                 "items": result.get("items", []) if isinstance(result, dict) else result,
-                "pagination": {"current_page": 1, "per_page": params.get("per_page", 30) if params else 30},
+                "pagination": {
+                    "current_page": 1,
+                    "per_page": params.get("per_page", 30) if params else 30,
+                },
                 "raw": result,
             }
 
@@ -1169,7 +1172,9 @@ class GitHubClient:
         if inputs:
             payload["inputs"] = inputs
 
-        return self._request("POST", f"/actions/workflows/{workflow_id}/dispatches", payload=payload)
+        return self._request(
+            "POST", f"/actions/workflows/{workflow_id}/dispatches", payload=payload
+        )
 
     def get_workflow_run(
         self,

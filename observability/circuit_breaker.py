@@ -133,9 +133,7 @@ class CircuitBreaker:
 
             if self._stats.state == CircuitState.OPEN:
                 self._stats.rejected_calls += 1
-                raise CircuitBreakerOpenError(
-                    f"Circuit {self._name} is OPEN, call rejected"
-                )
+                raise CircuitBreakerOpenError(f"Circuit {self._name} is OPEN, call rejected")
 
             if (
                 self._stats.state == CircuitState.HALF_OPEN

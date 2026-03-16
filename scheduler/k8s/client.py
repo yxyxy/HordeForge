@@ -92,7 +92,9 @@ class K8sClient:
             logger.error("Failed to get deployment: %s", e)
             raise
 
-    def update_deployment(self, name: str, namespace: str, manifest: dict[str, Any]) -> dict[str, Any]:
+    def update_deployment(
+        self, name: str, namespace: str, manifest: dict[str, Any]
+    ) -> dict[str, Any]:
         """Update a deployment.
 
         Args:

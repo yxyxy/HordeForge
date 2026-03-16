@@ -37,9 +37,7 @@ def run_restore(config: StorageRestoreConfig) -> int:
         return 1
 
     if config.dry_run:
-        print(
-            f"[dry-run] Would extract {config.archive_path} -> {config.target_dir}"
-        )
+        print(f"[dry-run] Would extract {config.archive_path} -> {config.target_dir}")
         return 0
 
     config.target_dir.mkdir(parents=True, exist_ok=True)

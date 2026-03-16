@@ -1,33 +1,74 @@
 ﻿# Quick Start
 
-## 1. Install
+## Требования
+
+- Python 3.10+
+- (Опционально) Docker для PostgreSQL и Redis
+
+## 1. Установка
 
 ```bash
+# Клонировать репозиторий
+git clone <repo-url>
+cd HordeForge
+
+# Установить зависимости
 pip install -r requirements-dev.txt
 ```
 
-## 2. Run with Docker (recommended)
+## 2. Конфигурация
 
 ```bash
+# Скопировать пример конфигурации
 cp .env.example .env
+
+# Отредактировать .env при необходимости
+# Минимальная конфигурация уже есть в .env.example
+```
+
+### Основные переменные окружения
+
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
+| `HORDEFORGE_GATEWAY_URL` | http://localhost:8000 | URL gateway |
+| `HORDEFORGE_STORAGE_DIR` | .hordeforge_data | Директория для данных |
+| `HORDEFORGE_OPERATOR_API_KEY` | local-operator-key | Ключ для ручного управления |
+| `HORDEFORGE_PIPELINES_DIR` | pipelines | Директория с pipeline |
+| `HORDEFORGE_RULES_DIR` | rules | Директория с правилами |
+
+## 3. Запуск
+
+### Локальный запуск (рекомендуется для разработки)
+
+```bash
+uvicorn scheduler.gateway:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Docker запуск
+
+```bash
 docker compose up --build
 ```
 
-Runtime config for CLI and Gateway is centralized in `RunConfig` and controlled by `.env`.
-
-## 3. Run Scheduler Gateway (local alternative)
+## 4. Проверка работоспособности
 
 ```bash
-uvicorn scheduler.gateway:app --host 0.0.0.0 --port 8000
+# Проверить health endpoint
+curl http://localhost:8000/health
+
+# Проверить метрики
+curl http://localhost:8000/metrics
 ```
 
-## 4. Trigger init pipeline
+## 5. Запуск pipeline
+
+### Через CLI
 
 ```bash
 python cli.py init --repo-url <GITHUB_URL> --token <GITHUB_TOKEN>
 ```
 
-Или через API:
+### Через API
 
 ```bash
 curl -X POST http://localhost:8000/run-pipeline \
@@ -38,75 +79,136 @@ curl -X POST http://localhost:8000/run-pipeline \
   }'
 ```
 
-## 5. Expected result
+### Проверка статуса
 
-- API принимает запуск pipeline.
-- Pipeline выполняется с полным lifecycle (state machine, retries, timeouts).
-- Результаты пишутся в storage и доступны через API.
-- Run ID возвращается для отслеживания статуса.
-
-## 6. Key Features (P5 Complete)
-
-### Storage Backends
 ```bash
-HORDEFORGE_STORAGE_BACKEND=json        # Default: JSON files
-HORDEFORGE_STORAGE_BACKEND=postgres    # Production: PostgreSQL
-HORDEFORGE_POSTGRES_CONNECTION_STRING=postgresql://...
+# Получить список запусков
+curl http://localhost:8000/runs
+
+# Получить конкретный запуск
+curl http://localhost:8000/runs/<run_id>
 ```
 
-### Queue Backends
+## 6. Ручное управление
+
 ```bash
-HORDEFORGE_QUEUE_BACKEND=memory        # Default: In-memory
-HORDEFORGE_QUEUE_BACKEND=redis         # Production: Redis
-HORDEFORGE_REDIS_URL=redis://localhost:6379/0
+# Остановить запущенный pipeline
+curl -X POST http://localhost:8000/runs/<run_id>/override \
+  -H "Content-Type: application/json" \
+  -H "X-Operator-Key: local-operator-key" \
+  -H "X-Operator-Role: operator" \
+  -H "X-Command-Source: api" \
+  -d '{"action": "stop", "reason": "Manual stop"}'
+
+# Повторить неудачный запуск
+curl -X POST http://localhost:8000/runs/<run_id>/override \
+  -H "Content-Type: application/json" \
+  -H "X-Operator-Key: local-operator-key" \
+  -H "X-Operator-Role: operator" \
+  -H "X-Command-Source: api" \
+  -d '{"action": "retry"}'
 ```
 
-### External Metrics
-```bash
-HORDEFORGE_METRICS_EXPORTER=prometheus_pushgateway
-HORDEFORGE_PROMETHEUS_PUSHGATEWAY_URL=http://localhost:9091
+## 7. Опциональные компоненты
 
-HORDEFORGE_METRICS_EXPORTER=datadog
-HORDEFORGE_DATADOG_API_KEY=your-api-key
-```
+### LLM агенты (для AI-функциональности)
 
-### LLM Agents (Optional)
 ```bash
+# OpenAI
 HORDEFORGE_LLM_PROVIDER=openai
 HORDEFORGE_OPENAI_API_KEY=sk-...
 
+# Anthropic
 HORDEFORGE_LLM_PROVIDER=anthropic
 HORDEFORGE_ANTHROPIC_API_KEY=sk-ant-...
 
+# Google GenAI
 HORDEFORGE_LLM_PROVIDER=google
 HORDEFORGE_GOOGLE_API_KEY=your-key
 ```
 
-### Circuit Breaker
-```python
-from observability import get_circuit_breaker_registry
+### Базы данных (production)
 
-registry = get_circuit_breaker_registry()
-cb = registry.get_or_create("github_api", CircuitBreakerConfig(failure_threshold=5))
-result = cb.call(github_client.get_issues, owner, repo)
+```bash
+# PostgreSQL для storage
+HORDEFORGE_STORAGE_BACKEND=postgres
+HORDEFORGE_DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/hordeforge
+
+# Redis для queue
+HORDEFORGE_QUEUE_BACKEND=redis
+HORDEFORGE_REDIS_URL=redis://localhost:6379/0
 ```
 
-## 7. API Endpoints
+### Метрики
+
+```bash
+# Prometheus Pushgateway
+HORDEFORGE_METRICS_EXPORTER=prometheus_pushgateway
+HORDEFORGE_PROMETHEUS_PUSHGATEWAY_URL=http://localhost:9091
+HORDEFORGE_METRICS_EXPORT_INTERVAL_SECONDS=60
+
+# Datadog
+HORDEFORGE_METRICS_EXPORTER=datadog
+HORDEFORGE_DATADOG_API_KEY=your-api-key
+HORDEFORGE_DATADOG_SITE=datadoghq.com
+```
+
+### Аутентификация (JWT)
+
+```bash
+HORDEFORGE_AUTH_ENABLED=true
+HORDEFORGE_JWT_SECRET_KEY=your-secret-key
+HORDEFORGE_JWT_ALGORITHM=HS256
+```
+
+## 8. API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/run-pipeline` | Trigger pipeline |
-| GET | `/runs` | List runs with filters |
-| GET | `/runs/{run_id}` | Get run status |
-| POST | `/runs/{run_id}/override` | Manual control |
-| GET | `/cron/jobs` | List cron jobs |
-| POST | `/cron/run-due` | Run due jobs |
-| GET | `/metrics` | Prometheus metrics |
+| GET | `/health` | Health check |
+| GET | `/ready` | Readiness check |
+| POST | `/run-pipeline` | Запуск pipeline |
+| GET | `/runs` | Список запусков |
+| GET | `/runs/{run_id}` | Статус запуска |
+| POST | `/runs/{run_id}/override` | Ручное управление |
+| GET | `/queue/tasks/{task_id}` | Статус задачи в очереди |
+| POST | `/queue/drain` | Обработка очереди |
+| GET | `/cron/jobs` | Список cron задач |
+| POST | `/cron/run-due` | Запуск due задач |
+| POST | `/cron/jobs/{job_name}/trigger` | Триггер задачи |
+| GET | `/metrics` | Prometheus метрики |
+| POST | `/metrics/export` | Экспорт метрик |
 | POST | `/webhooks/github` | GitHub webhook |
 
-## 8. Next step for contributors
+## 9. Что делать дальше
 
-1. Выбрать scaffold-агента из `agents/` и заменить его production-реализацией.
-2. Реализовать модуль в `agents/`.
-3. Добавить тест.
-4. Обновить `docs/features.md`.
+1. Выбрать scaffold-агента из `agents/` и заменить его production-реализацией
+2. Настроить LLM провайдер для AI-агентов
+3. Запустить полноценный feature pipeline
+4. Добавить тесты
+
+## Troubleshooting
+
+### Ошибка импорта
+
+```bash
+# Убедитесь, что все зависимости установлены
+pip install -r requirements-dev.txt
+```
+
+### Gateway не запускается
+
+```bash
+# Проверьте .env файл
+cat .env
+
+# Проверьте порт
+lsof -i :8000
+```
+
+### Pipeline не выполняется
+
+```bash
+# Проверьте логи
+curl http://localhost:8000/runs/<run_id>
+```

@@ -121,9 +121,7 @@ class DatadogExporter(MetricsExporter):
             if self._app_key:
                 headers["DD-APPLICATION-KEY"] = self._app_key
 
-            response = session.post(
-                url, json=payload, headers=headers, timeout=5
-            )
+            response = session.post(url, json=payload, headers=headers, timeout=5)
             return response.status_code in (200, 202)
         except Exception:
             return False

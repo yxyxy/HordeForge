@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
+
+os.environ["HORDEFORGE_STORAGE_BACKEND"] = "json"
 
 from storage.models import ArtifactRecord, RunRecord, StepLogRecord
 from storage.persistence import JsonStore

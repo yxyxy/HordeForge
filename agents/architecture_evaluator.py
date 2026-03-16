@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
 
 
-class ArchitectureEvaluator:
+class ArchitectureEvaluator(BaseAgent):
     name = "architecture_evaluator"
     description = "Generates a baseline deterministic architecture report."
 

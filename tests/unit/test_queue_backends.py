@@ -28,3 +28,38 @@ def test_get_task_queue_backend_default_is_memory():
     """Test default backend is memory."""
     backend = get_task_queue_backend(None)
     assert isinstance(backend, InMemoryTaskQueue)
+
+
+def test_get_task_queue_backend_uses_env_memory(monkeypatch):
+    monkeypatch.setenv("HORDEFORGE_QUEUE_BACKEND", "memory")
+    backend = get_task_queue_backend()
+    assert isinstance(backend, InMemoryTaskQueue)
+
+
+def test_get_task_queue_backend_uses_env_redis(monkeypatch):
+    import scheduler.queue_backends as queue_backends
+
+    class DummyRedis(queue_backends.TaskQueueBackend):
+        def enqueue(self, request):
+            raise NotImplementedError
+
+        def claim_next(self, *, max_items: int = 1):
+            return []
+
+        def mark_succeeded(self, task_id: str, result: dict):
+            raise NotImplementedError
+
+        def mark_failed(self, task_id: str, error: str):
+            raise NotImplementedError
+
+        def get(self, task_id: str):
+            return None
+
+        def clear(self) -> None:
+            pass
+
+    monkeypatch.setenv("HORDEFORGE_QUEUE_BACKEND", "redis")
+    monkeypatch.setattr(queue_backends, "RedisTaskQueue", DummyRedis)
+
+    backend = get_task_queue_backend()
+    assert isinstance(backend, DummyRedis)

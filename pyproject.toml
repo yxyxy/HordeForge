@@ -2,6 +2,7 @@
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q -p no:cacheprovider"
+asyncio_mode = "auto"
 
 [tool.black]
 line-length = 100
