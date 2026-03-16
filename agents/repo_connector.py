@@ -269,9 +269,6 @@ class RepoConnector(BaseAgent):
                 logs=["Missing required context: repo_url."],
                 next_actions=["request_repository_context"],
             )
-            # Add top-level keys expected by tests for compatibility
-            result["artifact_type"] = "repository_metadata"
-            result["artifact_content"] = {"available": False}
             return result
 
         config = self.Config(repo_url=repo_url.strip(), token=token, mock_mode=mock_mode)
@@ -293,9 +290,6 @@ class RepoConnector(BaseAgent):
                     logs=[f"Invalid operation requested: {operation}"],
                     next_actions=["request_valid_operation"],
                 )
-                # Add top-level keys expected by tests for compatibility
-                result["artifact_type"] = "repository_operation"
-                result["artifact_content"] = {}
                 return result
 
             if result["status"] in ["connected", "success"]:
@@ -324,10 +318,6 @@ class RepoConnector(BaseAgent):
                     logs=[f"Repository {operation} operation completed"],
                     next_actions=["process_repository_data"],
                 )
-                # Add top-level keys expected by tests for compatibility
-                agent_result["artifacts"] = [{"type": "repository_data", "content": metadata}]
-                agent_result["artifact_type"] = "repository_data"
-                agent_result["artifact_content"] = metadata
                 return agent_result
             else:
                 agent_result = build_agent_result(
@@ -339,9 +329,6 @@ class RepoConnector(BaseAgent):
                     logs=[f"Repository operation failed: {result.get('error')}"],
                     next_actions=["retry_repository_operation", "check_credentials"],
                 )
-                # Add top-level keys expected by tests for compatibility
-                agent_result["artifact_type"] = "repository_operation"
-                agent_result["artifact_content"] = {}
                 return agent_result
 
 
