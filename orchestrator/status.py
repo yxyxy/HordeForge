@@ -10,6 +10,7 @@ class StepStatus(str, Enum):
     FAILED = "FAILED"
     BLOCKED = "BLOCKED"
     SKIPPED = "SKIPPED"
+    PARTIAL_SUCCESS = "PARTIAL_SUCCESS"
 
 
 class InvalidStatusTransition(ValueError):
@@ -20,11 +21,13 @@ VALID_STATUS_TRANSITIONS: dict[StepStatus, set[StepStatus]] = {
     StepStatus.PENDING: {StepStatus.RUNNING, StepStatus.SKIPPED, StepStatus.BLOCKED},
     StepStatus.RUNNING: {
         StepStatus.SUCCESS,
+        StepStatus.PARTIAL_SUCCESS,
         StepStatus.FAILED,
         StepStatus.BLOCKED,
         StepStatus.SKIPPED,
     },
     StepStatus.SUCCESS: {StepStatus.RUNNING},
+    StepStatus.PARTIAL_SUCCESS: {StepStatus.RUNNING},
     StepStatus.FAILED: {StepStatus.RUNNING, StepStatus.SKIPPED},
     StepStatus.BLOCKED: {StepStatus.RUNNING},
     StepStatus.SKIPPED: {StepStatus.RUNNING},

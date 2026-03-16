@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from agents.context_utils import build_agent_result
+from agents.base import BaseAgent
+from agents.context_utils import build_agent_result, get_artifact_from_context
 
 
 def analyze_coverage(report: dict[str, Any]) -> int:
@@ -64,9 +66,6 @@ def calculate_risk_score(coverage: int) -> str:
         return "low"
 
 
-from agents.base import BaseAgent
-
-
 class TestAnalyzer(BaseAgent):
     name = "test_analyzer"
     description = "Analyzes test coverage, detects missing tests, and calculates risk scores."
@@ -85,9 +84,56 @@ class TestAnalyzer(BaseAgent):
             return [item for item in raw if isinstance(item, str)]
         return []
 
+    @staticmethod
+    def _scan_repository_for_tests(repo_path: str | None) -> tuple[list[str], list[str]]:
+        """Scan repository filesystem for test files and source modules."""
+        if not repo_path:
+            return [], []
+
+        repo_dir = Path(repo_path)
+        if not repo_dir.exists() or not repo_dir.is_dir():
+            return [], []
+
+        test_files: list[str] = []
+        modules: list[str] = []
+
+        # Find test files (test_*.py, *_test.py, tests/ directory)
+        for pattern in ["test_*.py", "*_test.py", "tests/**/*.py"]:
+            for f in repo_dir.rglob(pattern):
+                if f.is_file():
+                    test_files.append(f.as_posix())
+
+        # Find source modules (non-test .py files in package directories)
+        for f in repo_dir.rglob("*.py"):
+            if f.is_file() and not f.name.startswith("test_") and not f.name.endswith("_test.py"):
+                # Check if it's in a package directory (has __init__.py)
+                parent = f.parent
+                if (parent / "__init__.py").exists():
+                    # Get module path relative to repo root
+                    try:
+                        rel_path = f.relative_to(repo_dir)
+                        module_name = str(rel_path.with_suffix("")).replace("/", ".")
+                        if not module_name.startswith("."):
+                            modules.append(module_name)
+                    except ValueError:
+                        pass
+
+        return sorted(set(test_files)), sorted(set(modules))
+
     def run(self, context: dict[str, Any]) -> dict:
-        test_files = self._extract_test_files(context)
-        modules = self._extract_modules(context)
+        # Try to get repo path from repository metadata
+        repo_data = (
+            get_artifact_from_context(context, "repository_data", preferred_steps=["repo_connector"])
+            or get_artifact_from_context(context, "repository_metadata", preferred_steps=["repo_connector"])
+            or {}
+        )
+        repo_path = repo_data.get("local_path")
+
+        # Scan filesystem if no test_files/modules provided in context
+        scanned_test_files, scanned_modules = self._scan_repository_for_tests(repo_path)
+
+        test_files = self._extract_test_files(context) or scanned_test_files
+        modules = self._extract_modules(context) or scanned_modules
 
         # Perform coverage analysis
         coverage_report = context.get("coverage_report", {})

@@ -1,6 +1,6 @@
 # Subtasks Index (BDD + TDD)
 
-Всего создано файлов подзадач: 454
+Всего создано файлов подзадач: 469
 
 | Task ID | Phase | Subtasks | Directory |
 |---|---|---:|---|
@@ -32,6 +32,9 @@
 | HF-P14-004 | P14 | 3 | development_tasks\subtasks\p14\HF-P14-004 |
 | HF-P14-005 | P14 | 3 | development_tasks\subtasks\p14\HF-P14-005 |
 | HF-P14-006 | P14 | 3 | development_tasks\subtasks\p14\HF-P14-006 |
+| HF-P15-001 | P15 | 4 | development_tasks\subtasks\p15\HF-P15-001 |
+| HF-P15-002 | P15 | 3 | development_tasks\subtasks\p15\HF-P15-002 |
+| HF-P15-003 | P15 | 3 | development_tasks\subtasks\p15\HF-P15-003 |
 
 ## Правила
 

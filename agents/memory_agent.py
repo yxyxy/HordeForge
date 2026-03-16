@@ -22,8 +22,14 @@ class MemoryAgent(BaseAgent):
         self.storage: StorageBackend | None = None
 
     def run(self, context: dict[str, Any]) -> dict:
+        # Try both artifact types: repository_data (from repo_connector) and repository_metadata
         repository_metadata = (
             get_artifact_from_context(
+                context,
+                "repository_data",
+                preferred_steps=["repo_connector"],
+            )
+            or get_artifact_from_context(
                 context,
                 "repository_metadata",
                 preferred_steps=["repo_connector"],

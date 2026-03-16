@@ -192,7 +192,10 @@ class StepExecutor:
 
     @staticmethod
     def _normalize_step_status(raw_status: str | None) -> StepStatus:
-        if raw_status in {StepStatus.SUCCESS.value, "PARTIAL_SUCCESS"}:
+        # PARTIAL_SUCCESS should remain as PARTIAL_SUCCESS, not normalized to SUCCESS
+        if raw_status == StepStatus.PARTIAL_SUCCESS.value:
+            return StepStatus.PARTIAL_SUCCESS
+        if raw_status == StepStatus.SUCCESS.value:
             return StepStatus.SUCCESS
         if raw_status in {item.value for item in StepStatus}:
             return StepStatus(raw_status)

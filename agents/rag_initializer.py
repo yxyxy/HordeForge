@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
 
 # Импорты для векторной базы данных и эмбеддингов
@@ -136,9 +137,6 @@ def create_index(embeddings: list[list[float]]) -> dict[str, Any]:
         return {"status": "failed", "error": str(e)}
 
 
-from agents.base import BaseAgent
-
-
 class RagInitializer(BaseAgent):
     name = "rag_initializer"
     description = "Builds a deterministic lightweight RAG index from local docs."
@@ -205,6 +203,11 @@ class RagInitializer(BaseAgent):
         if index_result["status"] != "ready":
             logger.warning(f"Не удалось создать индекс: {index_result.get('error')}")
 
+        # Determine status based on RAG functionality
+        rag_working = bool(embeddings and index_result["status"] == "ready")
+        status = "SUCCESS" if rag_working else "PARTIAL_SUCCESS"
+        confidence = 0.88 if rag_working else 0.65
+
         rag_index = {
             "index_id": "rag_index_v1",
             "documents_count": len(documents),
@@ -215,13 +218,16 @@ class RagInitializer(BaseAgent):
             "embeddings_count": len(embeddings),
             "index_status": index_result["status"],
             "index_info": index_result if index_result["status"] == "ready" else None,
+            "rag_working": rag_working,
         }
         return build_agent_result(
-            status="SUCCESS",
+            status=status,
             artifact_type="rag_index",
             artifact_content=rag_index,
-            reason="Lightweight deterministic docs index built for MVP runtime.",
-            confidence=0.88,
+            reason="Lightweight deterministic docs index built for MVP runtime."
+            if rag_working
+            else "RAG index created but embeddings/vector DB unavailable. Using deterministic fallback.",
+            confidence=confidence,
             logs=[
                 f"Indexed {len(documents)} documents from {docs_dir.as_posix()}.",
                 f"Created embeddings for {len(embeddings)} documents.",
