@@ -1,4 +1,5 @@
-from typing import List, Dict, Any
+from typing import Any
+
 from .memory_store import MemoryStore
 
 
@@ -10,14 +11,14 @@ class MemoryRetriever:
     def __init__(self, memory_store: MemoryStore):
         self.memory_store = memory_store
 
-    def search_memory(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
+    def search_memory(self, query: str, limit: int = 3) -> list[dict[str, Any]]:
         """
         Поиск похожих задач в памяти
-        
+
         Args:
             query: Запрос для поиска
             limit: Количество результатов
-            
+
         Returns:
             Список найденных записей
         """

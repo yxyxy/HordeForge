@@ -71,10 +71,13 @@ class TaskEntry(MemoryEntry):
         # Создаем копию данных, чтобы не изменять оригинальный словарь
         filtered_data = data.copy()
         # Убедимся, что тип правильный
-        filtered_data['type'] = MemoryType.TASK
+        filtered_data["type"] = MemoryType.TASK
         # Удаляем лишние поля, которые не подходят для базового класса
-        keys_to_remove = [k for k in filtered_data.keys() 
-                         if k not in cls.__annotations__ and k not in MemoryEntry.__annotations__]
+        keys_to_remove = [
+            k
+            for k in filtered_data.keys()
+            if k not in cls.__annotations__ and k not in MemoryEntry.__annotations__
+        ]
         for key in keys_to_remove:
             del filtered_data[key]
         return cls(**filtered_data)
@@ -99,10 +102,13 @@ class PatchEntry(MemoryEntry):
         # Создаем копию данных, чтобы не изменять оригинальный словарь
         filtered_data = data.copy()
         # Убедимся, что тип правильный
-        filtered_data['type'] = MemoryType.PATCH
+        filtered_data["type"] = MemoryType.PATCH
         # Удаляем лишние поля, которые не подходят для базового класса
-        keys_to_remove = [k for k in filtered_data.keys() 
-                         if k not in cls.__annotations__ and k not in MemoryEntry.__annotations__]
+        keys_to_remove = [
+            k
+            for k in filtered_data.keys()
+            if k not in cls.__annotations__ and k not in MemoryEntry.__annotations__
+        ]
         for key in keys_to_remove:
             del filtered_data[key]
         return cls(**filtered_data)
@@ -127,10 +133,13 @@ class DecisionEntry(MemoryEntry):
         # Создаем копию данных, чтобы не изменять оригинальный словарь
         filtered_data = data.copy()
         # Убедимся, что тип правильный
-        filtered_data['type'] = MemoryType.DECISION
+        filtered_data["type"] = MemoryType.DECISION
         # Удаляем лишние поля, которые не подходят для базового класса
-        keys_to_remove = [k for k in filtered_data.keys() 
-                         if k not in cls.__annotations__ and k not in MemoryEntry.__annotations__]
+        keys_to_remove = [
+            k
+            for k in filtered_data.keys()
+            if k not in cls.__annotations__ and k not in MemoryEntry.__annotations__
+        ]
         for key in keys_to_remove:
             del filtered_data[key]
         return cls(**filtered_data)

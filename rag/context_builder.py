@@ -133,7 +133,7 @@ class ContextBuilder:
         target_chars = max_tokens * 4
         if target_chars <= 0:
             return "[Context empty due to token limit]"
-        
+
         # Пытаемся найти подходящее место для обрезки (между секциями)
         cut_position = target_chars
         # Ищем ближайший символ новой строки перед пределом

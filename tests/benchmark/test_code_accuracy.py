@@ -1,4 +1,3 @@
-
 import pytest
 
 from orchestrator.benchmark import BenchmarkRunner, run_benchmark
@@ -29,11 +28,11 @@ def test_benchmark_comparison():
         {"title": "Create model", "body": "..."},
         {"title": "Add authorization", "body": "..."},
     ]
-    
+
     # Act
     runner = BenchmarkRunner()
     comparison = runner.compare_benchmarks("feature_pipeline", test_issues)
-    
+
     # Assert
     assert comparison.baseline.success_rate >= 0
     assert comparison.with_memory.success_rate >= 0

@@ -27,6 +27,17 @@
       timeout: 5s
       retries: 5
 
+  qdrant:
+    image: qdrant/qdrant:v1.9.2
+    container_name: hordeforge-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - hordeforge_qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__STORAGE__WAL__FSYNC=false
+
   gateway:
     build:
       context: .
@@ -38,11 +49,15 @@
       - HORDEFORGE_GATEWAY_URL=http://gateway:8000
       - HORDEFORGE_DATABASE_URL=postgresql+psycopg://hordeforge:hordeforge@db:5432/hordeforge
       - HORDEFORGE_REDIS_URL=redis://redis:6379/0
+      - HORDEFORGE_QDRANT_URL=http://qdrant:6333
       - HORDEFORGE_STORAGE_BACKEND=json
       - HORDEFORGE_QUEUE_BACKEND=memory
     depends_on:
       db:
         condition: service_healthy
+      # Qdrant optional - app handles unavailability gracefully
+      qdrant:
+        condition: service_started
     command: uvicorn scheduler.gateway:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
@@ -55,3 +70,4 @@
 
 volumes:
   hordeforge_db:
+  hordeforge_qdrant_data:

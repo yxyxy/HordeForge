@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -9,6 +11,8 @@ from pydantic import BaseModel
 
 from agents.base import BaseAgent
 from agents.context_utils import build_agent_result
+
+WORKSPACE_REPO_PATH = Path("./workspace/repo")
 
 
 class RepoConnector(BaseAgent):
@@ -60,16 +64,57 @@ class RepoConnector(BaseAgent):
             else:
                 raise ValueError(f"Invalid repository URL format: {repo_url}")
 
+    def _clone_repository(self, repo_url: str) -> Path:
+        """
+        Clone repository to local workspace.
+        Returns local path where repository was cloned.
+        """
+        # Create workspace directory
+        workspace_path = WORKSPACE_REPO_PATH.parent
+        workspace_path.mkdir(parents=True, exist_ok=True)
+
+        # Remove existing repo if present
+        if WORKSPACE_REPO_PATH.exists():
+            import shutil
+
+            shutil.rmtree(WORKSPACE_REPO_PATH)
+
+        logger = __import__("logging").getLogger(__name__)
+        logger.info(f"Cloning repository {repo_url} -> {WORKSPACE_REPO_PATH}")
+
+        try:
+            subprocess.run(
+                ["git", "clone", "--depth", "1", repo_url, str(WORKSPACE_REPO_PATH)],
+                check=True,
+                capture_output=True,
+            )
+            return WORKSPACE_REPO_PATH
+        except Exception as e:
+            logger.error(f"Failed to clone repository: {e}")
+            raise
+
     async def connect_api(self, config: Config) -> dict[str, Any]:
         """
         Establish API connection to repository provider.
         """
+        local_path = None
+        if not config.mock_mode:
+            try:
+                local_path = self._clone_repository(config.repo_url)
+            except Exception as e:
+                return {
+                    "status": "failed",
+                    "error": f"Failed to clone repository: {e}",
+                    "details": str(e),
+                }
+
         if config.mock_mode:
             return {
                 "status": "connected",
                 "provider": config.provider,
                 "repo": config.repo_url,
                 "authenticated": bool(config.token),
+                "local_path": str(WORKSPACE_REPO_PATH) if not config.mock_mode else None,
                 "metadata": {
                     "files_structure": ["src/", "tests/", "README.md"],
                     "languages": ["python"],
@@ -93,6 +138,7 @@ class RepoConnector(BaseAgent):
                             "provider": config.provider,
                             "repo": repo_data["full_name"],
                             "authenticated": bool(config.token),
+                            "local_path": str(local_path) if local_path else None,
                             "repo_data": repo_data,
                             "metadata": {
                                 "description": repo_data.get("description", ""),
@@ -303,6 +349,8 @@ class RepoConnector(BaseAgent):
                     "repo_url": config.repo_url,
                     "owner": parts[0] if len(parts) > 0 else "",
                     "repo_name": parts[1] if len(parts) > 1 else "",
+                    "full_name": full_name,
+                    "local_path": result.get("local_path"),
                     "has_auth": bool(token),
                     "connection_mode": "mock" if mock_mode else "live",
                     "mock_mode": mock_mode,
@@ -311,7 +359,7 @@ class RepoConnector(BaseAgent):
 
                 agent_result = build_agent_result(
                     status="SUCCESS",
-                    artifact_type="repository_data",  # Changed to match test expectation
+                    artifact_type="repository_metadata",
                     artifact_content=metadata,
                     reason=f"Repository {operation} completed successfully",
                     confidence=0.95,

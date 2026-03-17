@@ -213,15 +213,15 @@ def register_agents(agent_registry: AgentRegistry) -> None:
             name="architecture_evaluator",
             agent_class=ArchitectureEvaluator,
             description="Оценивает архитектуру",
-            input_contract="context.spec.v1",
-            output_contract="context.spec.v1",
+            input_contract=None,
+            output_contract=None,
         ),
         AgentMetadata(
             name="test_analyzer",
             agent_class=TestAnalyzer,
             description="Анализирует тесты",
-            input_contract="context.spec.v1",
-            output_contract="context.spec.v1",
+            input_contract=None,
+            output_contract=None,
         ),
         # Новые агенты (ревизия) - без валидации контрактов
         AgentMetadata(

@@ -12,6 +12,7 @@ WORKDIR /app
 # Install build dependencies first (needed for some packages)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    git \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -30,6 +31,7 @@ WORKDIR /app
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder

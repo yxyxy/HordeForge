@@ -8,6 +8,7 @@ from rag.embeddings import (
 )
 from rag.indexer import DocumentationIndexer
 from rag.retriever import ContextRetriever
+from rag.ingestion import IngestionPipeline, batch
 
 __all__ = [
     "DocumentationIndexer",
@@ -16,4 +17,6 @@ __all__ = [
     "MockEmbeddingsProvider",
     "HashEmbeddingsProvider",
     "create_embeddings_provider",
+    "IngestionPipeline",
+    "batch",
 ]

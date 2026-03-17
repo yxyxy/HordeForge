@@ -481,21 +481,16 @@ class OrchestratorEngine:
                 # Вызываем memory hook после успешного выполнения шага
                 trigger_memory_hook(step.name, output, context.state)
         else:
-            # Выполняем шаги с параллелизмом
-            step_outputs, should_stop = self._execute_step_batch(
-                steps_to_execute, context, run_state
+            # Выполняем шаги с параллелизмом и учётом зависимостей
+            should_stop = self._execute_with_parallelism(
+                steps_to_execute, context, run_state, step_results
             )
 
-            # Обновляем результаты шагов
-            for step_name, output in step_outputs.items():
-                step_results[step_name] = output
+            # Вызываем memory hook для каждого выполненного шага
+            for step_name, output in step_results.items():
                 step = next((s for s in steps_to_execute if s.name == step_name), None)
                 if step:
-                    # Вызываем memory hook после успешного выполнения шага
                     trigger_memory_hook(step.name, output, context.state)
-
-                if should_stop:
-                    break
 
         if not should_stop and pipeline.loops:
             step_by_name = {step.name: step for step in pipeline.steps}

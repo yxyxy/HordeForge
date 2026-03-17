@@ -1,16 +1,10 @@
-# pipelines/init_pipeline.yaml
-# Initialization pipeline for HordeForge
-# Purpose: setup project, connect repo, populate RAG, init memory, assess architecture and tests
-
 pipeline_name: init_pipeline
+
 description: |
   Pipeline to initialize a new project for autonomous AI agents.
-  Steps include repository setup, RAG population, agent memory initialization,
-  project architecture analysis, test coverage evaluation, and pipeline configuration.
 
 triggers:
   - manual_trigger
-  - scheduled_trigger (optional for daily refresh)
 
 steps:
 
@@ -26,6 +20,9 @@ steps:
   - name: rag_initializer
     agent: rag_initializer
     description: Populate RAG context from code, docs, wiki
+    depends_on:
+      - repo_connector
+    depends_on_explicit: true
     input:
       repository_metadata: "{{repository_metadata}}"
     output: "{{rag_index}}"
@@ -34,6 +31,9 @@ steps:
   - name: memory_agent
     agent: memory_agent
     description: Initialize agent memory with repo history and context
+    depends_on:
+      - rag_initializer
+    depends_on_explicit: true
     input:
       repository_metadata: "{{repository_metadata}}"
       rag_index: "{{rag_index}}"
@@ -42,7 +42,9 @@ steps:
 
   - name: architecture_evaluator
     agent: architecture_evaluator
-    description: Analyze project architecture and suggest improvements
+    description: Analyze project architecture
+    depends_on:
+      - repo_connector
     input:
       repository_metadata: "{{repository_metadata}}"
     output: "{{architecture_report}}"
@@ -50,7 +52,9 @@ steps:
 
   - name: test_analyzer
     agent: test_analyzer
-    description: Evaluate existing tests and coverage
+    description: Evaluate tests and coverage
+    depends_on:
+      - repo_connector
     input:
       repository_metadata: "{{repository_metadata}}"
     output: "{{test_coverage_report}}"
@@ -58,7 +62,12 @@ steps:
 
   - name: pipeline_initializer
     agent: pipeline_initializer
-    description: Setup feature and CI pipelines, cron jobs, and webhooks
+    description: Setup pipelines and CI
+    depends_on:
+      - memory_agent
+      - architecture_evaluator
+      - test_analyzer
+    depends_on_explicit: true
     input:
       repository_metadata: "{{repository_metadata}}"
       memory_state: "{{memory_state}}"
@@ -67,7 +76,6 @@ steps:
     output: "{{pipeline_status}}"
     on_failure: escalate_to_human
 
-# Logging
 logging:
   level: INFO
   log_decisions: true
