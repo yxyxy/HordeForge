@@ -28,7 +28,7 @@
       retries: 5
 
   qdrant:
-    image: qdrant/qdrant:v1.9.2
+    image: qdrant/qdrant:latest
     container_name: hordeforge-qdrant
     ports:
       - "6333:6333"

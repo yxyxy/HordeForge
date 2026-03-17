@@ -4,15 +4,15 @@ BDD + TDD tests for rag/ingestion.py
 Run with: pytest tests/unit/rag/test_ingestion.py -v
 """
 
-import sys
 import os
+import sys
 import time
 from unittest.mock import MagicMock
 
 import pytest
 
 # Add the project root directory to the Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
 
 from rag.ingestion import IngestionPipeline, batch
 

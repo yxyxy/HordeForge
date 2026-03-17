@@ -7,8 +7,8 @@ from rag.embeddings import (
     create_embeddings_provider,
 )
 from rag.indexer import DocumentationIndexer
-from rag.retriever import ContextRetriever
 from rag.ingestion import IngestionPipeline, batch
+from rag.retriever import ContextRetriever
 
 __all__ = [
     "DocumentationIndexer",

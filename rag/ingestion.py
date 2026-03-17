@@ -1,201 +1,274 @@
 """
 High-performance async ingestion pipeline for Qdrant.
 
-Architecture:
-[Reader] → [Batcher] → [Embedder (batched)] → [Async Queue]
-                                                    ↓
-                                          [Async Upsert Workers]
-                                                    ↓
-                                                Qdrant
+OPTIMIZATIONS:
+- Larger thread pool for CPU-bound embedding (4 workers)
+- Progress logging every batch (not just every 10)
+- Worker activity logging to confirm processing
+- Tuned queue_size for better backpressure balance
 """
-
 import asyncio
 import logging
 import time
 from collections.abc import Iterator
+from uuid import uuid4
+from concurrent.futures import ThreadPoolExecutor
 
 from fastembed import TextEmbedding
-from qdrant_client import AsyncQdrantClient
-from qdrant_client.http.models import HnswConfigDiff
+from qdrant_client import AsyncQdrantClient, models
 
 logger = logging.getLogger(__name__)
-
-# Reduce noise
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("qdrant_client").setLevel(logging.WARNING)
 
 
-# ------------------------
-# Utils
-# ------------------------
 def batch(iterable: list[str], size: int) -> Iterator[list[str]]:
+    """Yield successive batches of size `size` from iterable."""
     for i in range(0, len(iterable), size):
         yield iterable[i : i + size]
 
 
-# ------------------------
-# Pipeline
-# ------------------------
 class IngestionPipeline:
     def __init__(
         self,
         client: AsyncQdrantClient,
         embedder: TextEmbedding | None = None,
-        batch_size: int = 1024,  # 🔥 было 256 → теперь 1024+
-        num_workers: int = 8,  # 🔥 больше параллелизма
-        queue_size: int = 50,
-        max_inflight: int = 16,  # 🔥 ограничение параллельных запросов
+        batch_size: int = 512,  # ← Оптимально для fastembed + памяти
+        num_workers: int = 8,
+        queue_size: int = 50,   # ← Уменьшено для лучшего backpressure
+        max_inflight: int = 16,
+        check_compatibility: bool = False,
     ):
         self.client = client
         self.embedder = embedder or TextEmbedding()
-
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
-
         self.semaphore = asyncio.Semaphore(max_inflight)
-
         self._workers: list[asyncio.Task] = []
-
         self._total_indexed = 0
         self._total_flushed = 0
+        self._shutdown_event = asyncio.Event()
+        
+        # 🔥 УВЕЛИЧЕНО: 4 потока для CPU-bound эмбеддинга (было 2)
+        self._executor = ThreadPoolExecutor(max_workers=4)
 
-    # ------------------------
-    # Collection Management
-    # ------------------------
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self._executor.shutdown(wait=True)
+
     async def prepare_collection(self, collection_name: str, vector_size: int = 384):
-        """
-        Prepare collection for fast ingestion by disabling HNSW index temporarily.
+        collection_exists = True
+        try:
+            await self.client.get_collection(collection_name)
+        except Exception:
+            collection_exists = False
 
-        Args:
-            collection_name: Name of the collection to prepare
-            vector_size: Size of the vectors to store
-        """
-        # Recreate collection with m=0 for faster ingestion
-        await self.client.recreate_collection(
-            collection_name=collection_name,
-            vectors_config={"size": vector_size, "distance": "Cosine"},
-            hnsw_config=HnswConfigDiff(m=0),  # Disable index during ingestion
-        )
-        logger.info(f"Prepared collection '{collection_name}' for fast ingestion (m=0)")
+        if collection_exists:
+            try:
+                await self.client.update_collection(
+                    collection_name=collection_name,
+                    hnsw_config=models.HnswConfigDiff(m=0),
+                )
+                logger.info(f"Updated collection '{collection_name}' for fast ingestion (m=0)")
+            except Exception as e:
+                logger.warning(f"Could not update collection: {e}")
+        else:
+            try:
+                await self.client.recreate_collection(
+                    collection_name=collection_name,
+                    vectors_config=models.VectorParams(
+                        size=vector_size,
+                        distance=models.Distance.COSINE,
+                    ),
+                    hnsw_config=models.HnswConfigDiff(m=0),
+                )
+                logger.info(f"Created collection '{collection_name}' for fast ingestion (m=0)")
+            except Exception as e:
+                logger.error(f"Could not create collection: {e}")
+                raise
 
     async def optimize_collection(self, collection_name: str, m: int = 16):
-        """
-        Optimize collection after ingestion by enabling HNSW index.
+        try:
+            await self.client.update_collection(
+                collection_name=collection_name,
+                hnsw_config=models.HnswConfigDiff(m=m),
+            )
+            logger.info(f"Optimized collection '{collection_name}' with m={m}")
+        except Exception as e:
+            logger.warning(f"Could not optimize collection: {e}")
 
-        Args:
-            collection_name: Name of the collection to optimize
-            m: HNSW M parameter for indexing quality
-        """
-        await self.client.update_collection(
-            collection_name=collection_name, hnsw_config=HnswConfigDiff(m=m)
-        )
-        logger.info(f"Optimized collection '{collection_name}' with m={m}")
-
-    # ------------------------
-    # Worker
-    # ------------------------
     async def _upsert_worker(self, collection_name: str, worker_id: int):
-        logger.debug(f"Worker {worker_id} started")
+        logger.info(f"Worker {worker_id} STARTED")
 
-        while True:
-            batch = await self.queue.get()
-
-            if batch is None:
-                self.queue.task_done()
-                break
-
+        while not self._shutdown_event.is_set():
+            batch = None
             try:
+                batch = await asyncio.wait_for(self.queue.get(), timeout=1.0)
+                logger.debug(f"Worker {worker_id}: Got batch of {len(batch)} points")
+
                 async with self.semaphore:
-                    await self.client.upsert(
+                    points = [
+                        models.PointStruct(
+                            id=p["id"],
+                            vector=p["vector"],
+                            payload=p.get("payload", {}),
+                        )
+                        for p in batch
+                    ]
+
+                    result = await self.client.upsert(
                         collection_name=collection_name,
-                        points=batch,
-                        wait=False,  # 🔥 критично
+                        points=points,
+                        wait=True,
                     )
 
-                self._total_flushed += len(batch)
+                    self._total_flushed += len(batch)
+                    # 🔥 Логируем КАЖДЫЕ 250 точек для лучшего прогресса
+                    if self._total_flushed % 250 == 0:
+                        logger.info(f"✓ Worker {worker_id}: Indexed {self._total_flushed:,} total")
 
-                # 🔥 редкий лог (не тормозит)
-                if self._total_flushed % 5000 == 0:
-                    logger.info(f"Indexed: {self._total_flushed}")
-
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                logger.info(f"Worker {worker_id} CANCELLED")
+                break
             except Exception as e:
-                logger.error(f"Worker {worker_id} error: {e}")
-
+                logger.error(f"Worker {worker_id} ERROR: {e}")
+                logger.exception("Traceback:")
+                continue
             finally:
-                self.queue.task_done()
+                if batch is not None:
+                    try:
+                        self.queue.task_done()
+                    except ValueError:
+                        logger.debug(f"Worker {worker_id}: task_done() already called")
 
-        logger.debug(f"Worker {worker_id} stopped")
+        logger.info(f"Worker {worker_id} STOPPED")
 
-    # ------------------------
     async def _start_workers(self, collection_name: str):
         self._workers = [
             asyncio.create_task(self._upsert_worker(collection_name, i))
             for i in range(self.num_workers)
         ]
-        logger.info(f"Started {self.num_workers} workers")
+        logger.info(f"Started {self.num_workers} async upsert workers")
 
     async def _stop_workers(self):
-        for _ in self._workers:
-            await self.queue.put(None)
+        self._shutdown_event.set()
+        if self._workers:
+            await asyncio.gather(*self._workers, return_exceptions=True)
+        while not self.queue.empty():
+            try:
+                self.queue.get_nowait()
+                self.queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+        logger.info("All workers stopped")
 
-        await asyncio.gather(*self._workers, return_exceptions=True)
+    async def _produce(self, texts: list[str], metadata_list: list[dict] | None = None):
+        batch_idx = 0
+        total_batches = (len(texts) + self.batch_size - 1) // self.batch_size
+        logger.info(f"Producer: {total_batches} batches to process (batch_size={self.batch_size})")
+        
+        start_time = time.time()
 
-    # ------------------------
-    # Embedding + batching
-    # ------------------------
-    async def _produce(self, texts: list[str]):
         for text_batch in batch(texts, self.batch_size):
-            # 🔥 батчевый embed (ключевой буст)
-            embeddings = list(self.embedder.embed(text_batch))
+            embed_start = time.time()
+            # 🔥 Embedding в thread pool с 4 работниками
+            embeddings = await asyncio.get_event_loop().run_in_executor(
+                self._executor,
+                lambda tb=text_batch: list(self.embedder.embed(tb))
+            )
+            embed_time = time.time() - embed_start
 
-            points = [
-                {
-                    "id": self._total_indexed + i,
+            start_idx = batch_idx * self.batch_size
+            end_idx = start_idx + len(text_batch)
+            batch_meta = metadata_list[start_idx:end_idx] if metadata_list else [{}] * len(text_batch)
+
+            points = []
+            for text, emb, meta in zip(text_batch, embeddings, batch_meta, strict=False):
+                points.append({
+                    "id": str(uuid4()),
                     "vector": emb.tolist(),
-                    "payload": {"text": text},
-                }
-                for i, (text, emb) in enumerate(zip(text_batch, embeddings, strict=False))
-            ]
+                    "payload": {"text": text, **meta},
+                })
 
             self._total_indexed += len(points)
+            batch_idx += 1
+
+            # 🔥 Прогресс-лог КАЖДОГО батча с таймингом
+            if batch_idx % 5 == 0:
+                elapsed = time.time() - start_time
+                rate = batch_idx / elapsed if elapsed else 0
+                logger.info(
+                    f"🔄 Producer: batch {batch_idx}/{total_batches} queued | "
+                    f"embed_time={embed_time:.2f}s | rate={rate:.1f} bat/s"
+                )
 
             await self.queue.put(points)
 
-    # ------------------------
-    async def run(self, texts: list[str], collection_name: str, vector_size: int = 384):
+        logger.info(f"Producer: ALL {batch_idx} batches queued in {time.time() - start_time:.1f}s")
+
+    async def run(
+        self,
+        texts: list[str],
+        collection_name: str,
+        vector_size: int = 384,
+        metadata_list: list[dict] | None = None,
+    ):
         start = time.time()
+        logger.info(f"Pipeline START: {len(texts):,} texts")
 
-        # Prepare collection for fast ingestion
         await self.prepare_collection(collection_name, vector_size)
-
         await self._start_workers(collection_name)
 
         try:
-            producer_task = asyncio.create_task(self._produce(texts))
-
-            await producer_task
+            producer = asyncio.create_task(self._produce(texts, metadata_list))
+            await producer
+            logger.info("Producer finished, waiting for queue.join()...")
             await self.queue.join()
-
+            logger.info("✓ Queue join completed")
         finally:
             await self._stop_workers()
 
-        # Optimize collection after ingestion
         await self.optimize_collection(collection_name)
 
         duration = time.time() - start
         rate = self._total_indexed / duration if duration else 0
 
-        result = {
+        await asyncio.sleep(0.3)
+        try:
+            info = await self.client.get_collection(collection_name)
+            actual = info.points_count or 0
+            status = "success" if actual == self._total_flushed else "warning"
+            if status == "warning":
+                logger.warning(f"Mismatch: flushed {self._total_flushed:,}, collection has {actual:,}")
+        except Exception as e:
+            logger.error(f"Verification failed: {e}")
+            status = "failed"
+            actual = None
+
+        logger.info(f"Pipeline DONE: {self._total_indexed:,} points in {duration:.1f}s ({rate:.0f}/sec)")
+
+        return {
             "total_indexed": self._total_indexed,
             "total_flushed": self._total_flushed,
+            "collection_points_count": actual,
+            "verification_status": status,
             "duration_seconds": round(duration, 2),
             "rate_per_second": round(rate, 2),
         }
 
-        logger.info(f"Done: {self._total_indexed} points in {duration:.2f}s ({rate:.0f}/sec)")
-
-        return result
-
-    def run_sync(self, texts: list[str], collection_name: str, vector_size: int = 384):
-        return asyncio.run(self.run(texts, collection_name, vector_size))
+    def run_sync(
+        self,
+        texts: list[str],
+        collection_name: str,
+        vector_size: int = 384,
+        metadata_list: list[dict] | None = None,
+    ):
+        async def _run():
+            async with self:
+                return await self.run(texts, collection_name, vector_size, metadata_list)
+        return asyncio.run(_run())

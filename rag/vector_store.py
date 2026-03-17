@@ -1,9 +1,9 @@
 import logging
 import os
+import time
 
 from fastembed import TextEmbedding
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
+from qdrant_client import QdrantClient, models
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ class QdrantStore:
         host: str = QDRANT_HOST,
         port: int = QDRANT_PORT,
         buffer_limit: int = 256,
+        check_compatibility: bool = False,  # 🔥 Отключаем проверку версии
     ):
         """
         Initialize the QdrantStore with connection parameters.
@@ -38,10 +39,15 @@ class QdrantStore:
             host: Qdrant server host
             port: Qdrant server port
             buffer_limit: Number of points to buffer before auto-flush (default 256)
+            check_compatibility: Skip version compatibility check (for mismatched versions)
         """
         self.host = host
         self.port = port
-        self.client = QdrantClient(host=host, port=port)
+        self.client = QdrantClient(
+            host=host,
+            port=port,
+            check_compatibility=check_compatibility,  # 🔥 Критично для старых серверов
+        )
         self.embedder = TextEmbedding()
         self._buffer: list[dict] = []
         self._buffer_limit = buffer_limit
@@ -76,7 +82,7 @@ class QdrantStore:
         self,
         collection_name: str,
         vector_size: int = VECTOR_SIZE,
-        distance: Distance = Distance.COSINE,
+        distance: models.Distance = models.Distance.COSINE,
         indexing_threshold: int = 1000,
         hnsw_config: dict | None = None,
     ) -> bool:
@@ -101,30 +107,26 @@ class QdrantStore:
         if hnsw_config is None:
             hnsw_config = {"m": 16}  # Default balanced setting
 
-        from qdrant_client.http.models import HnswConfigDiff
+        # Convert dict to HnswConfigDiff
+        hnsw_config_diff = models.HnswConfigDiff(**hnsw_config)
 
-        # Convert dict to HnswConfigDiff if needed
-        if isinstance(hnsw_config, dict):
-            hnsw_config = HnswConfigDiff(**hnsw_config)
-
-        # Use the sync client to create collection
+        # Create collection with proper models
         self.client.create_collection(
             collection_name=collection_name,
-            vectors_config=VectorParams(
+            vectors_config=models.VectorParams(
                 size=vector_size,
                 distance=distance,
             ),
-            hnsw_config=hnsw_config,  # Apply HNSW configuration
+            hnsw_config=hnsw_config_diff,
         )
 
         # Tune optimizer for faster indexing (start indexing earlier)
         try:
-            # Use the sync client to update collection
             self.client.update_collection(
                 collection_name=collection_name,
-                optimizer_config={
-                    "indexing_threshold": indexing_threshold,  # Default 20000 -> 1000
-                },
+                optimizers_config=models.OptimizersConfigDiff(
+                    indexing_threshold=indexing_threshold,  # Default 20000 -> 1000
+                ),
             )
         except Exception as e:
             logger.warning(f"Could not update optimizer config: {e}")
@@ -155,6 +157,7 @@ class QdrantStore:
             point: Single point to add (with id, vector, and payload)
         """
         self._buffer.append(point)
+        logger.debug(f"Added point to buffer, current buffer size: {len(self._buffer)}")
         if len(self._buffer) >= self._buffer_limit:
             self.flush(collection_name)
 
@@ -169,11 +172,41 @@ class QdrantStore:
             int: Number of points flushed
         """
         if not self._buffer:
+            logger.debug("Buffer is empty, nothing to flush")
             return 0
 
-        if not self.collection_exists(collection_name):
-            logger.warning(f"Collection '{collection_name}' does not exist, skipping flush")
+        # Проверим существование коллекции с блокировкой для избежания гонки
+        collection_ready = False
+        max_retries = 3
+        retry_count = 0
+
+        while retry_count < max_retries:
+            try:
+                if self.collection_exists(collection_name):
+                    collection_ready = True
+                    break
+                else:
+                    logger.warning(
+                        f"Collection '{collection_name}' does not exist, attempt {retry_count + 1}/{max_retries}"
+                    )
+                    time.sleep(0.1)  # Небольшая задержка перед повторной проверкой
+                    retry_count += 1
+            except Exception as e:
+                logger.warning(
+                    f"Error checking collection existence: {e}, attempt {retry_count + 1}/{max_retries}"
+                )
+                time.sleep(0.1)
+                retry_count += 1
+
+        if not collection_ready:
+            logger.error(
+                f"Collection '{collection_name}' does not exist after {max_retries} attempts, skipping flush"
+            )
             return 0
+
+        logger.debug(
+            f"Flushing buffer with {len(self._buffer)} points to collection '{collection_name}'"
+        )
 
         # Use smaller batches within the buffer for stability
         batch_size = self._buffer_limit
@@ -181,12 +214,43 @@ class QdrantStore:
 
         for i in range(0, len(self._buffer), batch_size):
             batch = self._buffer[i : i + batch_size]
-            self.client.upsert(collection_name=collection_name, points=batch)
+            # 🔥 Используем models.PointStruct для совместимости
+            points = [
+                models.PointStruct(
+                    id=p.get("id"),
+                    vector=p.get("vector"),
+                    payload=p.get("payload", {}),
+                )
+                for p in batch
+            ]
+            logger.debug(f"Sending batch of {len(points)} points to Qdrant")
+            try:
+                # Используем wait=True для лучшей диагностики
+                result = self.client.upsert(
+                    collection_name=collection_name, points=points, wait=True
+                )
+                logger.debug(f"Upsert result: {result}")
+
+                # Проверим результат апсерта
+                if result is None:
+                    logger.warning("Upsert returned None, this may indicate an issue")
+                elif hasattr(result, "status"):
+                    if result.status == "completed":
+                        logger.debug("Upsert completed successfully")
+                    else:
+                        logger.debug(f"Upsert status: {result.status}")
+                else:
+                    logger.debug(f"Upsert result: {result}")
+            except Exception as e:
+                logger.error(f"Failed to upsert batch: {e}")
+                logger.exception("Full traceback:")
+                raise
             flushed += len(batch)
 
         self._total_indexed += flushed
         logger.info(f"Flushed {flushed} points (total indexed: {self._total_indexed})")
         self._buffer.clear()
+        logger.debug("Buffer cleared after flush")
         return flushed
 
     def close(self, collection_name: str) -> int:
@@ -216,7 +280,16 @@ class QdrantStore:
         # Process in batches to handle large datasets efficiently
         for i in range(0, len(points), batch_size):
             batch = points[i : i + batch_size]
-            self.client.upsert(collection_name=collection_name, points=batch)
+            # 🔥 Используем models.PointStruct для совместимости
+            points_struct = [
+                models.PointStruct(
+                    id=p.get("id"),
+                    vector=p.get("vector"),
+                    payload=p.get("payload", {}),
+                )
+                for p in batch
+            ]
+            self.client.upsert(collection_name=collection_name, points=points_struct)
 
         logger.info(f"Upserted {len(points)} points into collection '{collection_name}'")
 
@@ -225,7 +298,7 @@ class QdrantStore:
         collection_name: str,
         query_vector: list[float],
         limit: int = 10,
-        filters: dict | None = None,
+        filters: models.Filter | None = None,
     ) -> list[dict]:
         """
         Search for similar vectors in the collection.
@@ -242,14 +315,11 @@ class QdrantStore:
         if not self.collection_exists(collection_name):
             raise ValueError(f"Collection '{collection_name}' does not exist")
 
-        # Convert filters to Qdrant format if provided
-        if filters:
-            # This is a simplified filter implementation
-            # In a real scenario, you'd convert the dict to Qdrant Filter object
-            pass
-
         results = self.client.search(
-            collection_name=collection_name, query_vector=query_vector, limit=limit
+            collection_name=collection_name,
+            query_vector=query_vector,
+            limit=limit,
+            query_filter=filters,
         )
 
         # Format results to return a list of dictionaries
