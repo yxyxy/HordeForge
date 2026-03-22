@@ -48,7 +48,7 @@ def test_contract_metadata_immutability():
     )
 
     # Проверяем, что поля не могут быть изменены (dataclass с заморозкой)
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         metadata.name = "changed_name"
 
 

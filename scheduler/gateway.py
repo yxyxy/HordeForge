@@ -49,6 +49,8 @@ except ImportError:
 
 app = FastAPI(title="HordeForge Scheduler Gateway", version="0.1.0")
 
+logger = logging.getLogger("hordeforge.gateway")
+
 config = RunConfig.from_env()
 
 # Initialize JWT validator if auth is enabled

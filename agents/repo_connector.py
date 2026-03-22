@@ -339,7 +339,48 @@ class RepoConnector(BaseAgent):
                 return result
 
             if result["status"] in ["connected", "success"]:
-                # Extract repository metadata for test compatibility
+                # Handle fetch_issues operation specially - return issues in artifact
+                if operation == "fetch_issues":
+                    issues = result.get("issues", [])
+                    issue_content = {
+                        "issues": issues,
+                        "count": result.get("count", len(issues)),
+                        "repo_url": config.repo_url,
+                        "state": state,
+                        "labels": labels,
+                    }
+                    agent_result = build_agent_result(
+                        status="SUCCESS",
+                        artifact_type="issue_list",
+                        artifact_content=issue_content,
+                        reason=f"Fetched {len(issues)} issues successfully",
+                        confidence=0.95,
+                        logs=[f"Fetched {len(issues)} issues from repository"],
+                        next_actions=["process_issues"],
+                    )
+                    return agent_result
+
+                # Handle fetch_prs operation specially - return PRs in artifact
+                if operation == "fetch_prs":
+                    prs = result.get("prs", [])
+                    pr_content = {
+                        "prs": prs,
+                        "count": result.get("count", len(prs)),
+                        "repo_url": config.repo_url,
+                        "state": state,
+                    }
+                    agent_result = build_agent_result(
+                        status="SUCCESS",
+                        artifact_type="pr_list",
+                        artifact_content=pr_content,
+                        reason=f"Fetched {len(prs)} pull requests successfully",
+                        confidence=0.95,
+                        logs=[f"Fetched {len(prs)} pull requests from repository"],
+                        next_actions=["process_pull_requests"],
+                    )
+                    return agent_result
+
+                # For connect operation - extract repository metadata
                 repo_data = result.get("repo_data", {})
                 full_name = repo_data.get("full_name", "")
                 parts = full_name.split("/") if full_name else ["", ""]

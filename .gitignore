@@ -24,6 +24,9 @@ htmlcov/
 # Local logs/artifacts
 logs/
 artifacts/
+temp_cline/
+temp_openclaw/
+Local RAG/
 
 # Development tasks
 # development_tasks/

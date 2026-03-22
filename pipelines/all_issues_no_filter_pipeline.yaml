@@ -1,0 +1,49 @@
+# pipelines/all_issues_no_filter_pipeline.yaml
+# All Issues Scanner Pipeline for HordeForge (no filters at all)
+# Description: Pipeline to scan ALL GitHub issues (open, closed, all states).
+
+pipeline_name: all_issues_no_filter_pipeline
+description: |
+  Pipeline to scan ALL GitHub issues (no filters at all).
+  Fetches all issues from GitHub repository regardless of state or labels
+  and identifies eligible issues that can be processed with backlog analysis pipeline.
+
+triggers:
+  - manual_trigger
+
+steps:
+  - name: repo_connector
+    agent: repo_connector
+    description: Fetch ALL issues from GitHub repository (no state or label filtering)
+    input:
+      repo_url: "{{repo_url}}"
+      github_token: "{{github_token}}"
+      operation: "fetch_issues"
+      state: "all"  # Fetch all issues (open, closed, all states)
+      # Note: No labels specified - fetches all issues
+    output: "{{issues_result}}"
+    on_failure: stop_pipeline
+
+  - name: issue_classification
+    agent: issue_scanner
+    description: Process and classify fetched issues
+    input:
+      issues: "{{issues_result.issues}}"
+      scan_options:
+        # We can still apply filters during classification if needed
+        state: "all"
+        max_issues: 100
+    output: "{{processed_issues}}"
+    on_failure: continue
+
+logging:
+  level: INFO
+  log_decisions: true
+  log_artifacts: true
+  post_to_github: false
+
+# Notes:
+# - Requires repo_url and github_token as inputs
+# - Fetches ALL issues (no state or label filter at repo_connector level)
+# - Can still apply filtering in issue_scanner agent
+# - Returns classified issues that can be processed individually with backlog_analysis_pipeline

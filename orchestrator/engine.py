@@ -157,6 +157,96 @@ class OrchestratorEngine:
         return deepcopy(self.rule_pack_loader.load())
 
     def _evaluate_loop_condition(self, condition: str, state: dict[str, Any]) -> bool:
+        """Evaluate loop condition with Jinja2 support.
+
+        Supports:
+        - {{path.to.value}} > 0
+        - {{path.to.value}} >= 1
+        - {{path.to.value}} == 0
+        - {{path.to.value}} != 0
+        - Boolean expressions like {{value}}
+        """
+        try:
+            from jinja2 import Template
+        except ImportError:
+            # Fallback to simple regex parsing
+            return self._evaluate_loop_condition_simple(condition, state)
+
+        condition = condition.strip()
+
+        # Try to render Jinja2 template
+        try:
+            template = Template(condition)
+            rendered = template.render(**state)
+            rendered = rendered.strip()
+        except Exception:
+            # If Jinja2 fails, try simple regex
+            return self._evaluate_loop_condition_simple(condition, state)
+
+        # Evaluate the rendered expression
+        # Check for simple boolean
+        if rendered.lower() in ("true", "false"):
+            return rendered.lower() == "true"
+
+        # Check for comparison operators
+        pattern = r"^(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)$"
+        match = re.match(pattern, rendered)
+        if match:
+            left_str, operator, right_str = match.groups()
+
+            # Try to resolve left side as path
+            left_value = self._resolve_path(state, left_str.strip())
+            if left_value is None:
+                try:
+                    left_value = float(left_str.strip())
+                except (ValueError, TypeError):
+                    # If left side is not a number, treat as boolean
+                    left_value = bool(left_str.strip())
+
+            # Parse right side
+            right_value: Any
+            try:
+                right_value = float(right_str.strip())
+            except ValueError:
+                right_str_lower = right_str.strip().lower()
+                if right_str_lower == "true":
+                    right_value = True
+                elif right_str_lower == "false":
+                    right_value = False
+                else:
+                    right_value = right_str.strip()
+
+            # Compare values
+            if operator == "==":
+                return left_value == right_value
+            if operator == "!=":
+                return left_value != right_value
+            if operator == ">":
+                try:
+                    return float(left_value) > float(right_value)
+                except (TypeError, ValueError):
+                    return False
+            if operator == "<":
+                try:
+                    return float(left_value) < float(right_value)
+                except (TypeError, ValueError):
+                    return False
+            if operator == ">=":
+                try:
+                    return float(left_value) >= float(right_value)
+                except (TypeError, ValueError):
+                    return False
+            if operator == "<=":
+                try:
+                    return float(left_value) <= float(right_value)
+                except (TypeError, ValueError):
+                    return False
+
+        # If no pattern matched, try to treat as boolean
+        return bool(rendered)
+
+    def _evaluate_loop_condition_simple(self, condition: str, state: dict[str, Any]) -> bool:
+        """Fallback simple loop condition evaluation without Jinja2."""
         pattern = r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}\s*(==|!=|>=|<=|>|<)\s*(-?\d+)"
         match = re.fullmatch(pattern, condition.strip())
         if not match:
@@ -189,6 +279,7 @@ class OrchestratorEngine:
         step: StepDefinition,
         context: ExecutionContext,
         run_state: PipelineRunState,
+        has_next_step: bool = True,
     ) -> tuple[dict[str, Any], bool]:
         override_request = RUN_OVERRIDE_REGISTRY.get(context.run_id)
         if override_request is not None and override_request.action == "stop":
@@ -240,6 +331,7 @@ class OrchestratorEngine:
                     if backoff > 0:
                         time.sleep(backoff)
                     continue
+                # Retry limit exhausted - block the pipeline
                 action = "block"
 
             if action == "continue":
@@ -274,11 +366,14 @@ class OrchestratorEngine:
                 raise RuntimeError(
                     f"Loop exceeded max iterations ({self.max_loop_iterations}): {loop.condition}"
                 )
-            for step_name in loop.steps:
+            for idx, step_name in enumerate(loop.steps):
                 step = step_by_name.get(step_name)
                 if not step:
                     raise ValueError(f"Loop references unknown step: {step_name}")
-                output, should_stop = self._execute_step_with_policy(step, context, run_state)
+                has_next = idx < len(loop.steps) - 1
+                output, should_stop = self._execute_step_with_policy(
+                    step, context, run_state, has_next_step=has_next
+                )
                 step_results[step_name] = output
                 if should_stop:
                     return True
@@ -289,19 +384,31 @@ class OrchestratorEngine:
         steps: list[StepDefinition],
         context: ExecutionContext,
         run_state: PipelineRunState,
+        is_last_batch: bool = False,
     ) -> tuple[dict[str, dict[str, Any]], bool]:
         if not steps:
             return {}, False
         if len(steps) == 1 or self.max_parallel_workers <= 1:
-            output, should_stop = self._execute_step_with_policy(steps[0], context, run_state)
+            has_next = not is_last_batch or len(steps) > 1
+            output, should_stop = self._execute_step_with_policy(
+                steps[0], context, run_state, has_next_step=has_next
+            )
             return {steps[0].name: output}, should_stop
 
         outputs: dict[str, dict[str, Any]] = {}
         should_stop = False
+        # For parallel execution, determine if each step is last in the batch
+        last_step_index = len(steps) - 1
         with ThreadPoolExecutor(max_workers=min(self.max_parallel_workers, len(steps))) as pool:
             futures = {
-                pool.submit(self._execute_step_with_policy, step, context, run_state): step.name
-                for step in steps
+                pool.submit(
+                    self._execute_step_with_policy,
+                    step,
+                    context,
+                    run_state,
+                    has_next_step=(idx < last_step_index or not is_last_batch),
+                ): step.name
+                for idx, step in enumerate(steps)
             }
             for future, step_name in futures.items():
                 output, step_should_stop = future.result()
@@ -337,7 +444,16 @@ class OrchestratorEngine:
             ready_queue = list(ready_steps)
             while ready_queue:
                 batch = select_lock_aware_batch(ready_queue)
-                outputs, batch_should_stop = self._execute_step_batch(batch, context, run_state)
+                # Determine if this is the last batch (no more steps will remain after this)
+                remaining_after_batch = [
+                    name
+                    for name in ordered_names
+                    if name not in executed and name not in {s.name for s in batch}
+                ]
+                is_last_batch = len(remaining_after_batch) == 0
+                outputs, batch_should_stop = self._execute_step_batch(
+                    batch, context, run_state, is_last_batch=is_last_batch
+                )
                 for step in batch:
                     step_results[step.name] = outputs[step.name]
                     executed.add(step.name)
@@ -473,8 +589,11 @@ class OrchestratorEngine:
 
         should_stop = False
         if resumed_state_payload is not None:
-            for step in steps_to_execute:
-                output, should_stop = self._execute_step_with_policy(step, context, run_state)
+            for idx, step in enumerate(steps_to_execute):
+                has_next = idx < len(steps_to_execute) - 1
+                output, should_stop = self._execute_step_with_policy(
+                    step, context, run_state, has_next_step=has_next
+                )
                 step_results[step.name] = output
                 if should_stop:
                     break

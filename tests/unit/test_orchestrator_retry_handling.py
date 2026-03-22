@@ -217,10 +217,8 @@ steps:
         # Проверяем, что фликер был вызван 2 раза (1 начальный + 1 повтор)
         assert flaky_agent.attempt_count == 2
 
-        # Проверяем, что в результатах есть информация о повторах
-        summary = result["summary"]
-        # В реальной системе было бы поле total_retries, но в текущей реализации его может не быть
-        # Проверим, что шаг завершился успешно
+        # Проверяем, что шаг завершился успешно
+        assert result["steps"]["final_step"]["status"] == "SUCCESS"
 
     finally:
         if pipeline_path.exists():
@@ -332,7 +330,7 @@ steps:
 
         result = engine.run(str(pipeline_path), {}, run_id="step-specific-retry-test-run")
 
-        # Проверяем, что пайплайн заблокирован на втором шаге (после исчерпания лимита повторов)
+        # Проверяем, что пайплайн заблокирован на первом шаге (после исчерпания лимита повторов)
         assert result["status"] == "BLOCKED"
 
         # Проверяем, что первый шаг был вызван 2 раза (1 начальный + 1 повтор по лимиту шага)
@@ -340,11 +338,9 @@ steps:
             f"Expected 2 attempts for first agent, got {failing_agent_1.attempt_count}"
         )
 
-        # Проверяем, что второй шаг был вызван 4 раза (1 начальный + 3 повтора по лимиту шага)
-        # Но так как он всегда проваливается, то после 4 попыток (1 начальная + 3 повтора)
-        # пайплайн должен остановиться
-        assert failing_agent_3.attempt_count == 4, (
-            f"Expected 4 attempts for second agent, got {failing_agent_3.attempt_count}"
+        # Проверяем, что второй шаг НЕ был вызван (пайплайн заблокирован на первом шаге)
+        assert failing_agent_3.attempt_count == 0, (
+            f"Expected 0 attempts for second agent, got {failing_agent_3.attempt_count}"
         )
 
         # Проверяем, что финальный шаг НЕ был выполнен

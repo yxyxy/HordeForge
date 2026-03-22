@@ -3,6 +3,8 @@ import os
 import time
 
 from fastembed import TextEmbedding
+
+from rag.config import get_embedding_model
 from qdrant_client import QdrantClient, models
 
 logger = logging.getLogger(__name__)
@@ -48,7 +50,7 @@ class QdrantStore:
             port=port,
             check_compatibility=check_compatibility,  # 🔥 Критично для старых серверов
         )
-        self.embedder = TextEmbedding()
+        self.embedder = TextEmbedding(model_name=get_embedding_model())
         self._buffer: list[dict] = []
         self._buffer_limit = buffer_limit
         self._total_indexed = 0
@@ -227,7 +229,7 @@ class QdrantStore:
             try:
                 # Используем wait=True для лучшей диагностики
                 result = self.client.upsert(
-                    collection_name=collection_name, points=points, wait=True
+                    collection_name=collection_name, points=points, wait=False
                 )
                 logger.debug(f"Upsert result: {result}")
 

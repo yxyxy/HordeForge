@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
 
 # =========================
@@ -39,9 +40,6 @@ def handle_rebase(pr: dict) -> str:
 # =========================
 # Agent
 # =========================
-
-
-from agents.base import BaseAgent
 
 
 class PrMergeAgent(BaseAgent):

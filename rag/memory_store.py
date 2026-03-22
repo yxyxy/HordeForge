@@ -5,6 +5,8 @@ import uuid
 from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
 
+from rag.config import get_embedding_model
+
 
 class MemoryStore:
     """
@@ -13,7 +15,7 @@ class MemoryStore:
 
     def __init__(self, host: str = "localhost", port: int = 6333):
         self.client = QdrantClient(host=host, port=port)
-        self.embedder = TextEmbedding()
+        self.embedder = TextEmbedding(model_name=get_embedding_model())
 
     def add_memory(self, text: str, payload: dict) -> str:
         """
@@ -64,7 +66,7 @@ class MemoryStore:
         # Удаляем коллекцию, если она существует
         try:
             self.client.delete_collection("agent_memory")
-        except:
+        except Exception:
             pass  # Коллекция не существует, что нормально
 
         # Создаем новую коллекцию
@@ -83,5 +85,5 @@ class MemoryStore:
         try:
             count = self.client.count(collection_name="agent_memory").count
             return {"total_entries": count}
-        except:
+        except Exception:
             return {"total_entries": 0}

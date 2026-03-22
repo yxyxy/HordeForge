@@ -1,4 +1,5 @@
 import os
+from dataclasses import FrozenInstanceError
 
 import pytest
 
@@ -31,7 +32,7 @@ def test_pipeline_metadata_with_all_fields():
 def test_pipeline_metadata_immutability():
     metadata = PipelineMetadata(name="test_pipeline", path="path/to/pipeline.yaml")
 
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         metadata.name = "changed_name"
 
 

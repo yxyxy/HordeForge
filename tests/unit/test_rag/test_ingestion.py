@@ -104,7 +104,7 @@ class TestIngestionPipelineBehavior:
             queue_size=30,
         )
 
-        assert pipeline.batch_size == 1024
+        assert pipeline.batch_size == 256
         assert pipeline.num_workers == 8
         assert pipeline.queue.maxsize == 30
 

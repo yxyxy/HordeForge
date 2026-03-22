@@ -7,13 +7,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from agents.base import BaseAgent
 from agents.context_utils import build_agent_result
 from orchestrator.loader import PipelineLoader
 
 logger = logging.getLogger("hordeforge.pipeline_initializer")
-
-
-from agents.base import BaseAgent
 
 
 class PipelineType(Enum):

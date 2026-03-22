@@ -9,6 +9,16 @@ from typing import Any
 
 from agents.base import BaseAgent
 from agents.context_utils import build_agent_result
+from agents.llm_wrapper import (
+    build_spec_prompt,
+    get_llm_wrapper,
+    parse_spec_output,
+)
+from agents.llm_wrapper_backward_compatibility import (
+    get_legacy_llm_wrapper,
+    legacy_build_spec_prompt,
+    legacy_parse_spec_output,
+)
 
 
 class SpecificationType(Enum):
@@ -393,70 +403,129 @@ class SpecificationWriter(BaseAgent):
                 next_actions=[],
             )
 
-        # Generate user story
-        user_story_text = generate_user_story(feature_description)
+        # Try to use LLM for enhanced specification generation
+        use_llm = context.get("use_llm", True)
+        llm_spec = None
+        llm_error = None
 
-        # Generate acceptance criteria
-        acceptance_criteria = generate_acceptance_criteria(
-            user_story_text or feature_description, feature_description
-        )
+        if use_llm:
+            try:
+                # Try to use the new LLM wrapper first, fall back to legacy if needed
+                llm = get_llm_wrapper()
+                if llm is None:
+                    # Try legacy wrapper for backward compatibility
+                    llm = get_legacy_llm_wrapper()
 
-        # Generate technical specification
-        tech_spec = generate_technical_spec(feature_description)
+                if llm is not None:
+                    # Prepare context for LLM
+                    repo_context = {
+                        "feature_description": feature_description,
+                        "issue_labels": issue.get("labels", []),
+                        "existing_files": context.get("existing_files", []),
+                    }
 
-        # Get project structure if available for more accurate file planning
-        project_structure = context.get("project_structure", {})
+                    # Try new prompt building first, fall back to legacy if needed
+                    try:
+                        prompt = build_spec_prompt(feature_description, [], repo_context)
+                    except AttributeError:
+                        # Fall back to legacy prompt building
+                        prompt = legacy_build_spec_prompt(feature_description, [], repo_context)
 
-        # Generate file change plan
-        file_plan = generate_file_change_plan(feature_description, project_structure)
+                    response = llm.complete(prompt)
+                    llm.close()
 
-        # Prepare result content
-        result_content = {
-            "schema_version": "1.0",
-            "feature_description": feature_description,
-            "user_story": user_story_text,
-            "acceptance_criteria": acceptance_criteria,
-            "technical_specification": {
-                "components": tech_spec.components if hasattr(tech_spec, "components") else [],
-                "endpoints": tech_spec.endpoints if hasattr(tech_spec, "endpoints") else [],
-                "schemas": tech_spec.schemas if hasattr(tech_spec, "schemas") else [],
-                "dependencies": tech_spec.dependencies
-                if hasattr(tech_spec, "dependencies")
-                else [],
-                "implementation_notes": tech_spec.implementation_notes
-                if hasattr(tech_spec, "implementation_notes")
-                else [],
-            },
-            "file_change_plan": {
-                "files_to_create": file_plan.files_to_create
-                if hasattr(file_plan, "files_to_create")
-                else [],
-                "files_to_modify": file_plan.files_to_modify
-                if hasattr(file_plan, "files_to_modify")
-                else [],
-                "files_to_delete": file_plan.files_to_delete
-                if hasattr(file_plan, "files_to_delete")
-                else [],
-            },
-            "generation_context": {
-                "has_user_context": user_story_text is not None,
-                "complexity_estimate": len(feature_description.split()) // 10 + 1,
-            },
-        }
+                    # Try new parsing first, fall back to legacy if needed
+                    try:
+                        llm_spec = parse_spec_output(response)
+                    except AttributeError:
+                        # Fall back to legacy parsing
+                        llm_spec = legacy_parse_spec_output(response)
+
+            except Exception as exc:
+                llm_error = str(exc)
+
+        if llm_spec:
+            # Use LLM-generated specification
+            result_content = llm_spec
+            reason = "Specification generated with LLM enhancement."
+            confidence = 0.95
+        else:
+            # Fallback to deterministic generation
+            # Generate user story
+            user_story_text = generate_user_story(feature_description)
+
+            # Generate acceptance criteria
+            acceptance_criteria = generate_acceptance_criteria(
+                user_story_text or feature_description, feature_description
+            )
+
+            # Generate technical specification
+            tech_spec = generate_technical_spec(feature_description)
+
+            # Get project structure if available for more accurate file planning
+            project_structure = context.get("project_structure", {})
+
+            # Generate file change plan
+            file_plan = generate_file_change_plan(feature_description, project_structure)
+
+            # Prepare result content
+            result_content = {
+                "schema_version": "1.0",
+                "feature_description": feature_description,
+                "user_story": user_story_text,
+                "acceptance_criteria": acceptance_criteria,
+                "technical_specification": {
+                    "components": tech_spec.components if hasattr(tech_spec, "components") else [],
+                    "endpoints": tech_spec.endpoints if hasattr(tech_spec, "endpoints") else [],
+                    "schemas": tech_spec.schemas if hasattr(tech_spec, "schemas") else [],
+                    "dependencies": tech_spec.dependencies
+                    if hasattr(tech_spec, "dependencies")
+                    else [],
+                    "implementation_notes": tech_spec.implementation_notes
+                    if hasattr(tech_spec, "implementation_notes")
+                    else [],
+                },
+                "file_change_plan": {
+                    "files_to_create": file_plan.files_to_create
+                    if hasattr(file_plan, "files_to_create")
+                    else [],
+                    "files_to_modify": file_plan.files_to_modify
+                    if hasattr(file_plan, "files_to_modify")
+                    else [],
+                    "files_to_delete": file_plan.files_to_delete
+                    if hasattr(file_plan, "files_to_delete")
+                    else [],
+                },
+                "generation_context": {
+                    "has_user_context": user_story_text is not None,
+                    "complexity_estimate": len(feature_description.split()) // 10 + 1,
+                },
+            }
+
+            reason = (
+                "Deterministic specification generated (LLM unavailable)."
+                if llm_error
+                else "Specification generated from issue description."
+            )
+            confidence = 0.85
+
+        if llm_error:
+            result_content.setdefault("notes", [])
+            result_content["notes"].append(f"llm_error={llm_error[:120]}")
 
         # Create the result in the expected format
         result = {
             "status": "SUCCESS",
             "artifact_type": "specification",
             "artifact_content": result_content,
-            "reason": "Specification generated successfully",
-            "confidence": 0.85,
+            "reason": reason,
+            "confidence": confidence,
             "logs": [
                 f"Generated specification for: {feature_description[:50]}...",
-                f"User story: {'Yes' if user_story_text else 'No'}",
-                f"Acceptance criteria: {len(acceptance_criteria)} items",
-                f"Technical components: {len(tech_spec.components) if hasattr(tech_spec, 'components') else 0}",
-                f"Files to create: {len(file_plan.files_to_create) if hasattr(file_plan, 'files_to_create') else 0}, modify: {len(file_plan.files_to_modify) if hasattr(file_plan, 'files_to_modify') else 0}",
+                f"User story: {'Yes' if result_content.get('user_story') else 'No'}",
+                f"Acceptance criteria: {len(result_content.get('acceptance_criteria', []))} items",
+                f"Technical components: {len(result_content.get('technical_specification', {}).get('components', []))}",
+                f"Files to create: {len(result_content.get('file_change_plan', {}).get('files_to_create', []))}, modify: {len(result_content.get('file_change_plan', {}).get('files_to_modify', []))}",
             ],
             "next_actions": ["architecture_planner", "implementation_planner"],
         }

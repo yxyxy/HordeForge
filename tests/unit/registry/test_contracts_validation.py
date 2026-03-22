@@ -60,7 +60,7 @@ def test_contract_registry_fails_on_invalid_schema():
         registry = ContractRegistry()
 
         # Проверяем, что возникает ошибка при загрузке некорректной схемы
-        with pytest.raises(Exception):
+        with pytest.raises((ValueError, RuntimeError)):
             registry.autoload_schemas(temp_dir)
 
 
@@ -109,5 +109,5 @@ def test_contract_registry_validates_schema_format():
         registry = ContractRegistry()
 
         # Проверяем, что возникает ошибка при загрузке некорректной схемы
-        with pytest.raises(Exception):
+        with pytest.raises((ValueError, RuntimeError)):
             registry.autoload_schemas(temp_dir)

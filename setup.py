@@ -19,6 +19,7 @@ setup(
     entry_points={
         "console_scripts": [
             "hordeforge=cli:main",
+            "horde=cli.horde_cli:main",
         ],
     },
     python_requires=">=3.10",

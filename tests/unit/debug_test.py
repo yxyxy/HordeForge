@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory() as tmp_path:
     (tmp_path / "backend" / "dummy.py").write_text("# Dummy file")
 
     print("Directory structure:")
-    for root, dirs, files in os.walk(tmp_path):
+    for root, _dirs, files in os.walk(tmp_path):
         level = root.replace(str(tmp_path), "").count(os.sep)
         indent = " " * 2 * level
         print(f"{indent}{os.path.basename(root)}/")

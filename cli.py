@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import json
 import sys
 import uuid
@@ -84,6 +85,10 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument("--run-id", required=True, help="Pipeline run identifier")
 
     subparsers.add_parser("health", help="Check gateway health")
+
+    # LLM subcommand - we'll handle this differently to allow proper help handling
+    subparsers.add_parser("llm", help="LLM operations", add_help=False)
+
     return parser
 
 
@@ -92,9 +97,10 @@ def _stderr(message: str) -> None:
 
 
 def main() -> int:
+    # Use parse_known_args to handle help properly for LLM command
     parser = build_parser()
     try:
-        args = parser.parse_args()
+        args, unknown_args = parser.parse_known_args()
     except SystemExit as exc:
         if exc.code == EXIT_USAGE_ERROR:
             _stderr("CLI usage error")
@@ -133,6 +139,39 @@ def main() -> int:
             )
             response.raise_for_status()
             print(json.dumps(response.json(), ensure_ascii=False, indent=2))
+            return EXIT_OK
+
+        elif args.command == "llm":
+            # Handle LLM operations using the new LLM CLI
+            # We need to get the remaining command line arguments directly
+            import sys
+
+            # Find the position of 'llm' in sys.argv and get everything after it
+            llm_args_list = []
+            try:
+                llm_idx = sys.argv.index("llm")
+                llm_args_list = sys.argv[llm_idx + 1 :]
+            except ValueError:
+                # If 'llm' is not found, use empty list
+                llm_args_list = []
+
+            # Check if help was requested for LLM CLI
+            if llm_args_list and ("--help" in llm_args_list or "-h" in llm_args_list):
+                from cli.llm_cli import LlmCli
+
+                llm_cli = LlmCli()
+                llm_parser = llm_cli.setup_parser()
+                llm_parser.print_help()
+                return EXIT_OK
+
+            from cli.llm_cli import LlmCli
+
+            # Create LLM CLI instance and pass the remaining arguments
+            llm_cli = LlmCli()
+            llm_parser = llm_cli.setup_parser()
+            # Parse the remaining arguments for LLM CLI
+            llm_args = llm_parser.parse_args(llm_args_list)
+            asyncio.run(llm_cli.run_command(llm_args))
             return EXIT_OK
 
         parser.print_help()

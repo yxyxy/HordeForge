@@ -134,7 +134,7 @@ def analyze_code_structure(project_path: str = ".") -> dict[str, Any]:
     }
 
     # First, collect all directories (including empty ones)
-    for root, dirs, files in os.walk(project_path):
+    for root, dirs, _files in os.walk(project_path):
         # Skip certain directories
         dirs[:] = [
             d
@@ -147,7 +147,7 @@ def analyze_code_structure(project_path: str = ".") -> dict[str, Any]:
             structure["directories"].append(rel_root)
 
     # Walk through the project structure to process files
-    for root, dirs, files in os.walk(project_path):
+    for root, _dirs, files in os.walk(project_path):
         rel_root = os.path.relpath(root, project_path)
 
         for file in files:

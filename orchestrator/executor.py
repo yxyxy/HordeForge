@@ -243,6 +243,190 @@ class StepExecutor:
             except FuturesTimeoutError as exc:
                 raise TimeoutError(f"Step timed out after {timeout_seconds} seconds") from exc
 
+    def _apply_input_mapping(
+        self, step: StepDefinition, context_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Apply input_mapping from step definition to context state.
+
+        Handles Jinja2 template variables like {{key}}, {{key.subkey}}, {{key|default(value)}}
+        Resolves them from context_state and builds step-specific payload.
+
+        Args:
+            step: Step definition with input_mapping
+            context_state: Current execution context state
+
+        Returns:
+            Merged payload for the agent
+        """
+        try:
+            from jinja2 import Template
+        except ImportError:
+            # Fallback to simple regex-based resolution if Jinja2 not available
+            return self._apply_input_mapping_simple(step, context_state)
+
+        # Start with context state as base
+        payload = dict(context_state)
+
+        # If no input_mapping, return full context
+        if not step.input_mapping:
+            return payload
+
+        # Apply each mapping from input_mapping
+        for target_key, source_value in step.input_mapping.items():
+            if isinstance(source_value, str):
+                # Render Jinja2 template
+                try:
+                    template = Template(source_value)
+                    rendered = template.render(**context_state)
+                    # Try to parse as JSON if it looks like JSON
+                    rendered = self._try_parse_json(rendered)
+                    payload[target_key] = rendered
+                except Exception:
+                    # If Jinja2 fails, use raw value
+                    payload[target_key] = source_value
+            elif isinstance(source_value, dict):
+                # For dict values, resolve each value
+                resolved_dict = {}
+                for k, v in source_value.items():
+                    if isinstance(v, str):
+                        try:
+                            template = Template(v)
+                            rendered = template.render(**context_state)
+                            resolved_dict[k] = self._try_parse_json(rendered)
+                        except Exception:
+                            resolved_dict[k] = v
+                    else:
+                        resolved_dict[k] = v
+                payload[target_key] = resolved_dict
+            elif isinstance(source_value, list):
+                # For list values, resolve each element
+                resolved_list = []
+                for item in source_value:
+                    if isinstance(item, str):
+                        try:
+                            template = Template(item)
+                            rendered = template.render(**context_state)
+                            resolved_list.append(self._try_parse_json(rendered))
+                        except Exception:
+                            resolved_list.append(item)
+                    else:
+                        resolved_list.append(item)
+                payload[target_key] = resolved_list
+            else:
+                # For non-string values, use as-is
+                payload[target_key] = source_value
+
+        return payload
+
+    def _try_parse_json(self, value: str) -> Any:
+        """Try to parse a string as JSON. Return original string if not valid JSON."""
+        import json
+
+        value = value.strip()
+        if (value.startswith("{") and value.endswith("}")) or (
+            value.startswith("[") and value.endswith("]")
+        ):
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return value
+
+    def _apply_input_mapping_simple(
+        self, step: StepDefinition, context_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Fallback simple input_mapping without Jinja2."""
+
+        import re
+
+        # Start with context state as base
+        payload = dict(context_state)
+
+        # If no input_mapping, return full context
+        if not step.input_mapping:
+            return payload
+
+        # Pattern to match template variables: {{key}} or {{key.subkey}}
+        template_pattern = re.compile(r"\{\{\s*([a-zA-Z0-9_.\[\]]+)\s*\}\}")
+
+        def resolve_template(template_str: str) -> Any:
+            """Resolve a template string like {{key.subkey}} from context_state."""
+            # Find all template variables in the string
+            matches = template_pattern.findall(template_str)
+
+            if not matches:
+                # No template variables, return as-is
+                return template_str
+
+            # If entire string is a single template variable, resolve it directly
+            if len(matches) == 1 and template_str.strip() == f"{{{{{matches[0]}}}}}":
+                return self._resolve_path(context_state, matches[0])
+
+            # Otherwise, replace each template variable in the string
+            result = template_str
+            for match in matches:
+                value = self._resolve_path(context_state, match)
+                if value is not None:
+                    # Replace the template with the resolved value
+                    result = result.replace(f"{{{{{match}}}}}", str(value))
+                else:
+                    # Keep the template if not resolved
+                    pass
+            return result
+
+        # Apply each mapping from input_mapping
+        for target_key, source_value in step.input_mapping.items():
+            if isinstance(source_value, str):
+                # Try to resolve as template first
+                resolved = resolve_template(source_value)
+                payload[target_key] = resolved
+            elif isinstance(source_value, dict):
+                # For dict values, resolve each value
+                resolved_dict = {}
+                for k, v in source_value.items():
+                    if isinstance(v, str):
+                        resolved_dict[k] = resolve_template(v)
+                    else:
+                        resolved_dict[k] = v
+                payload[target_key] = resolved_dict
+            elif isinstance(source_value, list):
+                # For list values, resolve each element
+                resolved_list = []
+                for item in source_value:
+                    if isinstance(item, str):
+                        resolved_list.append(resolve_template(item))
+                    else:
+                        resolved_list.append(item)
+                payload[target_key] = resolved_list
+            else:
+                # For non-string values, use as-is
+                payload[target_key] = source_value
+
+        return payload
+
+    @staticmethod
+    def _resolve_path(source: dict[str, Any], dotted_path: str) -> Any:
+        """Resolve a dotted path like 'key.subkey.array[0].field' from source dict."""
+        current = source
+        parts = dotted_path.split(".")
+
+        for part in parts:
+            if not isinstance(current, dict) or part not in current:
+                # Try to handle array access like items[0]
+                if "[" in part and "]" in part:
+                    key, idx_str = part.split("[")
+                    idx = int(idx_str.rstrip("]"))
+                    if isinstance(current, dict) and key in current:
+                        arr = current[key]
+                        if isinstance(arr, list) and 0 <= idx < len(arr):
+                            current = arr[idx]
+                            continue
+                return None
+            current = current[part]
+
+        return current
+
     def execute_step(
         self,
         step: StepDefinition,
@@ -281,7 +465,11 @@ class StepExecutor:
         try:
             # Всегда получаем агент через реестр, без возможности прямого создания
             agent = self._get_agent_from_registry(step.agent, run_id)
-            output = self._run_agent(agent, context.state, step.timeout_seconds)
+
+            # Apply input_mapping from step definition to context.state
+            step_payload = self._apply_input_mapping(step, context.state)
+
+            output = self._run_agent(agent, step_payload, step.timeout_seconds)
             if not isinstance(output, dict):
                 raise TypeError("Agent output must be a dict")
 

@@ -5,6 +5,11 @@ from typing import Any
 
 from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
+from agents.llm_wrapper import build_code_prompt, get_llm_wrapper
+from agents.llm_wrapper_backward_compatibility import (
+    get_legacy_llm_wrapper,
+    legacy_build_code_prompt,
+)
 
 
 class FixAgent(BaseAgent):
@@ -153,7 +158,7 @@ class FixAgent(BaseAgent):
         return 0
 
     def _resolve_iteration(self, context: dict[str, Any]) -> int:
-        # Сначала пробуем получить через стандартный механизм
+        # First try to get through standard mechanism
         previous_fix = (
             get_artifact_from_context(
                 context,
@@ -163,12 +168,19 @@ class FixAgent(BaseAgent):
             or {}
         )
 
-        # Если не нашли через стандартный механизм, проверяем прямой путь
+        # If not found through standard mechanism, check direct path
         if not previous_fix and "fix_agent" in context and "code_patch" in context["fix_agent"]:
             previous_fix = context["fix_agent"]["code_patch"]
 
-        if isinstance(previous_fix.get("fix_iteration"), int):
-            return int(previous_fix["fix_iteration"]) + 1
+        fix_iteration = previous_fix.get("fix_iteration")
+        if isinstance(fix_iteration, int):
+            return fix_iteration + 1
+        elif fix_iteration is not None:
+            # Handle case where fix_iteration might be a numeric string or other type
+            try:
+                return int(fix_iteration) + 1
+            except (ValueError, TypeError):
+                pass
         return 1
 
     def run(self, context: dict[str, Any]) -> dict:
@@ -176,28 +188,118 @@ class FixAgent(BaseAgent):
         iteration = self._resolve_iteration(context)
         remaining_failures = max(0, failed - 1)
 
-        patch = {
-            "schema_version": "1.0",
-            "files": [
+        # Try to use LLM for enhanced fix generation
+        use_llm = context.get("use_llm", True)
+        llm_fix_result = None
+        llm_error = None
+
+        if use_llm:
+            try:
+                # Try to use the new LLM wrapper first, fall back to legacy if needed
+                llm = get_llm_wrapper()
+                if llm is None:
+                    # Try legacy wrapper for backward compatibility
+                    llm = get_legacy_llm_wrapper()
+
+                if llm is not None:
+                    # Get test results and failure information
+                    test_results = (
+                        get_artifact_from_context(
+                            context,
+                            "test_results",
+                            preferred_steps=["test_runner"],
+                        )
+                        or {}
+                    )
+
+                    failure_info = test_results.get("failures", [])
+                    if not failure_info:
+                        # Try to get failure info from context
+                        failure_info = context.get("failures", [])
+
+                    if failure_info:
+                        # Build prompt for LLM to generate fix
+                        # Try new prompt building first, fall back to legacy if needed
+                        try:
+                            prompt = build_code_prompt(
+                                {"summary": f"Fix iteration {iteration}", "requirements": []},
+                                failure_info,
+                                {"language": "python"},
+                            )
+                        except AttributeError:
+                            # Fall back to legacy prompt building
+                            prompt = legacy_build_code_prompt(
+                                {"summary": f"Fix iteration {iteration}", "requirements": []},
+                                failure_info,
+                                {"language": "python"},
+                            )
+
+                        response = llm.complete(prompt)
+                        llm.close()
+
+                        # Parse response to extract fix
+                        import json
+
+                        try:
+                            llm_fix_result = json.loads(response)
+                        except json.JSONDecodeError:
+                            # If response is not JSON, treat as simple fix suggestion
+                            llm_fix_result = {
+                                "files": [
+                                    {
+                                        "path": "src/feature_impl.py",
+                                        "content": f"# Fix suggestion from LLM:\n{response}",
+                                        "change_type": "modify",
+                                    }
+                                ]
+                            }
+            except Exception as e:
+                llm_error = str(e)
+
+        if llm_fix_result and isinstance(llm_fix_result, dict):
+            # Use LLM-generated fix
+            files = llm_fix_result.get("files", [])
+            decisions = llm_fix_result.get("decisions", [])
+            reason = "Fix patch generated with LLM enhancement."
+            confidence = 0.92
+        else:
+            # Fallback to deterministic fix generation
+            files = [
                 {
                     "path": "src/feature_impl.py",
-                    "diff": f"+# fix iteration {iteration}\n",
+                    "content": f"# fix iteration {iteration}\n# Failed before: {failed}\n# Remaining after fix: {remaining_failures}\n",
+                    "change_type": "modify",
                 }
-            ],
-            "decisions": [
+            ]
+            decisions = [
                 f"failed_before={failed}",
                 f"remaining_after_fix={remaining_failures}",
-            ],
+            ]
+            reason = (
+                "Deterministic fix patch generated (LLM unavailable)."
+                if llm_error
+                else "Fix patch generated from test failure analysis."
+            )
+            confidence = 0.85
+
+        patch = {
+            "schema_version": "1.0",
+            "files": files,
+            "decisions": decisions,
             "fix_iteration": iteration,
             "remaining_failures": remaining_failures,
         }
+
+        if llm_error:
+            patch.setdefault("notes", [])
+            patch["notes"].append(f"llm_error={llm_error[:120]}")
 
         result = build_agent_result(
             status="SUCCESS",
             artifact_type="code_patch",
             artifact_content=patch,
-            reason="Fix patch generated from latest simulated test_results.",
-            confidence=0.89,
+            reason=reason,
+            confidence=confidence,
             logs=[
                 f"Fix iteration {iteration} produced patch.",
                 f"Remaining simulated failures: {remaining_failures}.",
@@ -205,8 +307,8 @@ class FixAgent(BaseAgent):
             next_actions=["test_runner"] if remaining_failures > 0 else ["review_agent"],
         )
 
-        # Добавляем artifact_type и artifact_content как прямые свойства результата
-        # для совместимости с тестами
+        # Add artifact_type and artifact_content as direct properties of result
+        # for test compatibility
         result["artifact_type"] = "code_patch"
         result["artifact_content"] = patch
 

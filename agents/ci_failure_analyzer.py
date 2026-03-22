@@ -9,6 +9,7 @@ import hashlib
 import re
 from typing import Any
 
+from agents.base import BaseAgent
 from agents.context_utils import build_agent_result
 
 # =========================================================================
@@ -414,9 +415,6 @@ def classify_failure_text(text: str) -> str:
 # =========================================================================
 # CI Failure Analyzer (main agent)
 # =========================================================================
-
-
-from agents.base import BaseAgent
 
 
 class CiFailureAnalyzer(BaseAgent):

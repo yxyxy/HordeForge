@@ -83,6 +83,7 @@ class RunConfig:
     pipelines_dir: str
     rules_dir: str
     rule_set_version: str
+    embedding_model: str
     request_timeout_seconds: float
     status_timeout_seconds: float
     health_timeout_seconds: float
@@ -126,6 +127,9 @@ class RunConfig:
         pipelines_dir = os.getenv("HORDEFORGE_PIPELINES_DIR", "pipelines")
         rules_dir = os.getenv("HORDEFORGE_RULES_DIR", "rules")
         rule_set_version = os.getenv("HORDEFORGE_RULE_SET_VERSION", "1.0")
+        embedding_model = os.getenv(
+            "HORDEFORGE_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+        )
         request_timeout = _get_float_env("HORDEFORGE_REQUEST_TIMEOUT_SECONDS", 30.0)
         status_timeout = _get_float_env("HORDEFORGE_STATUS_TIMEOUT_SECONDS", 15.0)
         health_timeout = _get_float_env("HORDEFORGE_HEALTH_TIMEOUT_SECONDS", 10.0)
@@ -188,6 +192,7 @@ class RunConfig:
             pipelines_dir=pipelines_dir,
             rules_dir=rules_dir,
             rule_set_version=rule_set_version,
+            embedding_model=embedding_model,
             request_timeout_seconds=request_timeout,
             status_timeout_seconds=status_timeout,
             health_timeout_seconds=health_timeout,

@@ -1,0 +1,49 @@
+# pipelines/issue_scanner_pipeline.yaml
+# Issue Scanner Pipeline for HordeForge
+# Description: Pipeline to scan GitHub issues and return eligible issues for processing.
+
+pipeline_name: issue_scanner_pipeline
+description: |
+  Pipeline to scan GitHub issues and return eligible issues for processing.
+  Fetches open issues from GitHub repository and identifies agent-ready issues
+  that can be processed with backlog analysis pipeline.
+  Uses repository settings from initialization context.
+
+triggers:
+  - manual_trigger
+
+steps:
+  - name: repo_connector
+    agent: repo_connector
+    description: Fetch open issues from GitHub repository using initialized settings
+    input:
+      repo_url: "{{repo_url}}"
+      github_token: "{{github_token}}"
+      operation: "fetch_issues"
+      state: "open"
+      labels: ["agent:ready"]
+    output: "{{issues_result}}"
+    on_failure: stop_pipeline
+
+  - name: issue_classification
+    agent: issue_scanner
+    description: Process and classify fetched issues
+    input:
+      scan_options:
+        labels: ["agent:ready"]
+        state: "open"
+        max_issues: 50
+    output: "{{processed_issues}}"
+    on_failure: continue
+
+logging:
+  level: INFO
+  log_decisions: true
+  log_artifacts: true
+  post_to_github: false
+
+# Notes:
+# - Uses repository settings from initialization context (repo_url, github_token)
+# - Falls back to explicit inputs if context is not available
+# - Processes issues with "agent:ready" label
+# - Returns classified issues that can be processed individually with backlog_analysis_pipeline

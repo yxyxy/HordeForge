@@ -194,7 +194,6 @@ class DodExtractor(BaseAgent):
     description = "Generates acceptance criteria and BDD scenarios."
 
     def run(self, context: dict) -> dict:
-
         issue = context.get("issue")
 
         if issue is None:  # Only fail if the 'issue' key is missing entirely
@@ -223,23 +222,21 @@ class DodExtractor(BaseAgent):
 
         if ac:
             logs.append(f"deterministic extraction found {len(ac)} AC")
-
             bdd = generate_bdd_from_ac(ac)
-
         else:
             logs.append("no acceptance criteria found, using defaults")
-
             # When no AC found and no LLM available, use defaults
             ac = ["Feature described in issue works as expected"]
             bdd = generate_bdd_from_ac(ac)
             method = "default_fallback"
 
+        # Ensure we have at least one acceptance criterion
         if not ac:
             ac = ["Feature described in issue works as expected"]
 
+        # Ensure we have at least one BDD scenario
         if not bdd:
             bdd = generate_bdd_from_ac(ac)
-
             if method == "llm":
                 method = "deterministic_fallback"
 

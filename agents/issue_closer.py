@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
 
 
@@ -65,9 +66,6 @@ def close_issue(issue_id: int, dod_result: str, ci_result: str) -> dict[str, Any
         return {"status": "open", "issue_id": issue_id, "reason": "CI verification failed"}
     else:
         return {"status": "open", "issue_id": issue_id, "reason": "Unknown verification state"}
-
-
-from agents.base import BaseAgent
 
 
 class IssueCloser(BaseAgent):

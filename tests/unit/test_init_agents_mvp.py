@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from agents.architecture_evaluator import ArchitectureEvaluator
 from agents.memory_agent import MemoryAgent
 from agents.pipeline_initializer import PipelineInitializer
@@ -24,9 +26,6 @@ def _step_result(status: str, artifact_type: str, content: dict) -> dict:
         "logs": [],
         "next_actions": [],
     }
-
-
-import pytest
 
 
 @pytest.mark.asyncio

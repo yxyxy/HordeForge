@@ -52,7 +52,7 @@ def test_agent_metadata_immutability():
     metadata = AgentMetadata(name="test_agent", agent_class="TestAgentClass")
 
     # Проверяем, что поля не могут быть изменены (dataclass с заморозкой)
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         metadata.name = "changed_name"
 
 

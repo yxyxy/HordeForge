@@ -6,6 +6,10 @@ from typing import Any
 from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
 from agents.llm_wrapper import build_code_prompt, get_llm_wrapper
+from agents.llm_wrapper_backward_compatibility import (
+    get_legacy_llm_wrapper,
+    legacy_build_code_prompt,
+)
 from agents.patch_workflow import PatchWorkflowOrchestrator, create_patch_from_code_result
 
 
@@ -80,7 +84,11 @@ class EnhancedCodeGenerator(BaseAgent):
 
         if use_llm and spec:
             try:
+                # Try to use the new LLM wrapper first, fall back to legacy if needed
                 llm = get_llm_wrapper()
+                if llm is None:
+                    # Try legacy wrapper for backward compatibility
+                    llm = get_legacy_llm_wrapper()
 
                 if llm is not None:
                     repo_context: dict[str, Any] = {
@@ -90,8 +98,13 @@ class EnhancedCodeGenerator(BaseAgent):
                         "rules_documents": list(rules_documents.keys()),
                     }
 
-                    # Build enhanced prompt with memory context if available
-                    prompt: str = build_code_prompt(spec, test_cases, repo_context)
+                    # Try new prompt building first, fall back to legacy if needed
+                    try:
+                        # Build enhanced prompt with memory context if available
+                        prompt: str = build_code_prompt(spec, test_cases, repo_context)
+                    except AttributeError:
+                        # Fall back to legacy prompt building
+                        prompt: str = legacy_build_code_prompt(spec, test_cases, repo_context)
 
                     # Add memory context to the prompt if available
                     if memory_context:
@@ -367,7 +380,7 @@ Task: {task_description}
             )
 
             lines.append(f"def test_{safe_name}():")
-            lines.append('    """Test case from specification."""')
+            lines.append('"""Test case from specification."""')
             lines.append("    assert True")
             lines.append("")
 

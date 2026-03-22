@@ -8,12 +8,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from agents.base import BaseAgent
 from agents.context_utils import build_agent_result
 
 logger = logging.getLogger("hordeforge.issue_scanner")
-
-
-from agents.base import BaseAgent
 
 
 class IssueType(Enum):
@@ -514,7 +512,31 @@ class IssueScanner(BaseAgent):
         processed_issues = context.get("processed_issues", [])
 
         # Fetch issues from GitHub or use provided issues
+        # Try to get issues from previous step (repo_connector) if not provided directly
         issues = context.get("issues", [])
+
+        # If no issues directly provided, check previous step results (e.g., repo_connector)
+        if not issues:
+            # Check for repo_connector step result
+            repo_connector_result = context.get("repo_connector")
+            if repo_connector_result and isinstance(repo_connector_result, dict):
+                # Try to get issues from artifacts
+                artifacts = repo_connector_result.get("artifacts", [])
+                for artifact in artifacts:
+                    if isinstance(artifact, dict):
+                        content = artifact.get("content", {})
+                        if "issues" in content:
+                            issues = content["issues"]
+                            logger.info(f"Found {len(issues)} issues from repo_connector step")
+                            break
+                        # Also check for issues at top level of content
+                        if isinstance(content, dict):
+                            issues = content.get("issues", [])
+                            if issues:
+                                logger.info(
+                                    f"Found {len(issues)} issues from repo_connector content"
+                                )
+                                break
 
         if github_client and not issues:
             try:

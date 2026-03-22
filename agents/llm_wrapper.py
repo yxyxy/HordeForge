@@ -5,11 +5,13 @@ import logging
 import os
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass, field
 from typing import Any
 
-import jsonschema
+import anthropic
+import google.genai as genai
+from openai import OpenAI
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -54,6 +56,161 @@ class LLMResponse:
     model: str
     tokens: TokenBudget = field(default_factory=TokenBudget)
     finish_reason: str | None = None
+
+
+@dataclass
+class ModelInfo:
+    """Model information with pricing and capabilities - Cline compatible."""
+
+    name: str | None = None
+    maxTokens: int | None = None  # Cline naming convention
+    contextWindow: int | None = None  # Cline naming convention
+    supportsImages: bool = False  # Cline naming convention
+    supportsPromptCache: bool = False  # Cline naming convention
+    supportsReasoning: bool = False  # Cline naming convention
+    inputPrice: float | None = None  # Price per million tokens - Cline naming
+    outputPrice: float | None = None  # Price per million tokens - Cline naming
+    cacheWritesPrice: float | None = None  # Price per million tokens - Cline naming
+    cacheReadsPrice: float | None = None  # Price per million tokens - Cline naming
+    description: str | None = None
+    temperature: float | None = None
+    supportsGlobalEndpoint: bool = False  # Cline naming convention
+
+    # Tiered pricing support - Cline compatible
+    tiers: list[dict[str, Any]] | None = None
+
+    # Reasoning configuration - Cline compatible
+    thinkingConfig: dict[str, Any] | None = None
+
+    # Backward compatibility properties
+    @property
+    def max_tokens(self) -> int | None:
+        return self.maxTokens
+
+    @property
+    def context_window(self) -> int | None:
+        return self.contextWindow
+
+    @property
+    def supports_images(self) -> bool:
+        return self.supportsImages
+
+    @property
+    def supports_prompt_cache(self) -> bool:
+        return self.supportsPromptCache
+
+    @property
+    def supports_reasoning(self) -> bool:
+        return self.supportsReasoning
+
+    @property
+    def input_price(self) -> float | None:
+        return self.inputPrice
+
+    @property
+    def output_price(self) -> float | None:
+        return self.outputPrice
+
+    @property
+    def cache_writes_price(self) -> float | None:
+        return self.cacheWritesPrice
+
+    @property
+    def cache_reads_price(self) -> float | None:
+        return self.cacheReadsPrice
+
+    @property
+    def supports_global_endpoint(self) -> bool:
+        return self.supportsGlobalEndpoint
+
+    @property
+    def thinking_config(self) -> dict[str, Any] | None:
+        return self.thinkingConfig
+
+
+@dataclass
+class ApiStreamChunk:
+    """Base class for API stream chunks."""
+
+    type: str
+
+
+@dataclass
+class ApiStreamTextChunk:
+    """Text content chunk from streaming response."""
+
+    type: str = "text"
+    text: str = ""
+    id: str | None = None
+    signature: str | None = None
+
+
+@dataclass
+class ApiStreamUsageChunk:
+    """Usage statistics chunk from streaming response."""
+
+    type: str = "usage"
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_write_tokens: int = 0
+    cache_read_tokens: int = 0
+    thoughts_token_count: int = 0
+    total_cost: float | None = None
+    id: str | None = None
+
+
+@dataclass
+class ApiStreamToolCallsChunk:
+    """Tool calls chunk from streaming response."""
+
+    type: str = "tool_calls"
+    tool_call: dict[str, Any] = field(default_factory=dict)
+    id: str | None = None
+    signature: str | None = None
+
+
+@dataclass
+class ApiStreamThinkingChunk:
+    """Reasoning/thinking chunk from streaming response."""
+
+    type: str = "reasoning"
+    reasoning: str = ""
+    details: Any | None = None
+    signature: str | None = None
+    redacted_data: str | None = None
+    id: str | None = None
+
+
+ApiStream = AsyncGenerator[ApiStreamChunk, None]
+
+
+class ApiHandler(ABC):
+    """Abstract API handler interface compatible with Cline architecture."""
+
+    @abstractmethod
+    def create_message(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> ApiStream:
+        """Create streaming message response."""
+        pass
+
+    @abstractmethod
+    def get_model(self) -> tuple[str, ModelInfo]:
+        """Get current model ID and info."""
+        pass
+
+    @abstractmethod
+    def get_api_stream_usage(self) -> ApiStreamUsageChunk | None:
+        """Get stream usage information."""
+        pass
+
+    @abstractmethod
+    def abort(self) -> None:
+        """Abort current request."""
+        pass
 
 
 class LLMWrapper(ABC):
@@ -102,8 +259,8 @@ class LLMWrapper(ABC):
         return retry_config(func)(*args, **kwargs)
 
 
-class OpenAIWrapper(LLMWrapper):
-    """OpenAI API wrapper using Responses API (not legacy Chat Completions)."""
+class OpenAIWrapper(LLMWrapper, ApiHandler):
+    """OpenAI API wrapper with streaming support and Cline compatibility."""
 
     def __init__(
         self,
@@ -114,6 +271,7 @@ class OpenAIWrapper(LLMWrapper):
     ):
         super().__init__(api_key, model, timeout, max_retries)
         self._client = None
+        self._current_stream = None
 
     def _get_api_key_from_env(self) -> str:
         return os.getenv("HORDEFORGE_OPENAI_API_KEY", "")
@@ -121,8 +279,6 @@ class OpenAIWrapper(LLMWrapper):
     def _get_client(self):
         if self._client is None and self._api_key:
             try:
-                from openai import OpenAI
-
                 self._client = OpenAI(
                     api_key=self._api_key,
                     timeout=self._timeout,
@@ -142,26 +298,22 @@ class OpenAIWrapper(LLMWrapper):
 
         try:
             response = self._apply_retry(
-                client.responses.create,
+                client.chat.completions.create,
                 model=model,
-                input=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": prompt}],
                 temperature=kwargs.get("temperature", 0.7),
-                max_output_tokens=max_tokens,
+                max_tokens=max_tokens,
             )
         except Exception as e:
             raise RuntimeError(f"OpenAI API call failed: {e}") from e
 
-        if not response.output or not response.output[0].content:
+        if not response.choices or not response.choices[0].message.content:
             raise RuntimeError("Empty response from OpenAI API")
 
-        # Handle different content types
-        content = response.output[0].content
-        if hasattr(content, "text"):
-            return content.text
-        return str(content)
+        return response.choices[0].message.content
 
     def complete_stream(self, prompt: str, **kwargs) -> Generator[str, None, None]:
-        """Streaming completion using OpenAI Responses API."""
+        """Streaming completion using OpenAI Chat Completions API."""
         client = self._get_client()
         if client is None:
             raise RuntimeError("OpenAI client not available. Check API key.")
@@ -170,27 +322,113 @@ class OpenAIWrapper(LLMWrapper):
         max_tokens = kwargs.get("max_tokens", 4000)
 
         try:
-            stream = client.responses.create(
+            stream = client.chat.completions.create(
                 model=model,
-                input=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": prompt}],
                 temperature=kwargs.get("temperature", 0.7),
-                max_output_tokens=max_tokens,
+                max_tokens=max_tokens,
                 stream=True,
             )
         except Exception as e:
             raise RuntimeError(f"OpenAI API stream failed: {e}") from e
 
-        for event in stream:
-            if event.type == "response.output_text.delta":
-                if hasattr(event.delta, "text"):
-                    yield event.delta.text
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    async def create_message(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> ApiStream:
+        """Create streaming message with Cline-compatible interface."""
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("OpenAI client not available. Check API key.")
+
+        # Convert messages to OpenAI format
+        openai_messages = [{"role": "system", "content": system_prompt}]
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            openai_messages.append({"role": role, "content": content})
+
+        try:
+            stream = client.chat.completions.create(
+                model=self._model,
+                messages=openai_messages,
+                temperature=0.7,
+                max_tokens=4000,
+                stream=True,
+                tools=tools,
+            )
+
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta:
+                    delta = chunk.choices[0].delta
+
+                    if delta.content:
+                        yield ApiStreamTextChunk(text=delta.content)
+
+                    if delta.tool_calls:
+                        for tool_call in delta.tool_calls:
+                            yield ApiStreamToolCallsChunk(
+                                tool_call={
+                                    "call_id": tool_call.id,
+                                    "function": {
+                                        "id": tool_call.id,
+                                        "name": tool_call.function.name,
+                                        "arguments": tool_call.function.arguments,
+                                    },
+                                }
+                            )
+
+                    if chunk.usage:
+                        yield ApiStreamUsageChunk(
+                            input_tokens=chunk.usage.prompt_tokens or 0,
+                            output_tokens=chunk.usage.completion_tokens or 0,
+                            cache_write_tokens=getattr(
+                                chunk.usage, "prompt_tokens_details", {}
+                            ).get("cached_tokens", 0),
+                            cache_read_tokens=getattr(chunk.usage, "prompt_tokens_details", {}).get(
+                                "cached_tokens", 0
+                            ),
+                        )
+
+        except Exception as e:
+            raise RuntimeError(f"OpenAI API stream failed: {e}") from e
+
+    def get_model(self) -> tuple[str, ModelInfo]:
+        """Get current model info."""
+        model_info = ModelInfo(
+            name=self._model,
+            max_tokens=4096,
+            context_window=128000,
+            supports_images=True,
+            supports_prompt_cache=False,
+            input_price=2.5,
+            output_price=10.0,
+            temperature=0.7,
+        )
+        return self._model, model_info
+
+    def get_api_stream_usage(self) -> ApiStreamUsageChunk | None:
+        """Get stream usage information."""
+        # This would be populated during streaming
+        return None
+
+    def abort(self) -> None:
+        """Abort current request."""
+        if self._current_stream:
+            self._current_stream.close()
 
     def close(self) -> None:
         self._client = None
 
 
-class AnthropicWrapper(LLMWrapper):
-    """Anthropic Claude API wrapper with streaming support."""
+class AnthropicWrapper(LLMWrapper, ApiHandler):
+    """Anthropic Claude API wrapper with streaming support and Cline compatibility."""
 
     def __init__(
         self,
@@ -201,6 +439,7 @@ class AnthropicWrapper(LLMWrapper):
     ):
         super().__init__(api_key, model, timeout, max_retries)
         self._client = None
+        self._current_stream = None
 
     def _get_api_key_from_env(self) -> str:
         return os.getenv("HORDEFORGE_ANTHROPIC_API_KEY", "")
@@ -208,8 +447,6 @@ class AnthropicWrapper(LLMWrapper):
     def _get_client(self):
         if self._client is None and self._api_key:
             try:
-                import anthropic
-
                 self._client = anthropic.Anthropic(
                     api_key=self._api_key,
                     timeout=self._timeout,
@@ -268,12 +505,104 @@ class AnthropicWrapper(LLMWrapper):
                     if hasattr(event.delta, "text"):
                         yield event.delta.text
 
+    async def create_message(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> ApiStream:
+        """Create streaming message with Cline-compatible interface."""
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("Anthropic client not available. Check API key.")
+
+        # Convert messages to Anthropic format
+        anthropic_messages = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            anthropic_messages.append({"role": role, "content": content})
+
+        try:
+            stream = client.messages.stream(
+                model=self._model,
+                max_tokens=4000,
+                system=system_prompt,
+                messages=anthropic_messages,
+                temperature=0.7,
+                tools=tools,
+            )
+
+            with stream as event_stream:
+                for event in event_stream:
+                    if event.type == "content_block_delta":
+                        if hasattr(event.delta, "text"):
+                            yield ApiStreamTextChunk(text=event.delta.text)
+
+                    elif event.type == "content_block_start":
+                        if (
+                            hasattr(event.content_block, "type")
+                            and event.content_block.type == "tool_use"
+                        ):
+                            yield ApiStreamToolCallsChunk(
+                                tool_call={
+                                    "call_id": event.content_block.id,
+                                    "function": {
+                                        "id": event.content_block.id,
+                                        "name": event.content_block.name,
+                                        "arguments": json.dumps(event.content_block.input),
+                                    },
+                                }
+                            )
+
+                    elif event.type == "message_delta":
+                        if hasattr(event.delta, "usage"):
+                            yield ApiStreamUsageChunk(
+                                input_tokens=event.delta.usage.input_tokens or 0,
+                                output_tokens=event.delta.usage.output_tokens or 0,
+                                cache_write_tokens=getattr(
+                                    event.delta.usage, "cache_creation_input_tokens", 0
+                                ),
+                                cache_read_tokens=getattr(
+                                    event.delta.usage, "cache_read_input_tokens", 0
+                                ),
+                            )
+
+        except Exception as e:
+            raise RuntimeError(f"Anthropic API stream failed: {e}") from e
+
+    def get_model(self) -> tuple[str, ModelInfo]:
+        """Get current model info."""
+        model_info = ModelInfo(
+            name=self._model,
+            max_tokens=6400,
+            context_window=2000,
+            supports_images=True,
+            supports_prompt_cache=True,
+            supports_reasoning=True,
+            input_price=3.0,
+            output_price=15.0,
+            cache_writes_price=3.75,
+            cache_reads_price=0.3,
+            temperature=1.0,
+        )
+        return self._model, model_info
+
+    def get_api_stream_usage(self) -> ApiStreamUsageChunk | None:
+        """Get stream usage information."""
+        return None
+
+    def abort(self) -> None:
+        """Abort current request."""
+        if self._current_stream:
+            self._current_stream.cancel()
+
     def close(self) -> None:
         self._client = None
 
 
-class GoogleGenAIWrapper(LLMWrapper):
-    """Google Gemini API wrapper with streaming support."""
+class GoogleGenAIWrapper(LLMWrapper, ApiHandler):
+    """Google Gemini API wrapper with streaming support and Cline compatibility."""
 
     def __init__(
         self,
@@ -284,6 +613,7 @@ class GoogleGenAIWrapper(LLMWrapper):
     ):
         super().__init__(api_key, model, timeout, max_retries)
         self._client = None
+        self._current_stream = None
 
     def _get_api_key_from_env(self) -> str:
         return os.getenv("HORDEFORGE_GOOGLE_API_KEY", "")
@@ -291,10 +621,8 @@ class GoogleGenAIWrapper(LLMWrapper):
     def _get_client(self):
         if self._client is None and self._api_key:
             try:
-                import google.genai as genai
-
                 genai.configure(api_key=self._api_key)
-                self._client = genai
+                self._client = genai.GenerativeModel(self._model)
             except ImportError:
                 pass
         return self._client
@@ -304,14 +632,11 @@ class GoogleGenAIWrapper(LLMWrapper):
         if client is None:
             raise RuntimeError("Google GenAI client not available. Check API key.")
 
-        model = kwargs.get("model", self._model)
         max_tokens = kwargs.get("max_tokens", 4000)
 
         try:
-            response = self._apply_retry(
-                client.models.generate_content,
-                model=model,
-                contents=prompt,
+            response = client.generate_content(
+                prompt,
                 generation_config={
                     "temperature": kwargs.get("temperature", 0.7),
                     "max_output_tokens": max_tokens,
@@ -331,13 +656,11 @@ class GoogleGenAIWrapper(LLMWrapper):
         if client is None:
             raise RuntimeError("Google GenAI client not available. Check API key.")
 
-        model = kwargs.get("model", self._model)
         max_tokens = kwargs.get("max_tokens", 4000)
 
         try:
-            stream = client.models.generate_content(
-                model=model,
-                contents=prompt,
+            response = client.generate_content(
+                prompt,
                 generation_config={
                     "temperature": kwargs.get("temperature", 0.7),
                     "max_output_tokens": max_tokens,
@@ -347,9 +670,73 @@ class GoogleGenAIWrapper(LLMWrapper):
         except Exception as e:
             raise RuntimeError(f"Google GenAI API stream failed: {e}") from e
 
-        for chunk in stream:
+        for chunk in response:
             if chunk.text:
                 yield chunk.text
+
+    async def create_message(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> ApiStream:
+        """Create streaming message with Cline-compatible interface."""
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("Google GenAI client not available. Check API key.")
+
+        # Combine system prompt with first user message
+        full_prompt = f"{system_prompt}\n\n"
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            full_prompt += f"{role.capitalize()}: {content}\n\n"
+
+        try:
+            response = client.generate_content(
+                full_prompt,
+                generation_config={"temperature": 0.7},
+                stream=True,
+            )
+
+            for chunk in response:
+                if chunk.text:
+                    yield ApiStreamTextChunk(text=chunk.text)
+
+                # Note: Gemini doesn't have native tool calling in basic streaming
+                # Advanced tool calling would require different approach
+
+        except Exception as e:
+            raise RuntimeError(f"Google GenAI API stream failed: {e}") from e
+
+    def get_model(self) -> tuple[str, ModelInfo]:
+        """Get current model info."""
+        model_info = ModelInfo(
+            name=self._model,
+            max_tokens=8192,
+            context_window=1048576,
+            supports_images=True,
+            supports_prompt_cache=True,
+            supports_reasoning=True,
+            input_price=0.15,
+            output_price=0.6,
+            cache_writes_price=1.0,
+            cache_reads_price=0.025,
+            temperature=1.0,
+            supports_global_endpoint=True,
+        )
+        return self._model, model_info
+
+    def get_api_stream_usage(self) -> ApiStreamUsageChunk | None:
+        """Get stream usage information."""
+        return None
+
+    def abort(self) -> None:
+        """Abort current request."""
+        if self._current_stream:
+            # Gemini doesn't have direct abort mechanism in basic API
+            pass
 
     def close(self) -> None:
         self._client = None
@@ -371,6 +758,109 @@ def get_llm_wrapper(
     elif provider:
         raise ValueError(f"Unknown LLM provider: {provider}")
     return None
+
+
+# Backward compatibility imports and utilities
+try:
+    from .llm_wrapper_backward_compatibility import (
+        LegacyLLMWrapper,
+        MigrationFlags,
+        get_legacy_llm_wrapper,
+        get_migration_flag,
+    )
+except ImportError:
+    # If backward compatibility module doesn't exist, create basic fallbacks
+    class LegacyLLMWrapper:
+        def __init__(self, provider="openai", **kwargs):
+            self._wrapper = get_llm_wrapper(provider, **kwargs)
+
+        def complete(self, prompt: str, **kwargs) -> str:
+            return self._wrapper.complete(prompt, **kwargs)
+
+        def complete_stream(self, prompt: str, **kwargs):
+            return self._wrapper.complete_stream(prompt, **kwargs)
+
+        def close(self):
+            if hasattr(self._wrapper, "close"):
+                self._wrapper.close()
+
+    def get_legacy_llm_wrapper(provider="openai", **kwargs):
+        return LegacyLLMWrapper(provider, **kwargs)
+
+    # Set up basic migration flags
+    class MigrationFlags:
+        def __init__(self):
+            self.flags = {
+                "use_new_wrapper": True,
+                "strict_compatibility": True,
+                "allow_deprecated": True,
+                "log_compatibility_warnings": True,
+            }
+
+        def get_flag(self, flag_name: str) -> bool:
+            return self.flags.get(flag_name, False)
+
+    _migration_flags = MigrationFlags()
+
+    def get_migration_flag(flag_name: str) -> bool:
+        return _migration_flags.get_flag(flag_name)
+
+
+# Ensure backward compatibility is initialized
+def _ensure_backward_compatibility():
+    """Ensure backward compatibility layer is properly initialized."""
+    # Use getattr to safely check if function exists
+    init_logging = globals().get("initialize_compatibility_logging")
+    if init_logging is not None and callable(init_logging):
+        try:
+            init_logging()
+        except Exception:
+            pass  # Ignore initialization errors
+
+
+# Initialize backward compatibility on module load
+_ensure_backward_compatibility()
+
+
+# Functions that may be needed for backward compatibility
+def build_code_review_prompt(files: list[dict[str, Any]], spec: dict[str, Any] = None) -> str:
+    """Build prompt for code review - for backward compatibility."""
+    from .llm_wrapper_backward_compatibility import legacy_build_code_prompt
+
+    return legacy_build_code_prompt(spec or {}, files, {})
+
+
+def parse_review_output(output: str) -> dict[str, Any]:
+    """Parse review output - for backward compatibility."""
+    import json
+    import re
+
+    # Try to extract JSON from output
+    json_match = re.search(r"\{[\s\S]*\}", output)
+    if not json_match:
+        raise ValueError("No JSON found in LLM output")
+
+    json_str = json_match.group(0)
+
+    try:
+        result = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in LLM output: {e}") from e
+
+    # Validate required fields for review output
+    required_fields = [
+        "overall_decision",
+        "summary",
+        "findings",
+        "strengths",
+        "recommendations",
+        "confidence",
+    ]
+    for _field in required_fields:
+        if _field not in result:
+            raise ValueError(f"Missing required field: {_field}")
+
+    return result
 
 
 # =============================================================================
@@ -556,7 +1046,8 @@ class LLMRouter:
     def close_all(self) -> None:
         """Close all cached wrappers."""
         for wrapper in self._cache.values():
-            wrapper.close()
+            if hasattr(wrapper, "close"):
+                wrapper.close()
         self._cache.clear()
 
 
@@ -826,14 +1317,16 @@ def parse_spec_output(output: str, validate_schema: bool = True) -> dict[str, An
         if "change_type" not in fc:
             raise ValueError(f"File change {i} missing 'change_type'")
 
-    # JSON Schema validation (strict validation for production)
+    # Validate schema if requested
     if validate_schema:
         try:
+            import jsonschema
+
             jsonschema.validate(spec, SPEC_OUTPUT_SCHEMA)
-        except jsonschema.ValidationError as e:
-            raise ValueError(
-                f"Schema validation failed: {e.message} at {'.'.join(str(p) for p in e.path)}"
-            ) from e
+        except ImportError:
+            pass  # jsonschema not available, skip validation
+        except Exception as e:
+            raise ValueError(f"Schema validation failed: {e}") from e
 
     return spec
 

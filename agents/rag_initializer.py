@@ -1,7 +1,9 @@
 """
 RAG Initializer Agent — builds vector + keyword index from repository.
 """
+
 from __future__ import annotations
+
 import logging
 import subprocess
 import time
@@ -22,14 +24,16 @@ from rag.vector_store import QDRANT_HOST, QDRANT_PORT, QdrantStore
 
 try:
     from qdrant_client import AsyncQdrantClient
+
     from rag.ingestion import IngestionPipeline
+
     ASYNC_INGESTION_AVAILABLE = True
 except ImportError:
     ASYNC_INGESTION_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = {.py, .md, .yaml...}
+SUPPORTED_EXTENSIONS = {".py"}
 
 
 def ensure_repo_local(repo_path: str) -> Path:
@@ -55,7 +59,7 @@ def ensure_repo_local(repo_path: str) -> Path:
 def extract_and_index_repository_async(
     repo_path: Path,
     collection_name: str = "repo_chunks",
-    batch_size: int = 512,      # 🔥 Оптимально для баланса скорости/памяти
+    batch_size: int = 256,  # 🔥 Оптимально для баланса скорости/памяти
     num_workers: int = 8,
 ):
     vector_store = None
@@ -91,8 +95,7 @@ def extract_and_index_repository_async(
         symbol_metadata = []
 
         files = [
-            f for f in repo_path.rglob("*")
-            if f.is_file() and f.suffix in SUPPORTED_EXTENSIONS
+            f for f in repo_path.rglob("*") if f.is_file() and f.suffix in SUPPORTED_EXTENSIONS
         ]
 
         if not files:
@@ -103,8 +106,8 @@ def extract_and_index_repository_async(
 
         for idx, file_path in enumerate(files):
             if idx % 10 == 0:
-                logger.debug(f"Processing file {idx+1}/{len(files)}: {file_path}")
-                
+                logger.debug(f"Processing file {idx + 1}/{len(files)}: {file_path}")
+
             try:
                 if file_path.suffix != ".py":
                     continue
@@ -115,7 +118,7 @@ def extract_and_index_repository_async(
                     # 🔥 Фильтруем пустые/бесполезные символы
                     if not symbol.name or symbol.name.startswith("_"):
                         continue
-                        
+
                     if symbol.type == "class":
                         content = f"class {symbol.name}: {symbol.docstring or ''}"
                     elif symbol.type in {"function", "method"}:
@@ -129,16 +132,18 @@ def extract_and_index_repository_async(
                         continue
 
                     texts_to_embed.append(content)
-                    symbol_metadata.append({
-                        "file_path": file_path.as_posix(),
-                        "symbol_name": symbol.name,
-                        "symbol_type": symbol.type,
-                        "line_number": symbol.line_number,
-                        "docstring": symbol.docstring,
-                        "parameters": symbol.parameters,
-                        "class_name": symbol.class_name,
-                        "is_async": symbol.is_async,
-                    })
+                    symbol_metadata.append(
+                        {
+                            "file_path": file_path.as_posix(),
+                            "symbol_name": symbol.name,
+                            "symbol_type": symbol.type,
+                            "line_number": symbol.line_number,
+                            "docstring": symbol.docstring,
+                            "parameters": symbol.parameters,
+                            "class_name": symbol.class_name,
+                            "is_async": symbol.is_async,
+                        }
+                    )
 
                     if keyword_index is not None:
                         keyword_index.add_document(
@@ -172,6 +177,8 @@ def extract_and_index_repository_async(
                 async_client = AsyncQdrantClient(
                     host=QDRANT_HOST,
                     port=QDRANT_PORT,
+                    prefer_grpc=True,
+                    timeout=15,
                     check_compatibility=False,
                 )
 
@@ -192,7 +199,7 @@ def extract_and_index_repository_async(
                     metadata_list=symbol_metadata,
                 )
                 ingest_time = time.time() - ingest_start
-                
+
                 logger.info(f"Ingestion pipeline completed in {ingest_time:.1f}s: {result}")
 
                 logger.info(
@@ -224,9 +231,13 @@ def extract_and_index_repository_async(
                         }
                         vector_store.add_point(collection_name, point)
                         if i % 100 == 0:
-                            logger.info(f"Fallback: embedded {i+1}/{len(texts_to_embed)}")
+                            logger.info(f"Fallback: embedded {i + 1}/{len(texts_to_embed)}")
                     except Exception as emb_err:
-                        symbol_name = symbol_metadata[i].get("symbol_name") if i < len(symbol_metadata) else "unknown"
+                        symbol_name = (
+                            symbol_metadata[i].get("symbol_name")
+                            if i < len(symbol_metadata)
+                            else "unknown"
+                        )
                         logger.debug(f"Failed to embed {symbol_name}: {emb_err}")
 
                 vector_store.close(collection_name)

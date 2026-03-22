@@ -51,7 +51,7 @@ def test_contract_registry_detects_duplicate_in_same_directory():
     возникает ошибка дублирования.
     """
     # Создаем временную директорию для тестирования
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with tempfile.TemporaryDirectory():
         # Создаем два файла с одинаковым именем в одной директории
         # На самом деле, это невозможно в одной директории, поэтому мы проверим
         # ситуацию, когда register вызывается дважды с одинаковым именем
