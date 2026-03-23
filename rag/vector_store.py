@@ -4,7 +4,7 @@ import time
 
 from fastembed import TextEmbedding
 
-from rag.config import get_embedding_model
+from rag.config import get_embedding_model, get_vector_store_mode, get_qdrant_host, get_qdrant_port
 from qdrant_client import QdrantClient, models
 
 logger = logging.getLogger(__name__)
@@ -14,8 +14,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("qdrant_client").setLevel(logging.WARNING)
 
 # Use QDRANT_HOST env var, fallback to "qdrant" for Docker, "localhost" for local
-QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
-QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
+QDRANT_HOST = get_qdrant_host()
+QDRANT_PORT = get_qdrant_port()
 DEFAULT_COLLECTION_NAME = "repo_chunks"
 VECTOR_SIZE = 384  # Default size for FastEmbed models
 
@@ -33,6 +33,7 @@ class QdrantStore:
         port: int = QDRANT_PORT,
         buffer_limit: int = 256,
         check_compatibility: bool = False,  # 🔥 Отключаем проверку версии
+        mode: str = None,  # Can be 'local', 'host', or 'auto'
     ):
         """
         Initialize the QdrantStore with connection parameters.
@@ -42,14 +43,60 @@ class QdrantStore:
             port: Qdrant server port
             buffer_limit: Number of points to buffer before auto-flush (default 256)
             check_compatibility: Skip version compatibility check (for mismatched versions)
+            mode: Vector store mode ('local', 'host', or 'auto'). If None, uses config value.
         """
+        self.mode = mode or get_vector_store_mode()
         self.host = host
         self.port = port
-        self.client = QdrantClient(
-            host=host,
-            port=port,
-            check_compatibility=check_compatibility,  # 🔥 Критично для старых серверов
-        )
+        
+        # Determine if we should use in-memory mode based on the mode setting
+        if self.mode == "local":
+            # Use in-memory storage
+            self.client = QdrantClient(":memory:", check_compatibility=check_compatibility)
+        elif self.mode == "host":
+            # Use host-based storage, but check if it's available
+            try:
+                self.client = QdrantClient(
+                    host=host,
+                    port=port,
+                    check_compatibility=check_compatibility,  # 🔥 Критично для старых серверов
+                )
+                # Test connection
+                self.client.get_collections()
+            except Exception as e:
+                logger.warning(f"Host Qdrant unavailable: {e}. Falling back to local mode.")
+                self.client = QdrantClient(":memory:", check_compatibility=check_compatibility)
+                self.mode = "local"
+        elif self.mode == "auto":
+            # Try host mode first, fall back to local if unavailable
+            try:
+                self.client = QdrantClient(
+                    host=host,
+                    port=port,
+                    check_compatibility=check_compatibility,  # 🔥 Критично для старых серверов
+                )
+                # Test connection
+                self.client.get_collections()
+            except Exception as e:
+                logger.info(f"Auto mode: Host Qdrant unavailable: {e}. Using local mode.")
+                self.client = QdrantClient(":memory:", check_compatibility=check_compatibility)
+                self.mode = "local"
+        else:
+            # Default to auto mode if invalid mode provided
+            logger.warning(f"Invalid mode '{self.mode}', defaulting to 'auto' mode.")
+            try:
+                self.client = QdrantClient(
+                    host=host,
+                    port=port,
+                    check_compatibility=check_compatibility,  # 🔥 Критично для старых серверов
+                )
+                # Test connection
+                self.client.get_collections()
+            except Exception as e:
+                logger.info(f"Auto mode: Host Qdrant unavailable: {e}. Using local mode.")
+                self.client = QdrantClient(":memory:", check_compatibility=check_compatibility)
+                self.mode = "local"
+                
         self.embedder = TextEmbedding(model_name=get_embedding_model())
         self._buffer: list[dict] = []
         self._buffer_limit = buffer_limit

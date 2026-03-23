@@ -111,6 +111,18 @@ HordeForge — оркестратор агентных pipeline-процессо
 - `rag/retriever.py` — Context retrieval
 - `rag/embeddings.py` — Embeddings provider abstraction
 - `rag/sources/` — Various data sources
+- `rag/config.py` — Configuration for vector store modes and embedding models
+- `rag/vector_store.py` — Qdrant vector store wrapper with local/host/auto mode support
+- `rag/ingestion.py` — High-performance async ingestion pipeline
+- `rag/keyword_index.py` — Keyword-based search index
+- `rag/hybrid_retriever.py` — Hybrid search combining vector and keyword search
+- `rag/symbol_extractor.py` — Extracts symbols from code for indexing
+- `rag/memory_store.py` — Memory-based storage for temporary data
+- `rag/context_builder.py` — Builds context from retrieved documents
+- `rag/context_compressor.py` — Compresses context to fit model limits
+- `rag/deduplicator.py` — Deduplicates retrieved documents
+- `rag/memory_collections.py` — Manages memory collections for RAG
+- `rag/memory_retriever.py` — Retrieves from memory collections
 
 **Contracts Layer:**
 - `contracts/schemas/` — JSON schemas for agent contracts

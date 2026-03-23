@@ -20,7 +20,8 @@ except ImportError:
 
 from rag.keyword_index import KeywordIndex
 from rag.symbol_extractor import SymbolExtractor
-from rag.vector_store import QDRANT_HOST, QDRANT_PORT, QdrantStore
+from rag.vector_store import QdrantStore
+from rag.config import get_qdrant_host, get_qdrant_port
 
 try:
     from qdrant_client import AsyncQdrantClient
@@ -59,7 +60,7 @@ def ensure_repo_local(repo_path: str) -> Path:
 def extract_and_index_repository_async(
     repo_path: Path,
     collection_name: str = "repo_chunks",
-    batch_size: int = 256,  # 🔥 Оптимально для баланса скорости/памяти
+    batch_size: int = 1024,  # 🔥 Оптимально для баланса скорости/памяти
     num_workers: int = 8,
 ):
     vector_store = None
@@ -175,8 +176,8 @@ def extract_and_index_repository_async(
                 )
 
                 async_client = AsyncQdrantClient(
-                    host=QDRANT_HOST,
-                    port=QDRANT_PORT,
+                    host=get_qdrant_host(),
+                    port=get_qdrant_port(),
                     prefer_grpc=True,
                     timeout=15,
                     check_compatibility=False,

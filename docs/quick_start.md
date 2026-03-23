@@ -139,6 +139,17 @@ HORDEFORGE_QUEUE_BACKEND=redis
 HORDEFORGE_REDIS_URL=redis://localhost:6379/0
 ```
 
+### RAG (векторное хранилище)
+
+```bash
+# Режим работы векторного хранилища: local, host или auto (по умолчанию)
+HORDEFORGE_VECTOR_STORE_MODE=auto
+
+# Хост и порт для внешнего Qdrant (используется в режимах host и auto)
+QDRANT_HOST=qdrant
+QDRANT_PORT=6333
+```
+
 ### Метрики
 
 ```bash

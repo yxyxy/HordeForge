@@ -54,6 +54,9 @@ docker compose up --build
 - `HORDEFORGE_STATUS_TIMEOUT_SECONDS`
 - `HORDEFORGE_HEALTH_TIMEOUT_SECONDS`
 - `HORDEFORGE_MAX_PARALLEL_WORKERS`
+- `HORDEFORGE_VECTOR_STORE_MODE` - режим работы векторного хранилища (local, host, auto)
+- `QDRANT_HOST` - хост для подключения к Qdrant
+- `QDRANT_PORT` - порт для подключения к Qdrant
 
 ### 5.1 Аутентификация и авторизация (JWT/RBAC)
 

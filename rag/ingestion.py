@@ -21,7 +21,7 @@ from uuid import uuid4
 from fastembed import TextEmbedding
 from qdrant_client import AsyncQdrantClient, models
 
-from rag.config import get_embedding_model
+from rag.config import get_embedding_model, get_vector_store_mode, get_qdrant_host, get_qdrant_port
 
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -39,10 +39,10 @@ class IngestionPipeline:
         self,
         client: AsyncQdrantClient,
         embedder: TextEmbedding | None = None,
-        batch_size: int = 512,  # ← УВЕЛИЧЕНО: 256 → 512 (лучше для fastembed)
-        num_workers: int = 4,  # ← УМЕНЬШЕНО: 8 → 4 (меньше contention)
-        queue_size: int = 200,  # ← УВЕЛИЧЕНО: 50 → 200 (меньше backpressure)
-        max_inflight: int = 8,  # ← УМЕНЬШЕНО: 16 → 8
+        batch_size: int = 1024,
+        num_workers: int = 4,
+        queue_size: int = 200,
+        max_inflight: int = 8,
         check_compatibility: bool = False,
     ):
         self.client = client
