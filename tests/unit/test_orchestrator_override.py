@@ -150,7 +150,7 @@ steps:
     try:
         result = engine.run(
             str(pipeline_path),
-            {"repo_url": "https://github.com/acme/hordeforge.git"},
+            {"repo_url": "https://github.com/yxyxy/hordeforge.git"},
             run_id="run-override-resume-1",
             metadata={"correlation_id": "corr-override-resume-1"},
             resume_run_state=resume_state,

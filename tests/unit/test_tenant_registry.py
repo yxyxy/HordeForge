@@ -22,7 +22,7 @@ def test_normalize_repository_full_name_requires_owner_repo_format():
 def test_extract_repository_full_name_from_inputs():
     assert (
         extract_repository_full_name(
-            inputs={"repo_url": "https://github.com/acme/hordeforge.git"},
+            inputs={"repo_url": "https://github.com/yxyxy/hordeforge.git"},
             explicit=None,
         )
         == "acme/hordeforge"

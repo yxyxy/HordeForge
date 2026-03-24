@@ -392,10 +392,30 @@ class SpecificationWriter(BaseAgent):
         # Extract issue data from context
         issue = context.get("issue", {})
         feature_description = issue.get("title", "") or context.get("feature_description", "")
+
+        # Also check for dod_extractor output
+        if not feature_description:
+            dod_result = context.get("dod_extractor", {})
+            if isinstance(dod_result, dict):
+                artifacts = dod_result.get("artifacts", [])
+                for artifact in artifacts:
+                    if artifact.get("type") == "dod":
+                        dod_content = artifact.get("content", {})
+                        # Try to get feature description from DoD
+                        feature_description = dod_content.get("title", "") or dod_content.get(
+                            "feature_description", ""
+                        )
+                        # If still empty, try to get from first acceptance criteria
+                        if not feature_description:
+                            acceptance_criteria = dod_content.get("acceptance_criteria", [])
+                            if acceptance_criteria and isinstance(acceptance_criteria[0], str):
+                                feature_description = acceptance_criteria[0]
+                        break
+
         if not feature_description:
             return build_agent_result(
                 status="FAILURE",
-                artifact_type="specification",
+                artifact_type="spec",
                 artifact_content={},
                 reason="No feature description provided in context",
                 confidence=0.0,
@@ -513,11 +533,26 @@ class SpecificationWriter(BaseAgent):
             result_content.setdefault("notes", [])
             result_content["notes"].append(f"llm_error={llm_error[:120]}")
 
+        # Add rules to requirements and notes if provided in context
+        rules = context.get("rules", {})
+        if rules:
+            # Add rule sources to requirements
+            rule_sources = rules.get("sources", [])
+            if rule_sources:
+                result_content.setdefault("requirements", [])
+                result_content["requirements"].extend(rule_sources)
+
+            # Add rules version to notes
+            rules_version = rules.get("version", "")
+            if rules_version:
+                result_content.setdefault("notes", [])
+                result_content["notes"].append(f"rules_version={rules_version}")
+
         # Create the result in the expected format
         result = {
             "status": "SUCCESS",
-            "artifact_type": "specification",
-            "artifact_content": result_content,
+            "artifact_type": "spec",
+            "artifacts": [{"type": "spec", "content": result_content}],
             "reason": reason,
             "confidence": confidence,
             "logs": [

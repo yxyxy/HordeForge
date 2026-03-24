@@ -85,15 +85,20 @@ class IssueCloser(BaseAgent):
         )
 
         # Extract CI status from context - check direct key first, then use get_artifact_from_context
-        ci_status = (
-            context.get("ci_status")
-            or get_artifact_from_context(
-                context,
-                "ci_status",
-                preferred_steps=["ci_verification", "ci_monitoring"],
+        # Also check for ci_verification which may contain status directly
+        ci_verification = context.get("ci_verification", {})
+        if isinstance(ci_verification, dict):
+            ci_status = ci_verification.get("status", "unknown")
+        else:
+            ci_status = (
+                context.get("ci_status")
+                or get_artifact_from_context(
+                    context,
+                    "ci_status",
+                    preferred_steps=["ci_verification", "ci_monitoring"],
+                )
+                or "unknown"
             )
-            or "unknown"
-        )
 
         # Get issue ID from context
         issue_id = context.get("issue_id", context.get("current_issue_id", 0))
@@ -113,6 +118,7 @@ class IssueCloser(BaseAgent):
         # Prepare result
         result = {
             "issue_id": close_result["issue_id"],
+            "close_issue": close_result["status"] == "closed",
             "final_status": close_result["status"],
             "dod_result": dod_result,
             "ci_result": ci_result,
@@ -121,7 +127,7 @@ class IssueCloser(BaseAgent):
 
         return build_agent_result(
             status=agent_status,
-            artifact_type="issue_closure_result",
+            artifact_type="close_status",
             artifact_content=result,
             reason=f"Issue closure decision: {close_result['reason']}",
             confidence=0.95 if close_result["status"] == "closed" else 0.75,

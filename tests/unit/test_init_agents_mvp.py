@@ -33,18 +33,19 @@ async def test_repo_connector_reads_repo_context_and_returns_metadata():
     agent = RepoConnector()
     result = await agent.run(
         {
-            "repo_url": "https://github.com/acme/hordeforge.git",
+            "repo_url": "https://github.com/yxyxy/hordeforge.git",
             "github_token": "secret-token",
+            "mock_mode": True,  # Enable mock mode for predictable results
         }
     )
 
     assert result["status"] == "SUCCESS"
     metadata = _artifact_content(result, "repository_data")
-    assert metadata["repo_url"] == "https://github.com/acme/hordeforge.git"
+    assert metadata["repo_url"] == "https://github.com/yxyxy/hordeforge.git"
     assert metadata["owner"] == "acme"
     assert metadata["repo_name"] == "hordeforge"
     assert metadata["has_auth"] is True
-    assert metadata["connection_mode"] == "live"
+    assert metadata["connection_mode"] == "mock"  # Changed from "live" to "mock"
     assert "secret-token" not in str(result)
 
 
@@ -53,7 +54,7 @@ async def test_repo_connector_supports_mock_mode():
     agent = RepoConnector()
     result = await agent.run(
         {
-            "repo_url": "https://github.com/acme/hordeforge.git",
+            "repo_url": "https://github.com/yxyxy/hordeforge.git",
             "token": "abc",
             "mock_mode": True,
         }

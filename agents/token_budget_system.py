@@ -178,6 +178,35 @@ class BudgetLimits:
     totalLimit: float | None = None  # Total lifetime limit
     requestLimit: int | None = None  # Per-request token limit
 
+    # Support both snake_case and camelCase initialization
+    def __init__(
+        self,
+        dailyLimit: float | None = None,
+        monthlyLimit: float | None = None,
+        sessionLimit: float | None = None,
+        reasoningBudgetTokens: int | None = None,
+        totalLimit: float | None = None,
+        requestLimit: int | None = None,
+        # Snake case variants for backward compatibility
+        daily_limit: float | None = None,
+        monthly_limit: float | None = None,
+        session_limit: float | None = None,
+        reasoning_budget_tokens: int | None = None,
+        total_limit: float | None = None,
+        request_limit: int | None = None,
+    ):
+        # Prefer snake_case if provided (for backward compatibility)
+        self.dailyLimit = daily_limit if daily_limit is not None else dailyLimit
+        self.monthlyLimit = monthly_limit if monthly_limit is not None else monthlyLimit
+        self.sessionLimit = session_limit if session_limit is not None else sessionLimit
+        self.reasoningBudgetTokens = (
+            reasoning_budget_tokens
+            if reasoning_budget_tokens is not None
+            else reasoningBudgetTokens
+        )
+        self.totalLimit = total_limit if total_limit is not None else totalLimit
+        self.requestLimit = request_limit if request_limit is not None else requestLimit
+
     # Backward compatibility properties
     @property
     def daily_limit(self) -> float | None:

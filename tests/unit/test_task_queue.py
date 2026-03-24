@@ -10,7 +10,7 @@ def test_in_memory_task_queue_roundtrip_enqueue_claim_and_complete():
     queued = queue.enqueue(
         QueueTaskRequest(
             pipeline_name="init_pipeline",
-            inputs={"repo_url": "https://github.com/acme/hordeforge.git"},
+            inputs={"repo_url": "https://github.com/yxyxy/hordeforge.git"},
             source="test",
             correlation_id="corr-queue-1",
             idempotency_key="queue-key-1",

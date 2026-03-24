@@ -228,13 +228,13 @@ def test_parse_link_header():
         200,
         json_body={"items": []},
         headers={
-            "Link": '<https://api.github.com/repos/acme/hordeforge/issues?page=2>; rel="next", <https://api.github.com/repos/acme/hordeforge/issues?page=1>; rel="first"'
+            "Link": '<https://api.github.com/repos/yxyxy/hordeforge/issues?page=2>; rel="next", <https://api.github.com/repos/yxyxy/hordeforge/issues?page=1>; rel="first"'
         },
     )
 
     links = client._parse_link_header(response)
-    assert links["next"] == "https://api.github.com/repos/acme/hordeforge/issues?page=2"
-    assert links["first"] == "https://api.github.com/repos/acme/hordeforge/issues?page=1"
+    assert links["next"] == "https://api.github.com/repos/yxyxy/hordeforge/issues?page=2"
+    assert links["first"] == "https://api.github.com/repos/yxyxy/hordeforge/issues?page=1"
 
 
 def test_parse_link_header_empty():
@@ -254,7 +254,7 @@ def test_extract_page_info():
         200,
         json_body={"items": []},
         headers={
-            "Link": '<https://api.github.com/repos/acme/hordeforge/issues?page=2&per_page=50>; rel="next"',
+            "Link": '<https://api.github.com/repos/yxyxy/hordeforge/issues?page=2&per_page=50>; rel="next"',
             "X-Total-Count": "150",
         },
     )
@@ -276,7 +276,7 @@ def test_get_issues_with_pagination():
                 200,
                 json_body=[{"id": 1, "title": "Issue 1"}],
                 headers={
-                    "Link": '<https://api.github.com/repos/acme/hordeforge/issues?page=2&per_page=30>; rel="next"',
+                    "Link": '<https://api.github.com/repos/yxyxy/hordeforge/issues?page=2&per_page=30>; rel="next"',
                     "X-Total-Count": "60",
                 },
             ),
@@ -311,7 +311,7 @@ def test_list_pull_requests_with_pagination():
                 200,
                 json_body=[{"id": 1, "title": "PR 1"}],
                 headers={
-                    "Link": '<https://api.github.com/repos/acme/hordeforge/pulls?page=2&per_page=30>; rel="next"',
+                    "Link": '<https://api.github.com/repos/yxyxy/hordeforge/pulls?page=2&per_page=30>; rel="next"',
                 },
             ),
         ]
@@ -332,7 +332,7 @@ def test_get_commits_with_pagination():
                 200,
                 json_body=[{"sha": "abc123"}],
                 headers={
-                    "Link": '<https://api.github.com/repos/acme/hordeforge/commits?page=2&per_page=30>; rel="next"',
+                    "Link": '<https://api.github.com/repos/yxyxy/hordeforge/commits?page=2&per_page=30>; rel="next"',
                     "X-Total-Count": "100",
                 },
             ),

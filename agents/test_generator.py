@@ -476,7 +476,18 @@ class TestGenerator(BaseAgent):
                     response = llm.complete(prompt)
                     llm.close()
 
-                    llm_test_result = parse_test_generation_output(response)
+                    # Clean up the response to handle potential formatting issues
+                    cleaned_response = response.strip()
+
+                    # Try to extract JSON from the response if it contains extra text
+                    import re
+
+                    json_match = re.search(r"\{[\s\S]*\}", cleaned_response)
+                    if json_match:
+                        json_str = json_match.group(0)
+                        llm_test_result = parse_test_generation_output(json_str)
+                    else:
+                        llm_test_result = parse_test_generation_output(cleaned_response)
             except Exception as e:
                 llm_error = str(e)
 

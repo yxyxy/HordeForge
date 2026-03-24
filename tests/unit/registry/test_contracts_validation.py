@@ -40,6 +40,8 @@ def test_contract_registry_fails_on_invalid_schema():
     """
     Тест проверяет, что при загрузке некорректной JSON схемы возникает ошибка.
     """
+    from jsonschema.exceptions import ValidationError
+
     # Создаем временную директорию для тестирования
     with tempfile.TemporaryDirectory() as temp_dir:
         # Создаем файл с некорректной JSON схемой
@@ -60,7 +62,7 @@ def test_contract_registry_fails_on_invalid_schema():
         registry = ContractRegistry()
 
         # Проверяем, что возникает ошибка при загрузке некорректной схемы
-        with pytest.raises((ValueError, RuntimeError)):
+        with pytest.raises(ValidationError):
             registry.autoload_schemas(temp_dir)
 
 
@@ -91,6 +93,8 @@ def test_contract_registry_validates_schema_format():
     """
     Тест проверяет, что схема соответствует базовому формату JSON Schema.
     """
+    from jsonschema.exceptions import ValidationError
+
     # Создаем временную директорию для тестирования
     with tempfile.TemporaryDirectory() as temp_dir:
         # Создаем файл с JSON, который содержит недопустимое значение типа
@@ -109,5 +113,5 @@ def test_contract_registry_validates_schema_format():
         registry = ContractRegistry()
 
         # Проверяем, что возникает ошибка при загрузке некорректной схемы
-        with pytest.raises((ValueError, RuntimeError)):
+        with pytest.raises(ValidationError):
             registry.autoload_schemas(temp_dir)

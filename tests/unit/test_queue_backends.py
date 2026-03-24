@@ -14,8 +14,34 @@ def test_get_task_queue_backend_memory():
 
 def test_get_task_queue_backend_redis_not_installed():
     """Test Redis backend raises import error when redis not installed."""
-    with pytest.raises(ImportError, match="redis is required"):
-        get_task_queue_backend("redis", connection_url="redis://localhost:6379/0")
+    import sys
+
+    import scheduler.queue_backends as queue_backends
+
+    # Save original modules
+    original_redis = sys.modules.get("redis")
+    original_redis_connection_pool = sys.modules.get("redis.connection")
+
+    # Remove redis from modules to simulate not installed
+    if "redis" in sys.modules:
+        del sys.modules["redis"]
+    if "redis.connection" in sys.modules:
+        del sys.modules["redis.connection"]
+
+    # Also remove from queue_backends to force re-import
+    if hasattr(queue_backends, "RedisTaskQueue"):
+        # Force reimport by removing the reference
+        pass
+
+    try:
+        with pytest.raises(ImportError, match="redis is required"):
+            get_task_queue_backend("redis", connection_url="redis://localhost:6379/0")
+    finally:
+        # Restore original modules
+        if original_redis is not None:
+            sys.modules["redis"] = original_redis
+        if original_redis_connection_pool is not None:
+            sys.modules["redis.connection"] = original_redis_connection_pool
 
 
 def test_get_task_queue_backend_unknown():

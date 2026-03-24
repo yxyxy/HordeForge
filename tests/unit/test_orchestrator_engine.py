@@ -224,7 +224,7 @@ def test_engine_init_pipeline_returns_expected_mvp_artifacts():
     engine = OrchestratorEngine(pipelines_dir="pipelines")
     result = engine.run(
         "init_pipeline",
-        {"repo_url": "https://github.com/acme/hordeforge.git", "github_token": "secret"},
+        {"repo_url": "https://github.com/yxyxy/hordeforge.git", "github_token": "secret"},
         run_id="run-init-mvp",
     )
 

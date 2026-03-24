@@ -48,7 +48,7 @@ def test_init_pipeline_integration_runs_all_steps_and_returns_summary():
     result = engine.run(
         "init_pipeline",
         {
-            "repo_url": "https://github.com/acme/hordeforge.git",
+            "repo_url": "https://github.com/yxyxy/hordeforge.git",
             "github_token": "secret",
             "mock_mode": True,
         },
@@ -89,14 +89,28 @@ def test_feature_pipeline_integration_happy_path_runs_fix_loop_to_green():
 def test_feature_pipeline_integration_validation_failure_stops_execution():
     runtime_registry = _runtime_registry()
 
-    def agent_factory(agent_name: str) -> Any:
-        if agent_name == "specification_writer":
-            return InvalidSchemaAgent()
-        return runtime_registry.create(agent_name)
+    # Создаём обёртку, которая подменяет только specification_writer
+    class PartialOverrideRegistry:
+        def __init__(self, base_registry: RuntimeRegistryAdapter):
+            self._base = base_registry
+
+        def has(self, agent_name: str) -> bool:
+            return self._base.has(agent_name)
+
+        def create(self, agent_name: str) -> Any:
+            if agent_name == "specification_writer":
+                return InvalidSchemaAgent()
+            return self._base.create(agent_name)
+
+        def get(self, agent_name: str):
+            return self._base.get(agent_name)
 
     engine = OrchestratorEngine(
         pipelines_dir="pipelines",
-        step_executor=StepExecutor(agent_factory=agent_factory, strict_schema_validation=True),
+        step_executor=StepExecutor(
+            agent_registry=PartialOverrideRegistry(runtime_registry),
+            strict_schema_validation=True,
+        ),
     )
     result = engine.run(
         "feature_pipeline",
@@ -141,14 +155,25 @@ def test_ci_fix_pipeline_integration_full_flow_from_ci_failure_event():
 def test_ci_fix_pipeline_integration_close_status_branch_when_ci_stays_red():
     runtime_registry = _runtime_registry()
 
-    def agent_factory(agent_name: str) -> Any:
-        if agent_name == "test_runner":
-            return AlwaysRedTestRunner()
-        return runtime_registry.create(agent_name)
+    # Создаём обёртку, которая подменяет только test_runner
+    class PartialOverrideRegistry:
+        def __init__(self, base_registry: RuntimeRegistryAdapter):
+            self._base = base_registry
+
+        def has(self, agent_name: str) -> bool:
+            return self._base.has(agent_name)
+
+        def create(self, agent_name: str) -> Any:
+            if agent_name == "test_runner":
+                return AlwaysRedTestRunner()
+            return self._base.create(agent_name)
+
+        def get(self, agent_name: str):
+            return self._base.get(agent_name)
 
     engine = OrchestratorEngine(
         pipelines_dir="pipelines",
-        step_executor=StepExecutor(agent_factory=agent_factory),
+        step_executor=StepExecutor(agent_registry=PartialOverrideRegistry(runtime_registry)),
     )
     result = engine.run(
         "ci_fix_pipeline",

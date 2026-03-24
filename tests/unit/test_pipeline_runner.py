@@ -53,7 +53,7 @@ def test_pipeline_runner_logs_json_with_run_id_correlation_and_step(caplog):
     with caplog.at_level("INFO", logger="hordeforge.runner"):
         result = runner.run(
             "init_pipeline",
-            {"repo_url": "https://github.com/acme/hordeforge.git", "github_token": "token"},
+            {"repo_url": "https://github.com/yxyxy/hordeforge.git", "github_token": "token"},
             run_id="runner-log-1",
             correlation_id="runner-corr-1",
         )

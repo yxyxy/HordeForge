@@ -3,11 +3,13 @@
 """
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from orchestrator.engine import OrchestratorEngine
 from orchestrator.executor import StepExecutor
+from registry.runtime_adapter import RuntimeRegistryAdapter
 
 
 class CounterAgent:
@@ -78,6 +80,33 @@ class StateCheckingAgent:
         }
 
 
+def _create_test_registry(agents: dict[str, Any]) -> RuntimeRegistryAdapter:
+    """Создаёт тестовый реестр агентов для использования в тестах."""
+
+    class TestRegistry:
+        def __init__(self, agents_dict):
+            self._agents = agents_dict
+
+        def has(self, agent_name: str) -> bool:
+            return agent_name in self._agents
+
+        def create(self, agent_name: str) -> Any:
+            if agent_name not in self._agents:
+                raise KeyError(f"Agent '{agent_name}' not found")
+            return self._agents[agent_name]
+
+        def get(self, agent_name: str):
+            if agent_name not in self._agents:
+                raise KeyError(f"Agent '{agent_name}' not found")
+            # Возвращаем класс агента (сам класс, не экземпляр)
+            return type(self._agents[agent_name])
+
+        def metadata(self, agent_name: str):
+            return None
+
+    return RuntimeRegistryAdapter(TestRegistry(agents))
+
+
 def test_loop_handling_executes_conditional_loop_correctly():
     """Проверяет, что оркестратор корректно выполняет цикл с условием"""
     pipeline_path = Path("tests/unit/_tmp_conditional_loop_pipeline.yaml")
@@ -115,19 +144,20 @@ loops:
     counter_agent = CounterAgent(counter_key="counter")
     check_agent = StateCheckingAgent("counter", 3)  # После 3 итераций счетчик должен быть равен 3
 
-    def _agent_factory(agent_name: str):
-        if agent_name == "init_agent":
-            return init_agent
-        elif agent_name == "counter_agent":
-            return counter_agent
-        elif agent_name == "check_agent":
-            return check_agent
-        raise RuntimeError(f"unknown agent: {agent_name}")
+    agent_registry = _create_test_registry(
+        {
+            "init_agent": init_agent,
+            "counter_agent": counter_agent,
+            "check_agent": check_agent,
+        }
+    )
 
     try:
         engine = OrchestratorEngine(
             pipelines_dir="pipelines",
-            step_executor=StepExecutor(agent_factory=_agent_factory),
+            step_executor=StepExecutor(
+                agent_registry=agent_registry, strict_schema_validation=False
+            ),
             max_loop_iterations=10,  # Увеличим лимит для этого теста
         )
 
@@ -181,18 +211,20 @@ loops:
     init_agent = InitAgent()
     counter_agent = CounterAgent(counter_key="counter")
 
-    def _agent_factory(agent_name: str):
-        if agent_name == "init_agent":
-            return init_agent
-        elif agent_name == "counter_agent":
-            return counter_agent
-        raise RuntimeError(f"unknown agent: {agent_name}")
+    agent_registry = _create_test_registry(
+        {
+            "init_agent": init_agent,
+            "counter_agent": counter_agent,
+        }
+    )
 
     try:
         # Устанавливаем низкий лимит итераций для теста
         engine = OrchestratorEngine(
             pipelines_dir="pipelines",
-            step_executor=StepExecutor(agent_factory=_agent_factory),
+            step_executor=StepExecutor(
+                agent_registry=agent_registry, strict_schema_validation=False
+            ),
             max_loop_iterations=3,
         )
 
@@ -255,50 +287,51 @@ loops:
     # Проверяем, что оба счетчика достигли ожидаемых значений
     check_agent = StateCheckingAgent("final_check", "done")
 
-    def _agent_factory(agent_name: str):
-        if agent_name == "init_agent":
-            return init_agent
-        elif agent_name == "counter_a_agent":
-            return counter_a_agent
-        elif agent_name == "counter_b_agent":
-            return counter_b_agent
-        elif agent_name == "check_agent":
-            # Обновляем состояние, чтобы показать, что все циклы завершены
-            def run(context):
-                # Проверяем, что оба счетчика достигли ожидаемых значений
-                assert context.get("counter_a", 0) == 2, (
-                    f"Expected counter_a to be 2, got {context.get('counter_a', 0)}"
-                )
-                assert context.get("counter_b", 0) == 3, (
-                    f"Expected counter_b to be 3, got {context.get('counter_b', 0)}"
-                )
+    # Обновляем состояние, чтобы показать, что все циклы завершены
+    def check_agent_run(context):
+        # Проверяем, что оба счетчика достигли ожидаемых значений
+        assert context.get("counter_a", 0) == 2, (
+            f"Expected counter_a to be 2, got {context.get('counter_a', 0)}"
+        )
+        assert context.get("counter_b", 0) == 3, (
+            f"Expected counter_b to be 3, got {context.get('counter_b', 0)}"
+        )
 
-                return {
-                    "status": "SUCCESS",
-                    "artifacts": [
-                        {
-                            "type": "final_check",
-                            "content": {
-                                "counter_a": context.get("counter_a"),
-                                "counter_b": context.get("counter_b"),
-                            },
-                        }
-                    ],
-                    "decisions": [],
-                    "logs": [
-                        f"Final check: counter_a={context.get('counter_a')}, counter_b={context.get('counter_b')}"
-                    ],
-                    "next_actions": [],
+        return {
+            "status": "SUCCESS",
+            "artifacts": [
+                {
+                    "type": "final_check",
+                    "content": {
+                        "counter_a": context.get("counter_a"),
+                        "counter_b": context.get("counter_b"),
+                    },
                 }
+            ],
+            "decisions": [],
+            "logs": [
+                f"Final check: counter_a={context.get('counter_a')}, counter_b={context.get('counter_b')}"
+            ],
+            "next_actions": [],
+        }
 
-            check_agent.run = run
-            return check_agent
-        raise RuntimeError(f"unknown agent: {agent_name}")
+    check_agent.run = check_agent_run
+
+    agent_registry = _create_test_registry(
+        {
+            "init_agent": init_agent,
+            "counter_a_agent": counter_a_agent,
+            "counter_b_agent": counter_b_agent,
+            "check_agent": check_agent,
+        }
+    )
 
     try:
         engine = OrchestratorEngine(
             pipelines_dir="pipelines",
-            step_executor=StepExecutor(agent_factory=_agent_factory),
+            step_executor=StepExecutor(
+                agent_registry=agent_registry, strict_schema_validation=False
+            ),
             max_loop_iterations=10,
         )
 
@@ -375,7 +408,7 @@ loops:
     update_agent = UpdateAgent()
 
     # Проверяем, что итоговое значение продукта больше или равно 20
-    def _check_agent_run(context):
+    def check_agent_run(context):
         final_product = context.get("product", 0)
         # После цикла: 1 * 2 * 2 * 2 = 16, затем 16 * 2 = 32, но цикл остановится на 16
         # На самом деле: 1 -> 2 -> 4 -> 8 -> 16 -> (цикл останавливается, т.к. 16 < 20, но следующая итерация даст 32)
@@ -390,19 +423,22 @@ loops:
             "next_actions": [],
         }
 
-    def _agent_factory(agent_name: str):
-        if agent_name == "init_agent":
-            return init_agent
-        elif agent_name == "update_agent":
-            return update_agent
-        elif agent_name == "check_agent":
-            return type("CheckAgent", (), {"run": _check_agent_run})()
-        raise RuntimeError(f"unknown agent: {agent_name}")
+    check_agent = type("CheckAgent", (), {"run": check_agent_run})()
+
+    agent_registry = _create_test_registry(
+        {
+            "init_agent": init_agent,
+            "update_agent": update_agent,
+            "check_agent": check_agent,
+        }
+    )
 
     try:
         engine = OrchestratorEngine(
             pipelines_dir="pipelines",
-            step_executor=StepExecutor(agent_factory=_agent_factory),
+            step_executor=StepExecutor(
+                agent_registry=agent_registry, strict_schema_validation=False
+            ),
             max_loop_iterations=10,
         )
 
@@ -414,8 +450,7 @@ loops:
         # Проверяем, что итоговое значение продукта соответствует ожиданиям
         final_product = result["steps"]["check_result"]["artifacts"][0]["content"]["product"]
         # Последовательность: 1 -> 2 -> 4 -> 8 -> 16 -> 32 (цикл останавливается, потому что 32 >= 20 не удовлетворяет условию 32 < 20)
-        # Наоборот: 1 -> 2 (2<20) -> 4 (4<20) -> 8 (8<20) -> 16 (16<20) -> 32 (32>=20, цикл останавливается, но 32 уже записан)
-        # Нет, условие проверяется до выполнения шагов: 1 (1<20) -> выполнить -> 2 (2<20) -> выполнить -> 4 (4<20) -> ...
+        # Наоборот: 1 -> 2 (2<20) -> выполнить -> 4 (4<20) -> выполнить -> 8 (8<20) -> ...
         # 16 (16<20) -> выполнить -> 32, затем проверить условие снова: 32 < 20? Нет -> цикл завершен
         assert final_product == 32, f"Expected final product to be 32, got {final_product}"
 
@@ -462,7 +497,7 @@ loops:
     init_agent = InitAgent()
     counter_agent = CounterAgent(counter_key="counter")
 
-    def _check_agent_run(context):
+    def check_agent_run(context):
         final_counter = context.get("counter", 0)
         # Последовательность: 0 (0<=2) -> 1 (1<=2) -> 2 (2<=2) -> 3 (3<=2? Нет -> цикл останавливается)
         assert final_counter == 3, f"Expected counter to be 3, got {final_counter}"
@@ -475,19 +510,22 @@ loops:
             "next_actions": [],
         }
 
-    def _agent_factory(agent_name: str):
-        if agent_name == "init_agent":
-            return init_agent
-        elif agent_name == "counter_agent":
-            return counter_agent
-        elif agent_name == "check_agent":
-            return type("CheckAgent", (), {"run": _check_agent_run})()
-        raise RuntimeError(f"unknown agent: {agent_name}")
+    check_agent = type("CheckAgent", (), {"run": check_agent_run})()
+
+    agent_registry = _create_test_registry(
+        {
+            "init_agent": init_agent,
+            "counter_agent": counter_agent,
+            "check_agent": check_agent,
+        }
+    )
 
     try:
         engine = OrchestratorEngine(
             pipelines_dir="pipelines",
-            step_executor=StepExecutor(agent_factory=_agent_factory),
+            step_executor=StepExecutor(
+                agent_registry=agent_registry, strict_schema_validation=False
+            ),
             max_loop_iterations=10,
         )
 

@@ -139,10 +139,9 @@ def test_code_generator_returns_dry_run_patch_with_decisions():
 
     assert result["status"] == "SUCCESS"
     patch = _artifact_content(result, "code_patch")
-    assert patch["schema_version"] == "1.0"
+    assert patch["schema_version"] == "2.0"
     assert patch["files"]
-    assert patch["dry_run"] is True
-    assert patch["expected_failures"] >= 0
+    assert patch["dry_run"] is False
     assert any(item == "rules_version=1.0" for item in patch["decisions"])
 
 

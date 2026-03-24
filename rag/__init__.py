@@ -7,6 +7,15 @@ from rag.config import get_embedding_model, get_qdrant_host, get_qdrant_port
 from rag.context_builder import ContextBuilder
 from rag.context_compressor import ContextCompressor
 from rag.deduplicator import Deduplicator
+
+# Embeddings
+from rag.embeddings import (
+    EmbeddingsProvider,
+    HashEmbeddingsProvider,
+    MockEmbeddingsProvider,
+    create_embeddings_provider,
+    resolve_embeddings_provider,
+)
 from rag.hybrid_retriever import HybridRetriever
 from rag.indexer import DocumentationIndexer
 from rag.ingestion import IngestionPipeline
@@ -59,4 +68,10 @@ __all__ = [
     "SmartChunker",
     "ChunkGenerator",
     "CodeElement",
+    # Embeddings
+    "EmbeddingsProvider",
+    "HashEmbeddingsProvider",
+    "MockEmbeddingsProvider",
+    "create_embeddings_provider",
+    "resolve_embeddings_provider",
 ]

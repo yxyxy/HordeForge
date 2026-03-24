@@ -62,7 +62,7 @@ def test_gateway_baseline_load_handles_50_parallel_triggers():
             PipelineRequest(
                 pipeline_name=str(pipeline_path),
                 inputs={
-                    "repo_url": "https://github.com/acme/hordeforge.git",
+                    "repo_url": "https://github.com/yxyxy/hordeforge.git",
                     "github_token": f"token-{index}",
                 },
                 source="load_test",

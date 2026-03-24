@@ -112,10 +112,19 @@ class EnhancedSpecificationWriter(BaseAgent):
                     response = llm.complete(prompt)
                     llm.close()
 
-                    # Parse JSON response
+                    # Clean up the response to handle potential formatting issues
                     import json
+                    import re
 
-                    llm_spec = json.loads(response)
+                    cleaned_response = response.strip()
+
+                    # Try to extract JSON from the response if it contains extra text
+                    json_match = re.search(r"\{[\s\S]*\}", cleaned_response)
+                    if json_match:
+                        json_str = json_match.group(0)
+                        llm_spec = json.loads(json_str)
+                    else:
+                        llm_spec = json.loads(cleaned_response)
             except Exception as e:
                 llm_error = str(e)
 

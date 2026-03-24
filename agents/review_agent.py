@@ -342,12 +342,25 @@ class ReviewAgent(BaseAgent):
                     response = llm.complete(prompt)
                     llm.close()
 
+                    # Clean up the response to handle potential formatting issues
+                    cleaned_response = response.strip()
+
+                    # Try to extract JSON from the response if it contains extra text
+                    import re
+
+                    json_match = re.search(r"\{[\s\S]*\}", cleaned_response)
+                    if json_match:
+                        json_str = json_match.group(0)
+                        parsed_response = json_str
+                    else:
+                        parsed_response = cleaned_response
+
                     # Try new parsing first, fall back to legacy if needed
                     try:
-                        llm_review_result = parse_review_output(response)
+                        llm_review_result = parse_review_output(parsed_response)
                     except AttributeError:
                         # Fall back to legacy parsing
-                        llm_review_result = legacy_parse_review_output(response)
+                        llm_review_result = legacy_parse_review_output(parsed_response)
             except Exception as e:
                 llm_error = str(e)
 

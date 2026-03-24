@@ -81,7 +81,7 @@ def test_run_pipeline_sanitizes_sensitive_data_in_result_and_artifacts(monkeypat
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "ghp_secret_token",
             },
             "source": "test",

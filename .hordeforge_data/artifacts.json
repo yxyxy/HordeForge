@@ -1,10 +1,200 @@
 [
   {
-    "run_id": "default:594d6616-a18b-4db6-a03f-3195803f0d08",
+    "run_id": "default:81acb7d0-72e7-4345-9616-034a7f86c14a",
     "step_name": "repo_connector",
-    "artifact_type": "repository_operation",
-    "content": {},
-    "size_bytes": 2,
+    "artifact_type": "repository_data",
+    "content": {
+      "repo_url": "https://github.com/yxyxy/hordeforge.git",
+      "owner": "acme",
+      "repo_name": "hordeforge",
+      "full_name": "acme/hordeforge",
+      "local_path": null,
+      "has_auth": true,
+      "connection_mode": "mock",
+      "mock_mode": true,
+      "files_structure": [
+        "src/",
+        "tests/",
+        "README.md"
+      ],
+      "languages": [
+        "python"
+      ],
+      "dependencies": [
+        "requirements.txt"
+      ]
+    },
+    "size_bytes": 330,
+    "tenant_id": "default"
+  },
+  {
+    "run_id": "default:81acb7d0-72e7-4345-9616-034a7f86c14a",
+    "step_name": "rag_initializer",
+    "artifact_type": "rag_index",
+    "content": {
+      "index_id": "repo_index_7256663110361075634",
+      "indexed_files_count": 0,
+      "total_symbols_count": 0,
+      "source_repo": "acme/hordeforge",
+      "vector_store_status": false,
+      "keyword_index_status": true,
+      "collection_name": null,
+      "rag_working": false
+    },
+    "size_bytes": 239,
+    "tenant_id": "default"
+  },
+  {
+    "run_id": "default:81acb7d0-72e7-4345-9616-034a7f86c14a",
+    "step_name": "architecture_evaluator",
+    "artifact_type": "architecture_report",
+    "content": {
+      "target": "unknown",
+      "findings": [
+        "MVP runtime is orchestrator-driven.",
+        "Agent contracts are validated by runtime schema validator."
+      ],
+      "risks": [
+        "Repository metadata is missing; analysis is generic."
+      ],
+      "recommendations": [
+        "Add integration tests for init/feature/ci_fix pipelines.",
+        "Promote deterministic stubs to production integrations."
+      ]
+    },
+    "size_bytes": 343,
+    "tenant_id": "default"
+  },
+  {
+    "run_id": "default:81acb7d0-72e7-4345-9616-034a7f86c14a",
+    "step_name": "test_analyzer",
+    "artifact_type": "test_coverage_report",
+    "content": {
+      "total_tests": 0,
+      "coverage_percentage": 0,
+      "risk_level": "high",
+      "missing_tests": [],
+      "test_files": [],
+      "modules": [],
+      "fallback_reason": "No tests or coverage data discovered in provided context."
+    },
+    "size_bytes": 200,
+    "tenant_id": "default"
+  },
+  {
+    "run_id": "default:81acb7d0-72e7-4345-9616-034a7f86c14a",
+    "step_name": "memory_agent",
+    "artifact_type": "memory_state",
+    "content": {
+      "schema_version": "1.0",
+      "repository": {
+        "owner": "acme",
+        "repo_name": "hordeforge",
+        "full_name": "acme/hordeforge"
+      },
+      "knowledge": {
+        "documents_count": 0,
+        "index_id": "repo_index_7256663110361075634"
+      },
+      "events": [
+        {
+          "type": "memory_initialized",
+          "source": "memory_agent"
+        }
+      ],
+      "ready_for_downstream": true
+    },
+    "size_bytes": 300,
+    "tenant_id": "default"
+  },
+  {
+    "run_id": "default:81acb7d0-72e7-4345-9616-034a7f86c14a",
+    "step_name": "pipeline_initializer",
+    "artifact_type": "pipeline_config",
+    "content": {
+      "pipeline_type": "init",
+      "pipeline_name": "init_pipeline",
+      "description": "Initialize project for autonomous AI agents",
+      "steps": [
+        {
+          "name": "repo_connector",
+          "agent": "repo_connector",
+          "depends_on": [],
+          "on_failure": "stop_pipeline",
+          "retry_limit": null,
+          "timeout_seconds": null
+        },
+        {
+          "name": "rag_initializer",
+          "agent": "rag_initializer",
+          "depends_on": [
+            "repo_connector"
+          ],
+          "on_failure": "stop_pipeline",
+          "retry_limit": null,
+          "timeout_seconds": null
+        },
+        {
+          "name": "memory_agent",
+          "agent": "memory_agent",
+          "depends_on": [
+            "repo_connector",
+            "rag_initializer"
+          ],
+          "on_failure": "stop_pipeline",
+          "retry_limit": null,
+          "timeout_seconds": null
+        },
+        {
+          "name": "architecture_evaluator",
+          "agent": "architecture_evaluator",
+          "depends_on": [
+            "repo_connector"
+          ],
+          "on_failure": "stop_pipeline",
+          "retry_limit": null,
+          "timeout_seconds": null
+        },
+        {
+          "name": "test_analyzer",
+          "agent": "test_analyzer",
+          "depends_on": [
+            "repo_connector"
+          ],
+          "on_failure": "stop_pipeline",
+          "retry_limit": null,
+          "timeout_seconds": null
+        }
+      ],
+      "step_count": 5,
+      "parallel_execution": {
+        "max_parallel_workers": 3,
+        "execution_levels": [
+          [
+            "repo_connector"
+          ],
+          [
+            "rag_initializer",
+            "architecture_evaluator",
+            "test_analyzer"
+          ],
+          [
+            "memory_agent"
+          ]
+        ],
+        "parallelizable_steps": [
+          "repo_connector"
+        ]
+      },
+      "estimated_duration_minutes": 6,
+      "validation": {
+        "inputs_valid": true,
+        "pipeline_exists": true,
+        "steps_configured": true,
+        "yaml_steps_count": 6
+      }
+    },
+    "size_bytes": 1358,
     "tenant_id": "default"
   }
 ]

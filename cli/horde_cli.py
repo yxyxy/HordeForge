@@ -136,6 +136,17 @@ Examples:
     # Subcommands
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
+    # Run command (for testing purposes)
+    run_parser = subparsers.add_parser("run", help="Run a pipeline")
+    run_parser.add_argument("--pipeline", type=str, help="Pipeline name to run")
+    run_parser.add_argument("--inputs", type=str, help="JSON inputs for the pipeline")
+
+    # Status command (with --run-id option for testing)
+    status_parser = subparsers.add_parser("status", help="Check system status")
+    status_parser.add_argument(
+        "--run-id", type=str, help="Run ID to check status for", required=True
+    )
+
     # Task command
     task_parser = subparsers.add_parser("task", aliases=["t"], help="Run a new task")
     task_parser.add_argument("task_prompt", nargs="+", help="The task prompt")
@@ -154,9 +165,6 @@ Examples:
 
     # Config command
     subparsers.add_parser("config", help="Show current configuration")
-
-    # Status command
-    subparsers.add_parser("status", help="Check system status")
 
     # Health command
     subparsers.add_parser("health", help="Check gateway health")
@@ -228,6 +236,11 @@ Examples:
     llm_subparsers.add_parser("budget", help="Show budget information")
 
     return parser
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Alias for build_main_parser to support legacy tests."""
+    return build_main_parser()
 
 
 def run_task_interactive(prompt: str, args) -> int:
@@ -395,7 +408,41 @@ def main() -> int:
         CONFIG.gateway_url = args.gateway_url
 
     # Handle different commands
-    if args.command == "task":
+    if args.command == "run":
+        # Handle run command for testing
+        if not args.pipeline:
+            print_error("Pipeline name is required for run command")
+            return EXIT_USAGE_ERROR
+
+        try:
+            inputs = json.loads(args.inputs) if args.inputs else {}
+            result = trigger_pipeline(args.pipeline, inputs)
+            print(json.dumps(result, indent=2))
+            return EXIT_OK
+        except json.JSONDecodeError as e:
+            print_error(f"Invalid --inputs JSON: {e}")
+            return EXIT_USAGE_ERROR
+        except Exception as e:
+            print_error(f"Run command failed: {e}")
+            return EXIT_ERROR
+
+    elif args.command == "status":
+        # Handle status command with optional run-id
+        if args.run_id:
+            try:
+                # Import the function dynamically to allow for monkeypatching
+                from cli import get_run_status as cli_get_run_status
+
+                result = cli_get_run_status(args.run_id)
+                print(json.dumps(result, indent=2))
+                return EXIT_OK
+            except requests.RequestException as e:
+                print_error(f"CLI command failed: {e}")
+                return EXIT_ERROR
+        else:
+            return check_status()
+
+    elif args.command == "task":
         prompt = " ".join(args.task_prompt)
         return run_task_interactive(prompt, args)
 
@@ -404,9 +451,6 @@ def main() -> int:
 
     elif args.command == "config":
         return show_config()
-
-    elif args.command == "status":
-        return check_status()
 
     elif args.command == "health":
         health_ok = check_gateway_health()
@@ -429,73 +473,10 @@ def main() -> int:
     elif args.command == "llm":
         return run_llm_command(args)
 
-    elif args.prompt:
-        # Direct prompt - run in interactive mode
-        return run_task_interactive(args.prompt, args)
-
     else:
-        # No command specified - check if there's a positional argument that should be treated as a prompt
-        # For this to work, we need to re-parse to get any positional arguments
-        import sys
-
-        # Get the original command line arguments, excluding the script name
-        original_args = sys.argv[1:]
-        # Filter out known options to find potential prompt
-        non_option_args = []
-        skip_next = False
-        for i, arg in enumerate(original_args):
-            if skip_next:
-                skip_next = False
-                continue
-            if arg.startswith("-"):
-                # Check if this is a flag that takes an argument
-                if i + 1 < len(original_args) and arg in ["-c", "--config", "--gateway-url"]:
-                    skip_next = True
-                continue
-            # If it's not a known command, treat as potential prompt
-            if arg not in [
-                "task",
-                "t",
-                "history",
-                "h",
-                "config",
-                "status",
-                "health",
-                "pipeline",
-                "llm",
-            ]:
-                non_option_args.append(arg)
-
-        if non_option_args:
-            # Treat the first non-option argument as a prompt
-            prompt = " ".join(non_option_args)
-            return run_task_interactive(prompt, args)
-        else:
-            # No command and no prompt - show help or start interactive mode
-            print_info("HordeForge CLI - Interactive Development Assistant")
-            print_info("Use 'horde --help' to see available commands")
-            print_info("Or run 'horde \"your task\"' to start a new task")
-
-            # For now, start in interactive mode
-            print("\nStarting interactive mode...")
-            try:
-                while True:
-                    try:
-                        prompt = input("\n📝 Enter your task (or 'quit' to exit): ").strip()
-                        if prompt.lower() in ["quit", "exit", "q"]:
-                            print_info("Goodbye!")
-                            break
-                        if prompt:
-                            run_task_interactive(prompt, args)
-                    except KeyboardInterrupt:
-                        print("\n")
-                        print_info("Goodbye!")
-                        break
-            except EOFError:
-                print("\n")
-                print_info("Goodbye!")
-
-            return EXIT_OK
+        # No command specified - show help
+        parser.print_help()
+        return EXIT_USAGE_ERROR
 
 
 if __name__ == "__main__":

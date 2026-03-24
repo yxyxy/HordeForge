@@ -52,7 +52,7 @@ def test_cli_run_command_e2e_returns_api_payload_with_run_id_and_summary(monkeyp
             "--pipeline",
             "init_pipeline",
             "--inputs",
-            '{"repo_url":"https://github.com/acme/hordeforge.git","github_token":"token"}',
+            '{"repo_url":"https://github.com/yxyxy/hordeforge.git","github_token":"token"}',
         ],
     )
 
@@ -81,7 +81,7 @@ def test_cli_status_command_e2e_returns_run_record_with_summary(monkeypatch, cap
             "--pipeline",
             "init_pipeline",
             "--inputs",
-            '{"repo_url":"https://github.com/acme/hordeforge.git","github_token":"token"}',
+            '{"repo_url":"https://github.com/yxyxy/hordeforge.git","github_token":"token"}',
         ],
     )
     assert cli.main() == cli.EXIT_OK

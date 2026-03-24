@@ -38,7 +38,7 @@ class MemoryHook:
             # Сохраняем запись в память
             try:
                 self.memory_store.add_memory(
-                    text=memory_entry.task_description, payload=memory_entry.to_dict()
+                    memory_entry.task_description, payload=memory_entry.to_dict()
                 )
             except Exception as e:
                 # Логируем ошибку, но не прерываем выполнение pipeline

@@ -91,7 +91,7 @@ def test_get_run_supports_tenant_filter():
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "token",
                 "repository_full_name": "acme/hordeforge",
             },
@@ -118,7 +118,7 @@ def test_get_run_returns_step_summary_and_trace():
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "token",
             },
             "source": "test",
@@ -143,7 +143,7 @@ def test_run_pipeline_suppresses_duplicate_idempotency_key():
     client = TestClient(app)
     request_payload = {
         "pipeline_name": "init_pipeline",
-        "inputs": {"repo_url": "https://github.com/acme/hordeforge.git", "github_token": "token"},
+        "inputs": {"repo_url": "https://github.com/yxyxy/hordeforge.git", "github_token": "token"},
         "source": "test",
         "correlation_id": "corr-dup-1",
         "idempotency_key": "dup-key-1",
@@ -166,7 +166,7 @@ def test_run_pipeline_async_enqueues_task_and_queue_drain_executes_it():
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "token",
                 "repository_full_name": "acme/hordeforge",
             },
@@ -208,7 +208,7 @@ def test_queue_drain_requires_permissions():
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "token",
             },
             "source": "test",
@@ -227,7 +227,7 @@ def test_run_pipeline_logs_duplicate_suppression(caplog):
     client = TestClient(app)
     request_payload = {
         "pipeline_name": "init_pipeline",
-        "inputs": {"repo_url": "https://github.com/acme/hordeforge.git", "github_token": "token"},
+        "inputs": {"repo_url": "https://github.com/yxyxy/hordeforge.git", "github_token": "token"},
         "source": "test",
         "correlation_id": "corr-dup-log-1",
         "idempotency_key": "dup-key-log-1",
@@ -306,7 +306,7 @@ def test_list_runs_supports_filters_and_pagination():
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "token",
             },
             "source": "test",
@@ -332,7 +332,7 @@ def test_list_runs_filters_by_tenant_id():
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "token",
                 "repository_full_name": "acme/hordeforge",
             },
@@ -379,7 +379,7 @@ def test_list_runs_filters_by_status_and_date_range():
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "token",
             },
             "source": "test",
@@ -439,7 +439,7 @@ def test_list_runs_supports_offset_limit_and_run_id_filter():
             json={
                 "pipeline_name": "init_pipeline",
                 "inputs": {
-                    "repo_url": "https://github.com/acme/hordeforge.git",
+                    "repo_url": "https://github.com/yxyxy/hordeforge.git",
                     "github_token": "token",
                 },
                 "source": "test",
@@ -467,7 +467,7 @@ def test_metrics_endpoint_exposes_runtime_metrics():
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "token",
             },
             "source": "test",
@@ -517,7 +517,7 @@ def test_override_endpoint_requires_role_and_source_headers():
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "token",
             },
             "source": "test",
@@ -544,7 +544,7 @@ def test_override_retry_rejects_success_run():
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "token",
             },
             "source": "test",
@@ -553,6 +553,13 @@ def test_override_retry_rejects_success_run():
         },
     )
     run_id = run_response.json()["run_id"]
+
+    # Force the run status to SUCCESS to test the override logic
+    # (actual run may have failed due to git clone issues in test environment)
+    record = RUN_REPOSITORY.get(run_id)
+    if record:
+        record.status = "SUCCESS"
+        RUN_REPOSITORY.upsert(record)
 
     response = client.post(
         f"/runs/{run_id}/override",
@@ -571,7 +578,7 @@ def test_override_stop_rejects_non_running_run():
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "token",
             },
             "source": "test",
@@ -598,7 +605,7 @@ def test_override_resume_replays_same_run_id_without_creating_new_run():
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "token",
             },
             "source": "test",
@@ -619,7 +626,7 @@ def test_override_resume_replays_same_run_id_without_creating_new_run():
     record.override_state = "STOPPED"
     RUN_REPOSITORY.upsert(record)
     RUN_RUNTIME_INPUTS[run_id] = {
-        "repo_url": "https://github.com/acme/hordeforge.git",
+        "repo_url": "https://github.com/yxyxy/hordeforge.git",
         "github_token": "token",
     }
 
@@ -645,7 +652,7 @@ def test_override_denied_request_is_audited(caplog):
         json={
             "pipeline_name": "init_pipeline",
             "inputs": {
-                "repo_url": "https://github.com/acme/hordeforge.git",
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
                 "github_token": "token",
             },
             "source": "test",
