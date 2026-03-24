@@ -15,6 +15,7 @@ setup(
         "tiktoken>=0.4",  # если будем использовать OpenAI embeddings
         "fastapi>=0.95",  # для Scheduler Gateway API
         "uvicorn>=0.22",  # для запуска FastAPI
+        "scikit-learn>=1.3.0",  # для нормализации векторов
     ],
     entry_points={
         "console_scripts": [

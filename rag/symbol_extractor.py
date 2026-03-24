@@ -29,21 +29,23 @@ class Symbol:
             self.decorators = []
 
 
-class SymbolExtractor(ast.NodeVisitor):
+class SymbolExtractor:
     """
-    Extracts symbols (classes, functions, methods) from Python code using AST parsing.
+    Extracts symbols (classes, functions, methods) from code files using Tree-sitter parsing.
+    Falls back to AST parsing for Python files if Tree-sitter is not available or fails.
     """
 
-    def __init__(self):
-        self.symbols: list[Symbol] = []
-        self.current_class: str | None = None
+    def __init__(self, use_tree_sitter: bool = True, fallback_to_ast: bool = True):
+        self.use_tree_sitter = use_tree_sitter
+        self.fallback_to_ast = fallback_to_ast
+        self._tree_sitter_extractor = None
 
     def extract_symbols(self, file_path: str | Path) -> list[Symbol]:
         """
-        Extract symbols from a Python file.
+        Extract symbols from a file using Tree-sitter parser with optional fallback to AST for Python files.
 
         Args:
-            file_path: Path to the Python file to analyze
+            file_path: Path to the file to analyze
 
         Returns:
             List[Symbol]: List of extracted symbols
@@ -53,6 +55,35 @@ class SymbolExtractor(ast.NodeVisitor):
         if not file_path.exists():
             raise FileNotFoundError(f"File does not exist: {file_path}")
 
+        # Try Tree-sitter extraction first if enabled
+        if self.use_tree_sitter:
+            try:
+                from rag.symbol_extractor_tree_sitter import TreeSitterSymbolExtractor
+
+                if self._tree_sitter_extractor is None:
+                    self._tree_sitter_extractor = TreeSitterSymbolExtractor()
+                return self._tree_sitter_extractor.extract_symbols(file_path)
+            except ImportError:
+                logger.warning("Tree-sitter not available, falling back to AST for Python files")
+            except Exception as e:
+                logger.error(f"Error using Tree-sitter for {file_path}: {e}")
+                if not self.fallback_to_ast or file_path.suffix != ".py":
+                    raise
+
+        # Fall back to AST for Python files if needed
+        if file_path.suffix == ".py" and self.fallback_to_ast:
+            return self._extract_symbols_with_ast(file_path)
+        elif not self.fallback_to_ast:
+            raise RuntimeError(
+                f"Tree-sitter extraction failed and fallback disabled for {file_path}"
+            )
+        else:
+            raise ValueError(f"Unsupported file type for AST fallback: {file_path.suffix}")
+
+    def _extract_symbols_with_ast(self, file_path: Path) -> list[Symbol]:
+        """
+        Extract symbols from a Python file using AST parsing (original implementation).
+        """
         if file_path.suffix != ".py":
             raise ValueError(f"File is not a Python file: {file_path}")
 
@@ -61,15 +92,28 @@ class SymbolExtractor(ast.NodeVisitor):
                 content = file.read()
 
             tree = ast.parse(content, filename=str(file_path))
-            self.visit(tree)
+            visitor = _ASTSymbolVisitor()
+            visitor.visit(tree)
 
-            return self.symbols
+            return visitor.symbols
         except SyntaxError as e:
             logger.error(f"Syntax error in file {file_path}: {e}")
-            raise
+            # Return empty list instead of raising exception to allow graceful degradation
+            return []
         except Exception as e:
             logger.error(f"Error extracting symbols from {file_path}: {e}")
-            raise
+            # Return empty list instead of raising exception to allow graceful degradation
+            return []
+
+
+class _ASTSymbolVisitor(ast.NodeVisitor):
+    """
+    Internal AST visitor for extracting symbols from Python code (original implementation moved here).
+    """
+
+    def __init__(self):
+        self.symbols: list[Symbol] = []
+        self.current_class: str | None = None
 
     def visit_ClassDef(self, node: ast.ClassDef):
         """
@@ -216,10 +260,10 @@ class SymbolExtractor(ast.NodeVisitor):
 
 def extract_symbols_from_file(file_path: str | Path) -> list[Symbol]:
     """
-    Convenience function to extract symbols from a file.
+    Convenience function to extract symbols from a file using Tree-sitter with fallback to AST for Python files.
 
     Args:
-        file_path: Path to the Python file to analyze
+        file_path: Path to the file to analyze
 
     Returns:
         List[Symbol]: List of extracted symbols

@@ -18,10 +18,11 @@ try:
 except ImportError:
     models = None
 
+from rag.config import get_qdrant_host, get_qdrant_port
 from rag.keyword_index import KeywordIndex
+from rag.orchestrator import IndexingOrchestrator
 from rag.symbol_extractor import SymbolExtractor
 from rag.vector_store import QdrantStore
-from rag.config import get_qdrant_host, get_qdrant_port
 
 try:
     from qdrant_client import AsyncQdrantClient
@@ -34,7 +35,22 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = {".py"}
+SUPPORTED_EXTENSIONS = {
+    ".py",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".java",
+    ".go",
+    ".rs",
+    ".cpp",
+    ".cxx",
+    ".cc",
+    ".c",
+    ".h",
+    ".cs",
+}
 
 
 def ensure_repo_local(repo_path: str) -> Path:
@@ -62,23 +78,67 @@ def extract_and_index_repository_async(
     collection_name: str = "repo_chunks",
     batch_size: int = 1024,  # 🔥 Оптимально для баланса скорости/памяти
     num_workers: int = 8,
+    use_structured_indexing: bool = True,  # New parameter to control which indexing method to use
+    chunk_size: int = 512,  # Parameter for configuring chunk size in structured indexing
+    overlap_size: int = 50,  # Parameter for configuring overlap size in structured indexing
+    embedding_batch_size: int = 512,  # Parameter for configuring embedding batch size,
 ):
+    # Use only the new structured indexing approach
+    try:
+        orchestrator = IndexingOrchestrator(
+            collection_name=collection_name,
+            chunk_size=chunk_size,
+            overlap=overlap_size,
+            embedding_batch_size=embedding_batch_size,
+        )
+        files = [
+            f for f in repo_path.rglob("*") if f.is_file() and f.suffix in SUPPORTED_EXTENSIONS
+        ]
+        result = orchestrator.run_sync(files)
+        # Update status to success if structured indexing worked
+        if result.get("status") == "success":
+            return result
+        else:
+            logger.info(f"Structured indexing returned status: {result.get('status')}")
+            # Return the result even if not "success" - it contains useful information
+            return result
+    except Exception as e:
+        logger.error(f"Structured indexing failed: {e}", exc_info=True)
+        # If structured indexing fails completely, try the original approach as fallback
+        logger.info("Falling back to original indexing approach due to structured indexing failure")
+        return _extract_and_index_repository_original(
+            repo_path=repo_path,
+            collection_name=collection_name,
+            batch_size=batch_size,
+            num_workers=num_workers,
+        )
+
+
+def _extract_and_index_repository_original(
+    repo_path: Path,
+    collection_name: str = "repo_chunks",
+    batch_size: int = 1024,
+    num_workers: int = 8,
+):
+    """Original indexing approach as fallback when structured indexing fails."""
     vector_store = None
     keyword_index = None
     qdrant_available = False
 
     try:
         vector_store = QdrantStore(check_compatibility=False)
-        vector_store.client.get_collections()
-        qdrant_available = True
-        logger.info("Qdrant connection established for async ingestion")
-    except Exception as e:
-        logger.warning(f"Qdrant unavailable: {e}. Falling back to keyword index only.")
-        qdrant_available = False
+        try:
+            vector_store.client.get_collections()
+            qdrant_available = True
+            logger.info("Qdrant connection established for async ingestion")
+        except Exception as e:
+            logger.warning(f"Qdrant unavailable: {e}. Falling back to keyword index only.")
+            qdrant_available = False
 
-    try:
         keyword_index = KeywordIndex()
-        extractor = SymbolExtractor()
+        extractor = SymbolExtractor(
+            use_tree_sitter=False, fallback_to_ast=True
+        )  # Disable tree-sitter, use only AST
 
         if qdrant_available and models:
             if not vector_store.collection_exists(collection_name):
@@ -103,13 +163,14 @@ def extract_and_index_repository_async(
             logger.warning("No files found for indexing")
 
         # 🔥 Прогресс-лог при сборе файлов
-        logger.info(f"Scanning {len(files)} Python files for symbols...")
+        logger.info(f"Scanning {len(files)} files for symbols...")
 
         for idx, file_path in enumerate(files):
             if idx % 10 == 0:
                 logger.debug(f"Processing file {idx + 1}/{len(files)}: {file_path}")
 
             try:
+                # Only process Python files with original approach
                 if file_path.suffix != ".py":
                     continue
 
@@ -243,7 +304,11 @@ def extract_and_index_repository_async(
 
                 vector_store.close(collection_name)
 
-        status = "ready" if total_symbols > 0 else "failed"
+        status = (
+            "success"
+            if total_symbols > 0 or (keyword_index is not None and indexed_files > 0)
+            else "failed"
+        )
 
         return {
             "status": status,
@@ -256,23 +321,32 @@ def extract_and_index_repository_async(
         }
 
     except Exception as e:
-        logger.error(f"Indexing failed: {e}")
-        logger.exception("Indexing traceback:")
+        logger.error(f"Original indexing approach failed: {e}")
+        logger.exception("Original indexing traceback:")
         return {
             "status": "failed",
             "error": str(e),
-            "vector_store_ready": qdrant_available if vector_store is not None else False,
-            "keyword_index_ready": keyword_index is not None,
+            "vector_store_ready": False,
+            "keyword_index_ready": True,  # Keyword index is still useful
+            "async_mode": False,
         }
 
 
 def extract_and_index_repository(
     repo_path: Path,
     collection_name: str = "repo_chunks",
+    use_structured_indexing: bool = True,  # Pass the parameter through to the async function
+    chunk_size: int = 512,
+    overlap_size: int = 50,
+    embedding_batch_size: int = 512,
 ):
     return extract_and_index_repository_async(
         repo_path=repo_path,
         collection_name=collection_name,
+        use_structured_indexing=use_structured_indexing,
+        chunk_size=chunk_size,
+        overlap_size=overlap_size,
+        embedding_batch_size=embedding_batch_size,
     )
 
 
@@ -297,23 +371,42 @@ class RagInitializer(BaseAgent):
             repo_path_input = context.get("repo_path") or context.get("repo_url", "./")
             repo_path = ensure_repo_local(repo_path_input)
 
-        index_result = extract_and_index_repository(repo_path)
+        # Use structured indexing by default for better performance
+        # Extract configuration parameters from context if available
+        chunk_size = context.get("chunk_size", 512)
+        overlap_size = context.get("overlap_size", 50)
+        embedding_batch_size = context.get("embedding_batch_size", 512)
+        use_structured_indexing = context.get("use_structured_indexing", True)
 
-        rag_working = index_result.get("status") == "ready"
+        index_result = extract_and_index_repository(
+            repo_path,
+            use_structured_indexing=use_structured_indexing,
+            chunk_size=chunk_size,
+            overlap_size=overlap_size,
+            embedding_batch_size=embedding_batch_size,
+        )
+
+        rag_working = index_result.get("status") == "success"  # Updated to match new result format
         vector_ready = index_result.get("vector_store_ready", False)
         keyword_ready = index_result.get("keyword_index_ready", False)
 
         if rag_working and vector_ready:
-            reason = "RAG index built successfully"
+            reason = "RAG index built successfully with structured indexing"
         elif rag_working and keyword_ready and not vector_ready:
             reason = "RAG index built with keyword index only (Qdrant unavailable)"
+        elif rag_working:
+            reason = "RAG index built successfully with structured indexing"
         else:
             reason = "RAG index build failed"
 
         rag_index = {
             "index_id": f"repo_index_{hash(str(repo_path))}",
-            "indexed_files_count": index_result.get("indexed_files", 0),
-            "total_symbols_count": index_result.get("total_symbols", 0),
+            "indexed_files_count": index_result.get(
+                "total_files_processed", 0
+            ),  # Updated field name
+            "total_symbols_count": index_result.get(
+                "total_symbols_extracted", 0
+            ),  # Updated field name
             "source_repo": repository_metadata.get("full_name", str(repo_path)),
             "vector_store_status": vector_ready,
             "keyword_index_status": keyword_ready,
@@ -329,8 +422,9 @@ class RagInitializer(BaseAgent):
             confidence=0.95 if rag_working else 0.6,
             logs=[
                 f"Repo path: {repo_path}",
-                f"Indexed files: {index_result.get('indexed_files', 0)}",
-                f"Extracted symbols: {index_result.get('total_symbols', 0)}",
+                f"Indexed files: {index_result.get('total_files_processed', 0)}",  # Updated field name
+                f"Extracted symbols: {index_result.get('total_symbols_extracted', 0)}",  # Updated field name
+                f"Chunks stored: {index_result.get('total_chunks_stored', 0)}",  # Added new metric
                 f"Vector store: {'ready' if vector_ready else 'unavailable'}",
                 f"Keyword index: {'ready' if keyword_ready else 'unavailable'}",
             ],

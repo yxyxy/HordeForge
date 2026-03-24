@@ -1,11 +1,10 @@
 import logging
-import os
 import time
 
 from fastembed import TextEmbedding
-
-from rag.config import get_embedding_model, get_vector_store_mode, get_qdrant_host, get_qdrant_port
 from qdrant_client import QdrantClient, models
+
+from rag.config import get_embedding_model, get_qdrant_host, get_qdrant_port, get_vector_store_mode
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,12 @@ class QdrantStore:
         self.mode = mode or get_vector_store_mode()
         self.host = host
         self.port = port
-        
+
+        # Store original parameters for potential reconnection
+        self._original_host = host
+        self._original_port = port
+        self._original_check_compatibility = check_compatibility
+
         # Determine if we should use in-memory mode based on the mode setting
         if self.mode == "local":
             # Use in-memory storage
@@ -65,8 +69,7 @@ class QdrantStore:
                 self.client.get_collections()
             except Exception as e:
                 logger.warning(f"Host Qdrant unavailable: {e}. Falling back to local mode.")
-                self.client = QdrantClient(":memory:", check_compatibility=check_compatibility)
-                self.mode = "local"
+                self._switch_to_local_mode(check_compatibility)
         elif self.mode == "auto":
             # Try host mode first, fall back to local if unavailable
             try:
@@ -79,8 +82,7 @@ class QdrantStore:
                 self.client.get_collections()
             except Exception as e:
                 logger.info(f"Auto mode: Host Qdrant unavailable: {e}. Using local mode.")
-                self.client = QdrantClient(":memory:", check_compatibility=check_compatibility)
-                self.mode = "local"
+                self._switch_to_local_mode(check_compatibility)
         else:
             # Default to auto mode if invalid mode provided
             logger.warning(f"Invalid mode '{self.mode}', defaulting to 'auto' mode.")
@@ -94,13 +96,33 @@ class QdrantStore:
                 self.client.get_collections()
             except Exception as e:
                 logger.info(f"Auto mode: Host Qdrant unavailable: {e}. Using local mode.")
-                self.client = QdrantClient(":memory:", check_compatibility=check_compatibility)
-                self.mode = "local"
-                
+                self._switch_to_local_mode(check_compatibility)
+
         self.embedder = TextEmbedding(model_name=get_embedding_model())
         self._buffer: list[dict] = []
         self._buffer_limit = buffer_limit
         self._total_indexed = 0
+
+    def _switch_to_local_mode(self, check_compatibility: bool = False):
+        """
+        Switch to local in-memory mode, properly closing any existing client first.
+        This ensures that no network connections remain active after fallback.
+        """
+        # If we have an existing client, close it properly to prevent lingering connections
+        if hasattr(self, 'client') and self.client is not None:
+            try:
+                # Close the existing client to ensure no network connections remain
+                if hasattr(self.client, '_client'):
+                    # For remote clients, try to close underlying connections
+                    if hasattr(self.client._client, 'close'):
+                        self.client._client.close()
+            except Exception as e:
+                logger.warning(f"Error closing previous client: {e}")
+        
+        # Create a fresh in-memory client
+        self.client = QdrantClient(":memory:", check_compatibility=check_compatibility)
+        self.mode = "local"
+        logger.info("Successfully switched to local in-memory mode")
 
     def get_client(self) -> QdrantClient:
         """

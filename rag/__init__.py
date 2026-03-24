@@ -1,32 +1,64 @@
-"""RAG primitives for documentation indexing and context retrieval."""
+"""RAG (Retrieval Augmented Generation) module for HordeForge AI development orchestrator."""
 
-from rag.embeddings import (
-    EmbeddingsProvider,
-    HashEmbeddingsProvider,
-    MockEmbeddingsProvider,
-    create_embeddings_provider,
-)
+# Core components
+# Chunking components
+from rag.chunking import ChunkGenerator, CodeElement, CodeStructureAnalyzer, SmartChunker
+from rag.config import get_embedding_model, get_qdrant_host, get_qdrant_port
+from rag.context_builder import ContextBuilder
+from rag.context_compressor import ContextCompressor
+from rag.deduplicator import Deduplicator
+from rag.hybrid_retriever import HybridRetriever
 from rag.indexer import DocumentationIndexer
-from rag.ingestion import IngestionPipeline, batch
+from rag.ingestion import IngestionPipeline
 from rag.keyword_index import KeywordIndex
-from rag.memory_collections import (
-    MemoryEntry,
-    MemoryType,
-    create_memory_entry,
-)
+from rag.memory_retriever import MemoryRetriever
+from rag.memory_store import MemoryStore
+
+# Models
+from rag.models import Chunk, Symbol
 from rag.retriever import ContextRetriever
 
+# Stages for structured indexing
+from rag.stages import (
+    Chunk,  # Added from models
+    ChunkingStage,
+    EmbeddingStage,
+    ParsedFile,
+    ParsingStage,
+    StorageStage,
+    Symbol,  # Added from models
+    SymbolExtractionStage,
+)
+from rag.vector_store import QdrantStore
+
 __all__ = [
-    "DocumentationIndexer",
-    "ContextRetriever",
-    "EmbeddingsProvider",
-    "MockEmbeddingsProvider",
-    "HashEmbeddingsProvider",
-    "create_embeddings_provider",
+    # Core components
     "IngestionPipeline",
-    "batch",
+    "ContextRetriever",
+    "HybridRetriever",
+    "MemoryRetriever",
+    "DocumentationIndexer",
+    "get_embedding_model",
+    "get_qdrant_host",
+    "get_qdrant_port",
+    "QdrantStore",
     "KeywordIndex",
-    "MemoryEntry",
-    "MemoryType",
-    "create_memory_entry",
+    "MemoryStore",
+    "ContextBuilder",
+    "ContextCompressor",
+    "Deduplicator",
+    # Stages
+    "ParsingStage",
+    "SymbolExtractionStage",
+    "ChunkingStage",
+    "EmbeddingStage",
+    "StorageStage",
+    "ParsedFile",
+    "Symbol",
+    "Chunk",
+    # Chunking components
+    "CodeStructureAnalyzer",
+    "SmartChunker",
+    "ChunkGenerator",
+    "CodeElement",
 ]

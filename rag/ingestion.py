@@ -16,12 +16,12 @@ import logging
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from uuid import uuid4
 
 from fastembed import TextEmbedding
 from qdrant_client import AsyncQdrantClient, models
 
-from rag.config import get_embedding_model, get_vector_store_mode, get_qdrant_host, get_qdrant_port
+from rag.batch_processing import BatchEmbedder, TextBuffer
+from rag.config import get_embedding_model
 
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -44,6 +44,8 @@ class IngestionPipeline:
         queue_size: int = 200,
         max_inflight: int = 8,
         check_compatibility: bool = False,
+        normalize_vectors: bool = True,  # New parameter for vector normalization
+        buffer_batch_size: int = 128,  # New parameter for internal buffer batch size
     ):
         self.client = client
         self.embedder = embedder or TextEmbedding(model_name=get_embedding_model())
@@ -57,6 +59,9 @@ class IngestionPipeline:
         self._shutdown_event = asyncio.Event()
         # 🔥 1 поток: fastembed уже использует внутренний пул (ONNX Runtime)
         self._executor = ThreadPoolExecutor(max_workers=1)
+        # Parameters for batch processing with new components
+        self.normalize_vectors = normalize_vectors
+        self.buffer_batch_size = buffer_batch_size
 
     async def __aenter__(self):
         return self
@@ -193,52 +198,81 @@ class IngestionPipeline:
 
     async def _produce(self, texts: list[str], metadata_list: list[dict] | None = None):
         batch_idx = 0
-        total_batches = (len(texts) + self.batch_size - 1) // self.batch_size
-        logger.info(f"Producer: {total_batches} batches to process (batch_size={self.batch_size})")
+        total_texts = len(texts)
+        logger.info(
+            f"Producer: {total_texts} texts to process with buffer batch size {self.buffer_batch_size}"
+        )
 
         start_time = time.time()
 
-        for text_batch in batch(texts, self.batch_size):
+        # Initialize the TextBuffer and BatchEmbedder for optimized processing
+        text_buffer = TextBuffer(batch_size=self.buffer_batch_size)
+        batch_embedder = BatchEmbedder(self.embedder, normalize_vectors=self.normalize_vectors)
+
+        # Process texts one by one through the buffer
+        for i, text in enumerate(texts):
+            # Get metadata for this text if available
+            metadata = metadata_list[i] if metadata_list and i < len(metadata_list) else {}
+
+            # Add text to buffer and get any completed batches
+            completed_batches = text_buffer.add_text(text, metadata)
+
+            # Process any completed batches
+            for text_batch, meta_batch in completed_batches:
+                embed_start = time.time()
+
+                # Use the batch embedder to compute embeddings with optional normalization
+                points = await asyncio.get_event_loop().run_in_executor(
+                    self._executor,
+                    lambda tb=text_batch, mb=meta_batch: batch_embedder.compute_and_process_batch(
+                        tb, mb
+                    ),
+                )
+                embed_time = time.time() - embed_start
+
+                self._total_indexed += len(points)
+                batch_idx += 1
+
+                # 🔥 Прогресс-лог каждого 5-го батча с таймингом
+                if batch_idx % 5 == 0:
+                    elapsed = time.time() - start_time
+                    rate = batch_idx / elapsed if elapsed else 0
+                    points_per_sec = (self._total_indexed / elapsed) if elapsed else 0
+                    logger.info(
+                        f"🔄 Producer: batch {batch_idx} (text {i + 1}/{total_texts}) queued | "
+                        f"embed_time={embed_time:.2f}s | rate={rate:.1f} bat/s | "
+                        f"throughput={points_per_sec:.0f} pts/s"
+                    )
+
+                await self.queue.put(points)
+
+        # Process any remaining items in the buffer (residual batch)
+        remaining = text_buffer.get_remaining()
+        if remaining:
+            text_batch, meta_batch = remaining
             embed_start = time.time()
-            # 🔥 Embedding в thread pool с 1 работником (fastembed сам управляет параллелизмом)
-            embeddings = await asyncio.get_event_loop().run_in_executor(
-                self._executor, lambda tb=text_batch: list(self.embedder.embed(tb))
+
+            points = await asyncio.get_event_loop().run_in_executor(
+                self._executor,
+                lambda tb=text_batch, mb=meta_batch: batch_embedder.compute_and_process_batch(
+                    tb, mb
+                ),
             )
             embed_time = time.time() - embed_start
-
-            start_idx = batch_idx * self.batch_size
-            end_idx = start_idx + len(text_batch)
-            batch_meta = (
-                metadata_list[start_idx:end_idx] if metadata_list else [{}] * len(text_batch)
-            )
-
-            points = []
-            for text, emb, meta in zip(text_batch, embeddings, batch_meta, strict=False):
-                points.append(
-                    {
-                        "id": str(uuid4()),
-                        "vector": emb.tolist(),
-                        "payload": {"text": text, **meta},
-                    }
-                )
 
             self._total_indexed += len(points)
             batch_idx += 1
 
-            # 🔥 Прогресс-лог каждого 5-го батча с таймингом
-            if batch_idx % 5 == 0:
-                elapsed = time.time() - start_time
-                rate = batch_idx / elapsed if elapsed else 0
-                points_per_sec = (self._total_indexed / elapsed) if elapsed else 0
-                logger.info(
-                    f"🔄 Producer: batch {batch_idx}/{total_batches} queued | "
-                    f"embed_time={embed_time:.2f}s | rate={rate:.1f} bat/s | "
-                    f"throughput={points_per_sec:.0f} pts/s"
-                )
+            logger.info(
+                f"🔄 Producer: final batch {batch_idx} (remaining {len(text_batch)} texts) queued | "
+                f"embed_time={embed_time:.2f}s"
+            )
 
             await self.queue.put(points)
 
-        logger.info(f"Producer: ALL {batch_idx} batches queued in {time.time() - start_time:.1f}s")
+        logger.info(
+            f"Producer: ALL {batch_idx} batches queued from {total_texts} texts in {time.time() - start_time:.1f}s"
+        )
 
     async def run(
         self,
@@ -249,6 +283,18 @@ class IngestionPipeline:
     ):
         start = time.time()
         logger.info(f"Pipeline START: {len(texts):,} texts")
+
+        # If no texts to process, return early with success status
+        if len(texts) == 0:
+            logger.info("No texts to process, returning early")
+            return {
+                "total_indexed": 0,
+                "total_flushed": 0,
+                "collection_points_count": 0,
+                "verification_status": "success",
+                "duration_seconds": 0.0,
+                "rate_per_second": 0.0,
+            }
 
         await self.prepare_collection(collection_name, vector_size)
         await self.warmup_embedder()  # ← ДОБАВЛЕНО: warmup перед стартом
