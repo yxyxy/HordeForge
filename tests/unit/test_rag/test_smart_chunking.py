@@ -82,7 +82,7 @@ def another_function(a, b, c=None):
     ]
 
     # Convert code content back to string for each symbol
-    for i, symbol in enumerate(symbols):
+    for _i, symbol in enumerate(symbols):
         if isinstance(symbol.code_content, list):
             symbol.code_content = "\n".join(symbol.code_content)
 

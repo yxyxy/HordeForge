@@ -20,13 +20,11 @@ from rag.retriever import ContextRetriever
 
 # Stages for structured indexing
 from rag.stages import (
-    Chunk,  # Added from models
     ChunkingStage,
     EmbeddingStage,
     ParsedFile,
     ParsingStage,
     StorageStage,
-    Symbol,  # Added from models
     SymbolExtractionStage,
 )
 from rag.vector_store import QdrantStore

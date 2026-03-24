@@ -109,16 +109,16 @@ class QdrantStore:
         This ensures that no network connections remain active after fallback.
         """
         # If we have an existing client, close it properly to prevent lingering connections
-        if hasattr(self, 'client') and self.client is not None:
+        if hasattr(self, "client") and self.client is not None:
             try:
                 # Close the existing client to ensure no network connections remain
-                if hasattr(self.client, '_client'):
+                if hasattr(self.client, "_client"):
                     # For remote clients, try to close underlying connections
-                    if hasattr(self.client._client, 'close'):
+                    if hasattr(self.client._client, "close"):
                         self.client._client.close()
             except Exception as e:
                 logger.warning(f"Error closing previous client: {e}")
-        
+
         # Create a fresh in-memory client
         self.client = QdrantClient(":memory:", check_compatibility=check_compatibility)
         self.mode = "local"

@@ -91,7 +91,6 @@ class CodeStructureAnalyzer:
         self, file_content: str, start_line: int, fallback_content: str
     ) -> str:
         """Extract content for a symbol based on its position in the file."""
-        lines = file_content.splitlines()
         # Use the fallback content which should already be properly extracted
         return fallback_content
 

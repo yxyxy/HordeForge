@@ -22,7 +22,7 @@ def test_text_buffer():
     metadatas = [{"idx": i} for i in range(7)]
 
     all_completed_batches = []
-    for text, meta in zip(texts, metadatas):
+    for text, meta in zip(texts, metadatas, strict=True):
         completed_batches = buffer.add_text(text, meta)
         all_completed_batches.extend(completed_batches)
 
@@ -130,10 +130,10 @@ async def test_ingestion_pipeline_with_batch_processing():
     pipeline._produce = AsyncMock()  # We'll test this separately
 
     # Test the run method
-    result = await pipeline.run(texts, "test_collection", metadata_list=metadata_list)
+    await pipeline.run(texts, "test_collection", metadata_list=metadata_list)
 
     # Check that the pipeline was initialized with the correct parameters
-    assert pipeline.normalize_vectors == True
+    assert pipeline.normalize_vectors
     assert pipeline.buffer_batch_size == 2
 
     print("✓ IngestionPipeline batch processing tests passed")
@@ -177,8 +177,6 @@ async def test_produce_method_directly():
             # Extract the text_batch and meta_batch from the lambda
             # Since we can't really extract them from the lambda, we'll simulate
             # This is a simplified simulation for testing purposes
-            text_batch = ["sample_text"]  # Placeholder
-            meta_batch = [{}]  # Placeholder
             # Return a mock result that looks like processed points
             return [
                 {"id": "mock-id", "vector": [0.1] * 384, "payload": {"text": "sample_text", **{}}}
@@ -195,9 +193,8 @@ async def test_produce_method_directly():
     texts = ["Hello", "World", "Test"]
     metadata_list = [{"type": "sentence"} for _ in texts]
 
-    # Initialize the TextBuffer and BatchEmbedder directly to test their interaction
+    # Initialize the TextBuffer directly to test their interaction
     text_buffer = TextBuffer(batch_size=pipeline.buffer_batch_size)
-    batch_embedder = BatchEmbedder(pipeline.embedder, normalize_vectors=pipeline.normalize_vectors)
 
     # Add texts to buffer and verify batching works
     all_completed_batches = []
