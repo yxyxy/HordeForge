@@ -166,10 +166,27 @@ class TestDetectionFunctions:
 class TestPipelineIntegration:
     """Integration tests for full pipeline with mocked GitHub."""
 
-    @patch("agents.code_generator_v2.get_llm_wrapper")
-    @patch("agents.code_generator_v2.PatchWorkflowOrchestrator")
-    def test_feature_pipeline_with_github_integration(self, mock_orchestrator_class, mock_llm):
+    @patch.object(PipelineRunner, "_load_pipeline")
+    @patch("agents.code_generator.get_llm_wrapper")
+    @patch("agents.code_generator.PatchWorkflowOrchestrator")
+    def test_feature_pipeline_with_github_integration(
+        self,
+        mock_orchestrator_class,
+        mock_llm,
+        mock_load_pipeline,
+    ):
         """Test feature pipeline with GitHub integration."""
+        mock_load_pipeline.return_value = {
+            "pipeline_name": "feature_pipeline",
+            "steps": [
+                {
+                    "name": "code_generator",
+                    "agent": "code_generator",
+                    "on_failure": "stop_pipeline",
+                }
+            ],
+        }
+
         # Setup mocks
         mock_llm_instance = MagicMock()
         mock_llm_instance.complete.return_value = json.dumps(
@@ -195,14 +212,30 @@ class TestPipelineIntegration:
         result = runner.run(
             "feature_pipeline",
             inputs={
-                "issue_title": "Add feature",
-                "issue_body": "Implement new feature",
+                "spec": {
+                    "summary": "Add feature",
+                    "requirements": [],
+                    "technical_notes": [],
+                    "file_changes": [
+                        {
+                            "path": "feature.py",
+                            "change_type": "create",
+                            "description": "Feature module",
+                        }
+                    ],
+                },
                 "github_client": MagicMock(),
             },
         )
 
         # Verify
         assert result["status"] in ("SUCCESS", "PARTIAL_SUCCESS")
+        code_generator_result = result["steps"]["code_generator"]
+        assert code_generator_result["status"] == "SUCCESS"
+
+        patch_payload = code_generator_result["artifacts"][0]["content"]
+        assert patch_payload.get("applied_to_github") is True
+        assert patch_payload.get("pr_url") == "https://github.com/test/repo/pull/1"
 
     def test_pipeline_with_llm_failure_fallback(self):
         """Test pipeline falls back to deterministic when LLM fails."""

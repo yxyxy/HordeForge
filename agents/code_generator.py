@@ -219,6 +219,7 @@ Task: {task_description}
                 "decisions": llm_patch.get("decisions", []),
                 "test_changes": llm_patch.get("test_changes", []),
                 "dry_run": False,
+                "expected_failures": int(llm_patch.get("expected_failures", 1) or 0),
                 "llm_enhanced": True,
             }
 
@@ -368,6 +369,7 @@ Task: {task_description}
             "decisions": decisions,
             "test_changes": [],
             "dry_run": False,
+            "expected_failures": 1,
             "llm_enhanced": False,
         }
 

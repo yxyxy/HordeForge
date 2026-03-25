@@ -6,24 +6,34 @@ import pytest
 
 from agents.code_generator import EnhancedCodeGenerator
 from agents.review_agent import ReviewAgent
-from agents.specification_writer_v2 import EnhancedSpecificationWriter
+from agents.specification_writer import SpecificationWriter
 from agents.test_generator import TestGenerator
+
+
+def _artifact_content(result: dict, artifact_type: str) -> dict:
+    for artifact in result.get("artifacts", []):
+        if artifact.get("type") == artifact_type:
+            content = artifact.get("content")
+            if isinstance(content, dict):
+                return content
+    return {}
 
 
 class TestLLMAgentIntegration:
     """Test LLM integration with various agents."""
 
-    def test_specification_writer_v2_with_llm(self):
+    def test_specification_writer_with_llm(self):
         """Test specification writer with LLM integration."""
-        agent = EnhancedSpecificationWriter()
+        agent = SpecificationWriter()
         context = {
             "use_llm": True,
+            "feature_description": "Implement OAuth2 login",
             "dod": {"acceptance_criteria": ["The feature should work correctly"]},
             "rules": {"version": "1.0", "documents": {}},
         }
 
         # Mock the LLM wrapper to avoid actual API calls
-        with patch("agents.specification_writer_v2.get_llm_wrapper") as mock_get_llm:
+        with patch("agents.specification_writer.get_llm_wrapper") as mock_get_llm:
             mock_llm = Mock()
             mock_llm.complete.return_value = """
             {
@@ -52,9 +62,8 @@ class TestLLMAgentIntegration:
 
             # Verify the result structure
             assert result["status"] == "SUCCESS"
-            assert result["artifact_type"] == "spec"
-            assert "summary" in result["artifact_content"]
-            assert result["artifact_content"]["llm_enhanced"] is True
+            spec_payload = _artifact_content(result, "spec")
+            assert "summary" in spec_payload
 
             # Verify LLM was called
             mock_llm.complete.assert_called_once()
@@ -101,9 +110,9 @@ class TestLLMAgentIntegration:
 
             # Verify the result structure
             assert result["status"] == "SUCCESS"
-            assert result["artifact_type"] == "code_patch"
-            assert "files" in result["artifact_content"]
-            assert result["artifact_content"]["llm_enhanced"] is True
+            patch_payload = _artifact_content(result, "code_patch")
+            assert "files" in patch_payload
+            assert patch_payload["llm_enhanced"] is True
 
             # Verify LLM was called
             mock_llm.complete.assert_called_once()
@@ -159,9 +168,9 @@ class TestLLMAgentIntegration:
 
             # Verify the result structure
             assert result["status"] == "SUCCESS"
-            assert result["artifact_type"] == "tests"
-            assert len(result["artifact_content"]["test_cases"]) > 0
-            assert result["artifact_content"]["llm_enhanced"] is True
+            tests_payload = _artifact_content(result, "tests")
+            assert len(tests_payload["test_cases"]) > 0
+            assert tests_payload["llm_enhanced"] is True
 
             # Verify LLM was called
             mock_llm.complete.assert_called_once()
@@ -202,9 +211,9 @@ class TestLLMAgentIntegration:
 
             # Verify the result structure
             assert result["status"] == "SUCCESS"
-            assert result["artifact_type"] == "review_result"
-            assert result["artifact_content"]["decision"] == "approve"
-            assert result["artifact_content"]["llm_enhanced"] is True
+            review_payload = _artifact_content(result, "review_result")
+            assert review_payload["decision"] == "approve"
+            assert review_payload["llm_enhanced"] is True
 
             # Verify LLM was called
             mock_llm.complete.assert_called_once()
@@ -213,21 +222,23 @@ class TestLLMAgentIntegration:
     def test_agents_fallback_without_llm(self):
         """Test that agents fall back gracefully when LLM is not available."""
         # Test specification writer fallback
-        spec_agent = EnhancedSpecificationWriter()
+        spec_agent = SpecificationWriter()
         context = {
             "use_llm": True,  # Even if LLM is requested
+            "feature_description": "Implement feature flag",
             "dod": {"acceptance_criteria": ["The feature should work correctly"]},
         }
 
         # Mock LLM to return None (not available)
-        with patch("agents.specification_writer_v2.get_llm_wrapper") as mock_get_llm:
+        with patch("agents.specification_writer.get_llm_wrapper") as mock_get_llm:
             mock_get_llm.return_value = None
 
             result = spec_agent.run(context)
 
             # Should still succeed with deterministic generation
             assert result["status"] == "SUCCESS"
-            assert result["artifact_content"]["llm_enhanced"] is False
+            spec_payload = _artifact_content(result, "spec")
+            assert "schema_version" in spec_payload
 
         # Test code generator fallback
         code_agent = EnhancedCodeGenerator()
@@ -246,23 +257,26 @@ class TestLLMAgentIntegration:
 
             # Should still succeed with deterministic generation
             assert result["status"] == "SUCCESS"
-            assert result["artifact_content"]["llm_enhanced"] is False
+            patch_payload = _artifact_content(result, "code_patch")
+            assert patch_payload["llm_enhanced"] is False
 
     def test_agents_with_llm_disabled(self):
         """Test that agents work when LLM is explicitly disabled."""
-        spec_agent = EnhancedSpecificationWriter()
+        spec_agent = SpecificationWriter()
         context = {
             "use_llm": False,  # LLM explicitly disabled
+            "feature_description": "Implement feature flag",
             "dod": {"acceptance_criteria": ["The feature should work correctly"]},
         }
 
         # Even if LLM is available, it shouldn't be used
-        with patch("agents.specification_writer_v2.get_llm_wrapper") as mock_get_llm:
+        with patch("agents.specification_writer.get_llm_wrapper") as mock_get_llm:
             result = spec_agent.run(context)
 
             # Should use deterministic generation
             assert result["status"] == "SUCCESS"
-            assert result["artifact_content"]["llm_enhanced"] is False
+            spec_payload = _artifact_content(result, "spec")
+            assert "schema_version" in spec_payload
             # LLM should not be called
             mock_get_llm.assert_not_called()
 

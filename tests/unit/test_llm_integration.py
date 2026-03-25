@@ -112,10 +112,10 @@ async def test_token_budget_system():
     # Create model info for testing purposes (not used in this test)
     ModelInfo(
         name="test-model",
-        input_price=0.01,  # $0.01 per million tokens
-        output_price=0.03,  # $0.03 per million tokens
-        context_window=4096,
-        max_tokens=2048,
+        inputPrice=0.01,  # $0.01 per million tokens - используем имя в формате camelCase
+        outputPrice=0.03,  # $0.03 per million tokens - используем имя в формате camelCase
+        contextWindow=4096,
+        maxTokens=2048,
     )
 
     usage = TokenUsage(

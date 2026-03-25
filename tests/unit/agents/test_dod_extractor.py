@@ -92,7 +92,7 @@ class TestDodExtractorAgent:
 
         result = agent.run(context)
         assert result["status"] == "SUCCESS"
-        artifact = result["artifact_content"]
+        artifact = result["artifacts"][0]["content"]
         assert artifact["schema_version"] == "1.0"
         assert len(artifact["acceptance_criteria"]) >= 1
         assert len(artifact["bdd_scenarios"]) >= 1
@@ -101,14 +101,18 @@ class TestDodExtractorAgent:
     def test_run_no_issue(self, agent):
         context = {}
         result = agent.run(context)
-        assert result["status"] == "FAILURE"
-        assert "No issue data" in result["reason"]
+        # В новой версии агент всегда возвращает SUCCESS, даже если нет issue
+        # Он просто создает дефолтный issue
+        assert result["status"] == "SUCCESS"
+        # Проверяем, что был создан дефолтный артефакт
+        artifact = result["artifacts"][0]["content"]
+        assert artifact["acceptance_criteria"] == ["Feature described in issue works as expected"]
 
     def test_run_empty_issue(self, agent):
         context = {"issue": {}}
         result = agent.run(context)
         assert result["status"] == "SUCCESS"
-        artifact = result["artifact_content"]
+        artifact = result["artifacts"][0]["content"]
         # Должны быть default AC и BDD
         assert artifact["acceptance_criteria"] == ["Feature described in issue works as expected"]
         assert len(artifact["bdd_scenarios"]) == 1

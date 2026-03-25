@@ -9,7 +9,6 @@ import pytest
 
 from orchestrator.engine import OrchestratorEngine
 from orchestrator.executor import StepExecutor
-from registry.runtime_adapter import RuntimeRegistryAdapter
 
 
 class CounterAgent:
@@ -80,31 +79,79 @@ class StateCheckingAgent:
         }
 
 
-def _create_test_registry(agents: dict[str, Any]) -> RuntimeRegistryAdapter:
-    """Создаёт тестовый реестр агентов для использования в тестах."""
+class InitAgent:
+    """Агент для инициализации счетчика в состоянии"""
 
-    class TestRegistry:
-        def __init__(self, agents_dict):
-            self._agents = agents_dict
+    def run(self, context):
+        # Инициализируем счетчик в состоянии
+        context.state["counter"] = 0
+        return {
+            "status": "SUCCESS",
+            "artifacts": [{"type": "initialization", "content": {"counter": 0}}],
+            "decisions": [],
+            "logs": ["Initialized counter to 0"],
+            "next_actions": [],
+        }
 
-        def has(self, agent_name: str) -> bool:
-            return agent_name in self._agents
 
-        def create(self, agent_name: str) -> Any:
-            if agent_name not in self._agents:
-                raise KeyError(f"Agent '{agent_name}' not found")
-            return self._agents[agent_name]
+class InitAgentMultiple:
+    """Агент для инициализации нескольких счетчиков в состоянии"""
 
-        def get(self, agent_name: str):
-            if agent_name not in self._agents:
-                raise KeyError(f"Agent '{agent_name}' not found")
-            # Возвращаем класс агента (сам класс, не экземпляр)
-            return type(self._agents[agent_name])
+    def run(self, context):
+        # Инициализируем оба счетчика в состоянии
+        context.state["counter_a"] = 0
+        context.state["counter_b"] = 0
+        return {
+            "status": "SUCCESS",
+            "artifacts": [{"type": "initialization", "content": {"counter_a": 0, "counter_b": 0}}],
+            "decisions": [],
+            "logs": ["Initialized counters to 0"],
+            "next_actions": [],
+        }
 
-        def metadata(self, agent_name: str):
-            return None
 
-    return RuntimeRegistryAdapter(TestRegistry(agents))
+class InitAgentComplex:
+    """Агент для инициализации значений в состоянии для сложного условия"""
+
+    def run(self, context):
+        # Инициализируем значения в состоянии
+        context.state["factor"] = 2
+        context.state["product"] = 1
+        return {
+            "status": "SUCCESS",
+            "artifacts": [{"type": "initialization", "content": {"factor": 2, "product": 1}}],
+            "decisions": [],
+            "logs": ["Initialized factor=2, product=1"],
+            "next_actions": [],
+        }
+
+
+class UpdateAgent:
+    """Агент для обновления значений в состоянии"""
+
+    def run(self, context):
+        # Обновляем значения: умножаем product на factor
+        factor = context.get("factor", 2)
+        current_product = context.get("product", 1)
+        new_product = current_product * factor
+
+        # Обновляем состояние
+        context.state["product"] = new_product
+
+        return {
+            "status": "SUCCESS",
+            "artifacts": [
+                {"type": "update", "content": {"factor": factor, "product": new_product}}
+            ],
+            "decisions": [],
+            "logs": [f"Updated product: {current_product} * {factor} = {new_product}"],
+            "next_actions": [],
+        }
+
+
+def _create_test_registry(agents: dict[str, Any]):
+    """Возвращает словарь агентов для использования в тестах."""
+    return agents
 
 
 def test_loop_handling_executes_conditional_loop_correctly():
@@ -128,18 +175,6 @@ loops:
         encoding="utf-8",
     )
 
-    class InitAgent:
-        def run(self, context):
-            # Инициализируем счетчик в состоянии
-            context.state["counter"] = 0
-            return {
-                "status": "SUCCESS",
-                "artifacts": [{"type": "initialization", "content": {"counter": 0}}],
-                "decisions": [],
-                "logs": ["Initialized counter to 0"],
-                "next_actions": [],
-            }
-
     init_agent = InitAgent()
     counter_agent = CounterAgent(counter_key="counter")
     check_agent = StateCheckingAgent("counter", 3)  # После 3 итераций счетчик должен быть равен 3
@@ -153,12 +188,18 @@ loops:
     )
 
     try:
+        # Создаем фабрику агентов для StepExecutor
+        def agent_factory(agent_name: str):
+            if agent_name in agent_registry:
+                # Возвращаем экземпляр агента из реестра
+                return agent_registry[agent_name]
+            raise KeyError(f"Agent '{agent_name}' not found")
+
         engine = OrchestratorEngine(
             pipelines_dir="pipelines",
-            step_executor=StepExecutor(
-                agent_registry=agent_registry, strict_schema_validation=False
-            ),
+            step_executor=StepExecutor(agent_factory=agent_factory, strict_schema_validation=False),
             max_loop_iterations=10,  # Увеличим лимит для этого теста
+            use_registry_bootstrap=False,  # Отключаем автозагрузку реестра, чтобы не перезаписался наш реестр
         )
 
         result = engine.run(str(pipeline_path), {}, run_id="conditional-loop-test-run")
@@ -196,18 +237,6 @@ loops:
         encoding="utf-8",
     )
 
-    class InitAgent:
-        def run(self, context):
-            # Инициализируем счетчик в состоянии
-            context.state["counter"] = 0
-            return {
-                "status": "SUCCESS",
-                "artifacts": [{"type": "initialization", "content": {"counter": 0}}],
-                "decisions": [],
-                "logs": ["Initialized counter to 0"],
-                "next_actions": [],
-            }
-
     init_agent = InitAgent()
     counter_agent = CounterAgent(counter_key="counter")
 
@@ -219,13 +248,19 @@ loops:
     )
 
     try:
+        # Создаем фабрику агентов для StepExecutor
+        def agent_factory(agent_name: str):
+            if agent_name in agent_registry:
+                # Возвращаем экземпляр агента из реестра
+                return agent_registry[agent_name]
+            raise KeyError(f"Agent '{agent_name}' not found")
+
         # Устанавливаем низкий лимит итераций для теста
         engine = OrchestratorEngine(
             pipelines_dir="pipelines",
-            step_executor=StepExecutor(
-                agent_registry=agent_registry, strict_schema_validation=False
-            ),
+            step_executor=StepExecutor(agent_factory=agent_factory, strict_schema_validation=False),
             max_loop_iterations=3,
+            use_registry_bootstrap=False,  # Отключаем автозагрузку реестра, чтобы не перезаписался наш реестр
         )
 
         # Ожидаем, что будет выброшено исключение из-за превышения лимита итераций
@@ -265,22 +300,7 @@ loops:
         encoding="utf-8",
     )
 
-    class InitAgent:
-        def run(self, context):
-            # Инициализируем оба счетчика в состоянии
-            context.state["counter_a"] = 0
-            context.state["counter_b"] = 0
-            return {
-                "status": "SUCCESS",
-                "artifacts": [
-                    {"type": "initialization", "content": {"counter_a": 0, "counter_b": 0}}
-                ],
-                "decisions": [],
-                "logs": ["Initialized counters to 0"],
-                "next_actions": [],
-            }
-
-    init_agent = InitAgent()
+    init_agent = InitAgentMultiple()
     counter_a_agent = CounterAgent(counter_key="counter_a")
     counter_b_agent = CounterAgent(counter_key="counter_b")
 
@@ -327,12 +347,18 @@ loops:
     )
 
     try:
+        # Создаем фабрику агентов для StepExecutor
+        def agent_factory(agent_name: str):
+            if agent_name in agent_registry:
+                # Возвращаем экземпляр агента из реестра
+                return agent_registry[agent_name]
+            raise KeyError(f"Agent '{agent_name}' not found")
+
         engine = OrchestratorEngine(
             pipelines_dir="pipelines",
-            step_executor=StepExecutor(
-                agent_registry=agent_registry, strict_schema_validation=False
-            ),
+            step_executor=StepExecutor(agent_factory=agent_factory, strict_schema_validation=False),
             max_loop_iterations=10,
+            use_registry_bootstrap=False,  # Отключаем автозагрузку реестра, чтобы не перезаписался наш реестр
         )
 
         result = engine.run(str(pipeline_path), {}, run_id="multiple-loops-test-run")
@@ -371,40 +397,7 @@ loops:
         encoding="utf-8",
     )
 
-    class InitAgent:
-        def run(self, context):
-            # Инициализируем значения в состоянии
-            context.state["factor"] = 2
-            context.state["product"] = 1
-            return {
-                "status": "SUCCESS",
-                "artifacts": [{"type": "initialization", "content": {"factor": 2, "product": 1}}],
-                "decisions": [],
-                "logs": ["Initialized factor=2, product=1"],
-                "next_actions": [],
-            }
-
-    class UpdateAgent:
-        def run(self, context):
-            # Обновляем значения: умножаем product на factor
-            factor = context.get("factor", 2)
-            current_product = context.get("product", 1)
-            new_product = current_product * factor
-
-            # Обновляем состояние
-            context.state["product"] = new_product
-
-            return {
-                "status": "SUCCESS",
-                "artifacts": [
-                    {"type": "update", "content": {"factor": factor, "product": new_product}}
-                ],
-                "decisions": [],
-                "logs": [f"Updated product: {current_product} * {factor} = {new_product}"],
-                "next_actions": [],
-            }
-
-    init_agent = InitAgent()
+    init_agent = InitAgentComplex()
     update_agent = UpdateAgent()
 
     # Проверяем, что итоговое значение продукта больше или равно 20
@@ -434,12 +427,18 @@ loops:
     )
 
     try:
+        # Создаем фабрику агентов для StepExecutor
+        def agent_factory(agent_name: str):
+            if agent_name in agent_registry:
+                # Возвращаем экземпляр агента из реестра
+                return agent_registry[agent_name]
+            raise KeyError(f"Agent '{agent_name}' not found")
+
         engine = OrchestratorEngine(
             pipelines_dir="pipelines",
-            step_executor=StepExecutor(
-                agent_registry=agent_registry, strict_schema_validation=False
-            ),
+            step_executor=StepExecutor(agent_factory=agent_factory, strict_schema_validation=False),
             max_loop_iterations=10,
+            use_registry_bootstrap=False,  # Отключаем автозагрузку реестра, чтобы не перезаписался наш реестр
         )
 
         result = engine.run(str(pipeline_path), {}, run_id="complex-condition-test-run")
@@ -482,18 +481,6 @@ loops:
         encoding="utf-8",
     )
 
-    class InitAgent:
-        def run(self, context):
-            # Инициализируем счетчик в состоянии
-            context.state["counter"] = 0
-            return {
-                "status": "SUCCESS",
-                "artifacts": [{"type": "initialization", "content": {"counter": 0}}],
-                "decisions": [],
-                "logs": ["Initialized counter to 0"],
-                "next_actions": [],
-            }
-
     init_agent = InitAgent()
     counter_agent = CounterAgent(counter_key="counter")
 
@@ -521,12 +508,18 @@ loops:
     )
 
     try:
+        # Создаем фабрику агентов для StepExecutor
+        def agent_factory(agent_name: str):
+            if agent_name in agent_registry:
+                # Возвращаем экземпляр агента из реестра
+                return agent_registry[agent_name]
+            raise KeyError(f"Agent '{agent_name}' not found")
+
         engine = OrchestratorEngine(
             pipelines_dir="pipelines",
-            step_executor=StepExecutor(
-                agent_registry=agent_registry, strict_schema_validation=False
-            ),
+            step_executor=StepExecutor(agent_factory=agent_factory, strict_schema_validation=False),
             max_loop_iterations=10,
+            use_registry_bootstrap=False,  # Отключаем автозагрузку реестра, чтобы не перезаписался наш реестр
         )
 
         result = engine.run(str(pipeline_path), {}, run_id="comparison-operators-test-run")

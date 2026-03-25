@@ -363,9 +363,28 @@ class OrchestratorEngine:
         while self._evaluate_loop_condition(loop.condition, context.state):
             iterations += 1
             if iterations > self.max_loop_iterations:
+                loop_actions = {
+                    step_by_name[step_name].on_failure
+                    for step_name in loop.steps
+                    if step_name in step_by_name
+                }
+                allow_graceful_break = any(action != "stop_pipeline" for action in loop_actions)
+                if allow_graceful_break:
+                    self._log_event(
+                        logging.WARNING,
+                        context.run_id,
+                        "loop_iteration_limit_reached",
+                        condition=loop.condition,
+                        iterations=iterations - 1,
+                        max_iterations=self.max_loop_iterations,
+                        correlation_id=context.metadata.get("correlation_id"),
+                    )
+                    break
+
                 raise RuntimeError(
                     f"Loop exceeded max iterations ({self.max_loop_iterations}): {loop.condition}"
                 )
+            retry_iteration = False
             for idx, step_name in enumerate(loop.steps):
                 step = step_by_name.get(step_name)
                 if not step:
@@ -376,7 +395,29 @@ class OrchestratorEngine:
                 )
                 step_results[step_name] = output
                 if should_stop:
+                    action = self._resolve_policy_action(step.on_failure)
+                    is_last_loop_step = idx == len(loop.steps) - 1
+                    can_retry_current_iteration = (
+                        action == "stop"
+                        and len(loop.steps) > 1
+                        and is_last_loop_step
+                        and self._evaluate_loop_condition(loop.condition, context.state)
+                    )
+                    if can_retry_current_iteration:
+                        self._log_event(
+                            logging.WARNING,
+                            context.run_id,
+                            "loop_iteration_retry",
+                            step_name=step.name,
+                            condition=loop.condition,
+                            reason="terminal_loop_step_failed_while_condition_is_true",
+                            correlation_id=context.metadata.get("correlation_id"),
+                        )
+                        retry_iteration = True
+                        break
                     return True
+            if retry_iteration:
+                continue
         return False
 
     def _execute_step_batch(
@@ -600,18 +641,67 @@ class OrchestratorEngine:
                 # Вызываем memory hook после успешного выполнения шага
                 trigger_memory_hook(step.name, output, context.state)
         else:
-            # Выполняем шаги с параллелизмом и учётом зависимостей
-            should_stop = self._execute_with_parallelism(
-                steps_to_execute, context, run_state, step_results
-            )
+            executed_step_names: set[str] = set()
 
-            # Вызываем memory hook для каждого выполненного шага
-            for step_name, output in step_results.items():
-                step = next((s for s in steps_to_execute if s.name == step_name), None)
-                if step:
-                    trigger_memory_hook(step.name, output, context.state)
+            def _trigger_hooks_for_new_steps(step_scope: list[StepDefinition]) -> None:
+                nonlocal executed_step_names
+                for step in step_scope:
+                    if step.name in step_results and step.name not in executed_step_names:
+                        trigger_memory_hook(step.name, step_results[step.name], context.state)
+                        executed_step_names.add(step.name)
 
-        if not should_stop and pipeline.loops:
+            if pipeline.loops:
+                loop_step_names = {step_name for loop in pipeline.loops for step_name in loop.steps}
+                loop_anchor_names = {
+                    loop.steps[0]
+                    for loop in pipeline.loops
+                    if isinstance(loop.steps, list) and loop.steps
+                }
+                indexed_steps = list(enumerate(steps_to_execute))
+                indexed_loop_anchors = [
+                    index for index, step in indexed_steps if step.name in loop_anchor_names
+                ]
+
+                if indexed_loop_anchors:
+                    first_loop_index = min(indexed_loop_anchors)
+                    pre_loop_steps = [
+                        step for index, step in indexed_steps if index < first_loop_index
+                    ]
+                    post_loop_steps = [
+                        step
+                        for index, step in indexed_steps
+                        if index >= first_loop_index and step.name not in loop_step_names
+                    ]
+                else:
+                    pre_loop_steps = steps_to_execute
+                    post_loop_steps = []
+
+                should_stop = self._execute_with_parallelism(
+                    pre_loop_steps, context, run_state, step_results
+                )
+                _trigger_hooks_for_new_steps(pre_loop_steps)
+
+                if not should_stop:
+                    step_by_name = {step.name: step for step in pipeline.steps}
+                    for loop in pipeline.loops:
+                        should_stop = self._execute_loop(
+                            loop, step_by_name, context, run_state, step_results
+                        )
+                        if should_stop:
+                            break
+
+                if not should_stop and post_loop_steps:
+                    should_stop = self._execute_with_parallelism(
+                        post_loop_steps, context, run_state, step_results
+                    )
+                    _trigger_hooks_for_new_steps(post_loop_steps)
+            else:
+                should_stop = self._execute_with_parallelism(
+                    steps_to_execute, context, run_state, step_results
+                )
+                _trigger_hooks_for_new_steps(steps_to_execute)
+
+        if resumed_state_payload is not None and not should_stop and pipeline.loops:
             step_by_name = {step.name: step for step in pipeline.steps}
             for loop in pipeline.loops:
                 should_stop = self._execute_loop(

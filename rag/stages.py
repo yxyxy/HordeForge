@@ -124,7 +124,7 @@ class SymbolExtractionStage:
 
                 # If Tree-sitter extraction failed or returned no symbols, try fallback method
                 if not file_symbols:
-                    logger.warning(
+                    logger.info(
                         f"Tree-sitter extraction failed for {parsed_file.file_path}, trying fallback method"
                     )
                     # Use the old SymbolExtractor as fallback

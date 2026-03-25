@@ -313,3 +313,7 @@ class FixAgent(BaseAgent):
         result["artifact_content"] = patch
 
         return result
+
+
+# Backward compatibility alias
+EnhancedFixAgent = FixAgent

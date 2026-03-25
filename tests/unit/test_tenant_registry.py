@@ -25,7 +25,7 @@ def test_extract_repository_full_name_from_inputs():
             inputs={"repo_url": "https://github.com/yxyxy/hordeforge.git"},
             explicit=None,
         )
-        == "acme/hordeforge"
+        == "yxyxy/hordeforge"  # Исправлено: из URL извлекается реальный владелец/репозиторий
     )
     assert (
         extract_repository_full_name(

@@ -51,7 +51,16 @@ class MemoryHook:
         Создает memory entry на основе результата шага и контекста
         """
         # Получаем основную информацию из контекста
-        task_description = context.get("task_description", context.get("issue", "")[:100])
+        task_description = context.get("task_description")
+        if not task_description:
+            issue = context.get("issue", "")
+            if isinstance(issue, str):
+                task_description = issue[:100]
+            elif isinstance(issue, dict):
+                # Если issue - это словарь, берем заголовок или преобразуем в строку
+                task_description = issue.get("title", str(issue)[:100])
+            else:
+                task_description = str(issue)[:100]
         agents_used = context.get("agents_used", [])
 
         # Если текущий агент еще не добавлен в список, добавляем его

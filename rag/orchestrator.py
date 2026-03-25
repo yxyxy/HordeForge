@@ -155,11 +155,21 @@ class IndexingOrchestrator:
 
     def run_sync(self, file_paths: list[Path]) -> dict[str, Any]:
         """Synchronous wrapper for the async run method."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No event loop running, safe to use asyncio.run().
+            return asyncio.run(self.run(file_paths))
 
-        async def _run_async():
-            return await self.run(file_paths)
+        # Event loop is already running in this thread (e.g. FastAPI/pytest-asyncio).
+        # Run the coroutine in a separate thread with its own loop.
+        from concurrent.futures import ThreadPoolExecutor
 
-        return asyncio.run(_run_async())
+        def _run_in_thread() -> dict[str, Any]:
+            return asyncio.run(self.run(file_paths))
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(_run_in_thread).result()
 
     async def run_with_recovery(
         self, file_paths: list[Path], max_retries: int = 3

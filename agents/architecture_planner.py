@@ -384,6 +384,57 @@ def generate_architecture_proposal(
     )
 
 
+def _extract_feature_description_from_dod_payload(dod_payload: Any) -> str:
+    if not isinstance(dod_payload, dict):
+        return ""
+
+    for key in ("title", "feature_description", "summary", "description"):
+        value = dod_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    acceptance_criteria = dod_payload.get("acceptance_criteria")
+    if isinstance(acceptance_criteria, list):
+        for item in acceptance_criteria:
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+
+    return ""
+
+
+def resolve_feature_description(context: dict[str, Any]) -> str:
+    direct = context.get("feature_description")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+
+    issue = context.get("issue")
+    if isinstance(issue, dict):
+        for key in ("title", "body", "description"):
+            value = issue.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    dod_payload = context.get("dod")
+    description = _extract_feature_description_from_dod_payload(dod_payload)
+    if description:
+        return description
+
+    dod_step_result = context.get("dod_extractor")
+    if isinstance(dod_step_result, dict):
+        artifacts = dod_step_result.get("artifacts")
+        if isinstance(artifacts, list):
+            for artifact in artifacts:
+                if not isinstance(artifact, dict):
+                    continue
+                if artifact.get("type") != "dod":
+                    continue
+                description = _extract_feature_description_from_dod_payload(artifact.get("content"))
+                if description:
+                    return description
+
+    return ""
+
+
 def _extract_entity_name(feature_description: str) -> str:
     """Extract entity name from feature description for file naming.
 
@@ -430,11 +481,13 @@ class ArchitecturePlanner(BaseAgent):
             Agent result with architecture proposal
         """
         # Extract feature description and project path from context
-        feature_description = context.get("feature_description", "")
+        feature_description = resolve_feature_description(context)
         project_path = context.get("project_path", ".")
 
         # Get memory context if available
         memory_context = context.get("memory_context", "")
+        if not isinstance(memory_context, str):
+            memory_context = str(memory_context)
 
         if not feature_description:
             return build_agent_result(
@@ -464,6 +517,7 @@ Consider the previous solutions and architectural decisions when proposing the n
         proposal = generate_architecture_proposal(feature_description, project_path)
 
         # Prepare result content
+        code_analysis = analyze_code_structure(project_path)
         result_content = {
             "schema_version": "1.0",
             "feature_description": feature_description,
@@ -481,9 +535,9 @@ Consider the previous solutions and architectural decisions when proposing the n
                     feature_description.replace("Original feature description: ", "").split("\n")[0]
                 ),
                 "code_structure_summary": {
-                    "total_modules": len(analyze_code_structure(project_path)["modules"]),
-                    "total_files": len(analyze_code_structure(project_path)["files"]),
-                    "technologies_used": analyze_code_structure(project_path)["technologies"],
+                    "total_modules": len(code_analysis["modules"]),
+                    "total_files": len(code_analysis["files"]),
+                    "technologies_used": code_analysis["technologies"],
                 },
             },
         }

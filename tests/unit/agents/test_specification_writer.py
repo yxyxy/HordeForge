@@ -9,6 +9,15 @@ from agents.specification_writer import (
 )
 
 
+def _artifact_content(result: dict, artifact_type: str) -> dict:
+    for artifact in result.get("artifacts", []):
+        if artifact.get("type") == artifact_type:
+            content = artifact.get("content")
+            if isinstance(content, dict):
+                return content
+    return {}
+
+
 class TestUserStoryGeneration:
     """TDD: User Story Generation"""
 
@@ -165,11 +174,12 @@ class TestSpecificationWriterAgent:
 
         # Assert
         assert result["status"] == "SUCCESS"
-        assert result["artifact_type"] == "specification"
-        assert "user_story" in result["artifact_content"]
-        assert "acceptance_criteria" in result["artifact_content"]
-        assert "technical_specification" in result["artifact_content"]
-        assert "file_change_plan" in result["artifact_content"]
+        assert result.get("artifact_type") == "spec"
+        content = _artifact_content(result, "spec")
+        assert "user_story" in content
+        assert "acceptance_criteria" in content
+        assert "technical_specification" in content
+        assert "file_change_plan" in content
         assert result["confidence"] > 0.8
 
     def test_run_with_issue_without_user_context(self):
@@ -188,9 +198,10 @@ class TestSpecificationWriterAgent:
 
         # Assert
         assert result["status"] == "SUCCESS"
+        content = _artifact_content(result, "spec")
         # Should still generate specs even without user story
-        assert "technical_specification" in result["artifact_content"]
-        assert "file_change_plan" in result["artifact_content"]
+        assert "technical_specification" in content
+        assert "file_change_plan" in content
 
     def test_run_with_empty_issue(self):
         """TDD: Specification writer handles empty issue"""
@@ -231,7 +242,7 @@ class TestSpecificationWriterAgent:
         result = writer.run(context)
 
         # Assert
-        content = result["artifact_content"]
+        content = _artifact_content(result, "spec")
         assert "feature_description" in content
         assert "user_story" in content
         assert "acceptance_criteria" in content

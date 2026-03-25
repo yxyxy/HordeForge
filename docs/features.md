@@ -1,22 +1,22 @@
-﻿# Feature Matrix
+# Feature Matrix
 
-Матрица отражает целевые функции и текущий статус реализации.
+������� �������� ������� ������� � ������� ������ ����������.
 
-Статусы:
+�������:
 
-- `done` — реализовано и пригодно к использованию
-- `partial` — есть каркас/частичная реализация
-- `planned` — только в документации
+- `done` � ����������� � �������� � �������������
+- `partial` � ���� ������/��������� ����������
+- `planned` � ������ � ������������
 
-| Feature | Priority | Status | Что есть сейчас | Что не хватает |
+| Feature | Priority | Status | ��� ���� ������ | ��� �� ������� |
 |---|---|---|---|---|
 | Pipeline trigger (API) | P0 | done | `scheduler/gateway.py` (`POST /run-pipeline`, `GET /runs/{run_id}`, `GET /runs`), run_id/correlation_id/error envelope, duplicate suppression, pagination, filtering | auth/rate-limit |
-| Webhook ingress (API) | P0 | done | `api/main.py` (`POST /webhooks/github`), HMAC validation, event routing, trigger-level idempotency suppression | расширение event coverage |
-| CLI trigger | P0 | done | `cli.py` команды `init/run/status/health` | E2E against deployed services |
+| Webhook ingress (API) | P0 | done | `api/main.py` (`POST /webhooks/github`), HMAC validation, event routing, trigger-level idempotency suppression | ���������� event coverage |
+| CLI trigger | P0 | done | `cli.py` ������� `init/run/status/health` | E2E against deployed services |
 | Pipeline execution engine | P0 | done | `orchestrator/engine.py` + loader/executor/retry/timeout/loops/summary | performance tuning under load |
-| Registry layer (contracts/agents/pipelines) | P1 | partial | `registry/` (contracts/agents/pipelines/bootstrap), кеширование pipeline definitions, контрактная валидация | единый runtime-реестр, согласование YAML placeholders и контрактов, чтение `triggers`/`logging` |
-| Registry docs generation | P2 | done | `scripts/generate_agent_docs.py`, `scripts/generate_pipeline_docs.py` | автозапуск в CI/cron |
-| Pipeline graph generation | P2 | done | `scripts/generate_pipeline_graph.py` | автозапуск в CI/cron |
+| Registry layer (contracts/agents/pipelines) | P1 | partial | `registry/` (contracts/agents/pipelines/bootstrap), ����������� pipeline definitions, ����������� ��������� | ������ runtime-������, ������������ YAML placeholders � ����������, ������ `triggers`/`logging` |
+| Registry docs generation | P2 | done | `scripts/generate_agent_docs.py`, `scripts/generate_pipeline_docs.py` | ���������� � CI/cron |
+| Pipeline graph generation | P2 | done | `scripts/generate_pipeline_graph.py` | ���������� � CI/cron |
 | RAG foundation | P1 | done | `rag/indexer.py` + `rag/retriever.py` + `rag/sources/mock_docs`, markdown indexing, section metadata, incremental re-index, top-k retrieval with source refs/context limits | production vector backend |
 | Rules pack and loader | P1 | done | `rules/` package (`coding/testing/security`) + `rules/loader.py` (versioning, required documents, basic markdown validation) + injection to execution context | richer semantic rule parsing |
 | Embeddings provider abstraction | P1 | done | `rag/embeddings.py` (`EmbeddingsProvider`, mock/hash backends, provider factory), retriever backend switching with cosine similarity | managed external vector provider |
@@ -31,12 +31,12 @@
 | Cost dashboard | P2 | done | `observability/dashboard_exporter.py` (Datadog, Grafana dashboard configs) | - |
 | Benchmark/load analysis suite | P1 | done | `observability/benchmarking.py` (latency/throughput/baseline-vs-optimized, burst scenarios) | long-running automation |
 | DoD extraction | P0 | done | `agents/dod_extractor.py` deterministic `run(context)` | - |
-| Spec generation (LLM-enhanced) | P0 | done | `agents/specification_writer.py` / `specification_writer_v2.py` - LLM-enhanced specification generation, `agents/llm_wrapper.py` - prompt engineering, validation, retry logic | - |
+| Spec generation (LLM-enhanced) | P0 | done | `agents/specification_writer.py` - LLM-enhanced specification generation, `agents/llm_wrapper.py` - prompt engineering, validation, retry logic | - |
 | Task decomposition | P0 | done | `agents/task_decomposer.py` - breaking down specifications into manageable tasks | - |
 | BDD scenario generation | P0 | done | `agents/bdd_generator.py` - Behavior Driven Development scenario generation | - |
 | Test generation | P0 | done | `agents/test_generator.py` + `agents/test_templates.py` - language-aware templates, pattern extraction | - |
 | Code generation (LLM-enhanced) | P0 | done | `agents/code_generator.py` - LLM synthesis + GitHub patch application | - |
-| Fix loop (LLM-enhanced) | P0 | done | `agents/fix_agent_v2.py` / `fix_agent.py` + `agents/test_executor.py` - real execution via GitHub Actions, convergence detection | - |
+| Fix loop (LLM-enhanced) | P0 | done | `agents/fix_agent.py` + `agents/test_executor.py` - iterative fixes and convergence-aware test execution helpers | - |
 | Fix loop orchestration | P0 | done | `agents/fix_loop.py` - orchestration of fix loops | - |
 | Test execution | P0 | done | `agents/test_runner.py` / `test_executor.py` - test execution framework | - |
 | Test analysis | P0 | done | `agents/test_analyzer.py` - analysis of test results | - |
@@ -44,8 +44,8 @@
 | CI failure analysis | P1 | done | `agents/ci_failure_analyzer.py` + `agents/issue_closer.py` MVP | richer parser |
 | GitHub integration | P0 | partial | hardened `agents/github_client.py` (typed exceptions, retry/backoff, retry logging) | pagination |
 | Repository connector | P0 | done | `agents/repo_connector.py` - connecting to repositories | - |
-| CI monitoring | P1 | done | `agents/ci_monitor_agent/` - мониторинг статуса CI/CD процессов, детектирование сбоев, генерация отчетов | - |
-| Dependency checking | P1 | done | `agents/dependency_checker_agent/` - сканирование зависимостей, проверка уязвимостей, рекомендации по обновлению | - |
+| CI monitoring | P1 | done | `agents/ci_monitor_agent/` - ���������� ������� CI/CD ���������, �������������� �����, ��������� ������� | - |
+| Dependency checking | P1 | done | `agents/dependency_checker_agent/` - ������������ ������������, �������� �����������, ������������ �� ���������� | - |
 | Scheduler jobs | P1 | done | `scheduler/cron_dispatcher.py`, `scheduler/schedule_registry.py`, `scheduler/cron_runtime.py`, cron endpoints | GitHub-backed data sources |
 | Human override + manual permissions | P0 | done | `POST /runs/{run_id}/override` (`stop/retry/resume/explain`), state-machine enforcement, role/source permission checks, operator audit trail | - |
 | Agent result validation | P0 | done | schema set + runtime validation (strict/non-strict) | schema expansion |
@@ -72,14 +72,14 @@
 | Authentication and authorization | P1 | done | `scheduler/auth/` - authentication and authorization components | - |
 | Kubernetes integration | P1 | done | `scheduler/k8s/` - Kubernetes integration for scheduling | - |
 | SQL models | P1 | done | `storage/sql_models.py` - SQL models for ORM | - |
-| Agent registry | P1 | partial | runtime: `agents/registry/`, metadata: `registry/agents.py` | единый source-of-truth реестр |
+| Agent registry | P1 | partial | runtime: `agents/registry/`, metadata: `registry/agents.py` | ������ source-of-truth ������ |
 | Agent Memory | P1 | done | `rag/memory_store.py`, `orchestrator/hooks.py`, `agents/memory_agent.py` - memory storage, hooks for saving results, memory retrieval | - |
 | Context Optimization | P1 | done | `rag/context_compressor.py`, `rag/deduplicator.py` - compression and deduplication of context | - |
 
-## MVP фичи, которые должны быть закрыты первыми
+## MVP ����, ������� ������ ���� ������� �������
 
-1. Pipeline engine с корректным step lifecycle.
-2. Рабочие агенты: `dod_extractor`, `test_generator`, `code_generator`, `fix_agent`.
-3. Базовая GitHub интеграция для issue/comment/PR.
-4. Логирование и понятные run statuses.
-5. Минимальный тестовый контур.
+1. Pipeline engine � ���������� step lifecycle.
+2. ������� ������: `dod_extractor`, `test_generator`, `code_generator`, `fix_agent`.
+3. ������� GitHub ���������� ��� issue/comment/PR.
+4. ����������� � �������� run statuses.
+5. ����������� �������� ������.

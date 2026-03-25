@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-import tempfile
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 
@@ -21,9 +22,10 @@ from orchestrator.status import StepStatus
 @pytest.fixture
 def temp_repo():
     """Create a temporary repository for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        repo_path = Path(tmpdir)
+    repo_path = Path("tests/integration/_tmp_repos") / f"repo-{uuid4().hex}"
+    repo_path.mkdir(parents=True, exist_ok=True)
 
+    try:
         # Create basic project structure
         (repo_path / "src").mkdir()
         (repo_path / "tests").mkdir()
@@ -76,6 +78,12 @@ def test_subtract():
         )
 
         yield repo_path
+    finally:
+        shutil.rmtree(repo_path, ignore_errors=True)
+        try:
+            repo_path.parent.rmdir()
+        except OSError:
+            pass
 
 
 @pytest.fixture

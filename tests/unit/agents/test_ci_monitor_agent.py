@@ -27,7 +27,7 @@ class TestCIStatusMonitoring:
         # Assert
         assert result.status == "success"
         assert result.ci_status == "success"
-        assert "ci_status" in result.dict()
+        assert "ci_status" in result.model_dump()
 
     def test_monitor_ci_status_not_found(self):
         """TDD: CI status not found"""
@@ -83,7 +83,7 @@ class TestStatusReporting:
 
         # Assert
         assert result.status == "reported"
-        assert "report" in result.dict()
+        assert "report" in result.model_dump()
 
     def test_report_status_failure(self):
         """TDD: Status report failed"""

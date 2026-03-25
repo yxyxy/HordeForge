@@ -570,3 +570,6 @@ class SpecificationWriter(BaseAgent):
 
 # Backward-compatible alias
 SpecWriter = SpecificationWriter
+
+# Backward-compatible alias
+EnhancedSpecificationWriter = SpecificationWriter

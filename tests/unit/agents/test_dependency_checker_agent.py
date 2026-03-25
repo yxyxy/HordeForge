@@ -24,7 +24,7 @@ class TestDependencyScanning:
 
         # Assert
         assert result.status == "success"
-        assert "dependencies" in result.dict()
+        assert "dependencies" in result.model_dump()
 
     def test_scan_dependencies_empty(self):
         """TDD: No dependencies found"""

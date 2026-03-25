@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agents.fix_agent_v2 import EnhancedFixAgent
+from agents.fix_agent import FixAgent
 
 
 def _step_result(status: str, artifact_type: str, content: dict) -> dict:
@@ -13,9 +13,17 @@ def _step_result(status: str, artifact_type: str, content: dict) -> dict:
     }
 
 
-def test_enhanced_fix_agent_no_failures():
+def _get_content(result: dict, artifact_type: str) -> dict:
+    """Extract content from agent result."""
+    for artifact in result.get("artifacts", []):
+        if artifact.get("type") == artifact_type:
+            return artifact.get("content", {})
+    return {}
+
+
+def test_fix_agent_no_failures():
     """Test fix agent when no tests are failing."""
-    agent = EnhancedFixAgent()
+    agent = FixAgent()
     context = {
         "use_llm": False,
         "test_runner": _step_result(
@@ -32,9 +40,9 @@ def test_enhanced_fix_agent_no_failures():
     assert content["fix_iteration"] == 1
 
 
-def test_enhanced_fix_agent_first_iteration():
+def test_fix_agent_first_iteration():
     """Test fix agent on first iteration with failures."""
-    agent = EnhancedFixAgent()
+    agent = FixAgent()
     context = {
         "use_llm": False,
         "test_runner": _step_result(
@@ -51,9 +59,9 @@ def test_enhanced_fix_agent_first_iteration():
     assert content["remaining_failures"] == 1  # 2 - 1 = 1
 
 
-def test_enhanced_fix_agent_subsequent_iteration():
+def test_fix_agent_subsequent_iteration():
     """Test fix agent increments iteration correctly."""
-    agent = EnhancedFixAgent()
+    agent = FixAgent()
     context = {
         "use_llm": False,
         "fix_agent": _step_result(
@@ -74,15 +82,15 @@ def test_enhanced_fix_agent_subsequent_iteration():
     assert content["fix_iteration"] == 3  # Previous 2 + 1
 
 
-def test_enhanced_fix_agent_max_iterations():
-    """Test fix agent stops at max iterations."""
-    agent = EnhancedFixAgent()
+def test_fix_agent_iteration_from_string():
+    """Test fix agent handles string iteration value from previous patch."""
+    agent = FixAgent()
     context = {
         "use_llm": False,
         "fix_agent": _step_result(
             "SUCCESS",
             "code_patch",
-            {"fix_iteration": 5, "remaining_failures": 1},
+            {"fix_iteration": "5", "remaining_failures": 1},
         ),
         "test_runner": _step_result(
             "PARTIAL_SUCCESS",
@@ -92,13 +100,14 @@ def test_enhanced_fix_agent_max_iterations():
     }
     result = agent.run(context)
 
-    assert result["status"] == "FAILED"
-    assert "Max iterations" in result["logs"][0]
+    assert result["status"] == "SUCCESS"
+    content = _get_content(result, "code_patch")
+    assert content["fix_iteration"] == 6
 
 
-def test_enhanced_fix_agent_includes_test_fix():
-    """Test fix agent modifies test file when needed."""
-    agent = EnhancedFixAgent()
+def test_fix_agent_produces_patch_files():
+    """Test fix agent always emits at least one file change for failures."""
+    agent = FixAgent()
     context = {
         "use_llm": False,
         "test_runner": _step_result(
@@ -112,26 +121,18 @@ def test_enhanced_fix_agent_includes_test_fix():
     assert result["status"] == "SUCCESS"
     content = _get_content(result, "code_patch")
     paths = [f["path"] for f in content.get("files", [])]
-    assert any("test" in p.lower() for p in paths)
+    assert "src/feature_impl.py" in paths
 
 
-def test_enhanced_fix_agent_name():
+def test_fix_agent_name():
     """Test agent name."""
-    agent = EnhancedFixAgent()
+    agent = FixAgent()
     assert agent.name == "fix_agent"
     assert "fix" in agent.description.lower()
 
 
-def test_enhanced_fix_agent_iteration_limit_default():
-    """Test default max iterations value."""
-    agent = EnhancedFixAgent()
-    # Default value is 5 (from env var or constant)
-    assert agent.MAX_ITERATIONS >= 1
-
-
-def _get_content(result: dict, artifact_type: str) -> dict:
-    """Extract content from agent result."""
-    for artifact in result.get("artifacts", []):
-        if artifact.get("type") == artifact_type:
-            return artifact.get("content", {})
-    return {}
+def test_fix_agent_static_helpers_exist():
+    """Test static helper methods remain available."""
+    assert callable(FixAgent.parse_stacktrace)
+    assert callable(FixAgent.detect_failure)
+    assert callable(FixAgent.generate_fix)

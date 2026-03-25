@@ -1,0 +1,3 @@
+description: Test pipeline for registry loading
+pipeline_name: test_pipeline
+steps: []

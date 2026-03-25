@@ -99,17 +99,18 @@ class RepoConnector(BaseAgent):
         Establish API connection to repository provider.
         """
         if config.mock_mode:
-            # In mock mode, return consistent mock values regardless of input URL
-            # This ensures predictable test results
+            # In mock mode, return consistent mock values regardless of input URL.
             owner = "acme"
             repo_short_name = "hordeforge"
+
+            WORKSPACE_REPO_PATH.mkdir(parents=True, exist_ok=True)
 
             return {
                 "status": "connected",
                 "provider": config.provider,
                 "repo": config.repo_url,
                 "authenticated": bool(config.token),
-                "local_path": str(WORKSPACE_REPO_PATH) if not config.mock_mode else None,
+                "local_path": str(WORKSPACE_REPO_PATH),
                 "repo_data": {
                     "full_name": f"{owner}/{repo_short_name}",
                     "description": "Mock repository for testing",
@@ -456,13 +457,18 @@ class RepoConnector(BaseAgent):
 
                 agent_result = build_agent_result(
                     status="SUCCESS",
-                    artifact_type="repository_data",
+                    artifact_type="repository_metadata",
                     artifact_content=metadata,
                     reason=f"Repository {operation} completed successfully",
                     confidence=0.95,
                     logs=[f"Repository {operation} operation completed"],
                     next_actions=["process_repository_data"],
                 )
+                # Backward compatibility for consumers still reading repository_data.
+                agent_result.setdefault("artifacts", [])
+                agent_result["artifacts"].append({"type": "repository_data", "content": metadata})
+                agent_result["artifact_type"] = "repository_data"
+                agent_result["artifact_content"] = metadata
                 return agent_result
             else:
                 agent_result = build_agent_result(

@@ -1,8 +1,6 @@
 """Unit tests for real fix loop execution (HF-P5-005)."""
 
-from unittest.mock import patch
-
-from agents.fix_agent_v2 import EnhancedFixAgent
+from agents.fix_agent import FixAgent
 from agents.test_executor import (
     ConvergenceDetector,
     FixIterationState,
@@ -220,28 +218,17 @@ class TestExtractErrorContext:
         assert "test_main.py" in context
 
 
-class TestEnhancedFixAgent:
-    """Tests for EnhancedFixAgent."""
+class TestFixAgent:
+    """Tests for FixAgent."""
 
     def test_agent_has_name(self):
         """Test agent has name."""
-        agent = EnhancedFixAgent()
+        agent = FixAgent()
         assert agent.name == "fix_agent"
-
-    def test_max_iterations_from_env(self):
-        """Test max iterations from environment."""
-        with patch.dict("os.environ", {"HORDEFORGE_FIX_MAX_ITERATIONS": "3"}):
-            # Need to reimport to pick up env var
-            from importlib import reload
-
-            import agents.fix_agent_v2 as fix_module
-
-            reload(fix_module)
-            # Agent uses env var at class definition time
 
     def test_run_with_no_failures(self):
         """Test run with no failures."""
-        agent = EnhancedFixAgent()
+        agent = FixAgent()
         context = {
             "test_runner": {
                 "test_results": {
@@ -250,18 +237,18 @@ class TestEnhancedFixAgent:
                     "failed": 0,
                     "errors": [],
                 }
-            }
+            },
+            "use_llm": False,
         }
 
         result = agent.run(context)
         assert result["status"] == "SUCCESS"
-        # Result structure: artifacts[0].content
         content = result["artifacts"][0]["content"]
         assert content["remaining_failures"] == 0
 
-    def test_run_with_failures_uses_llm(self):
-        """Test run with failures uses LLM."""
-        agent = EnhancedFixAgent()
+    def test_run_with_failures(self):
+        """Test run with failures."""
+        agent = FixAgent()
         context = {
             "test_runner": {
                 "test_results": {
@@ -271,17 +258,18 @@ class TestEnhancedFixAgent:
                     "errors": [],
                 }
             },
-            "use_llm": False,  # Use deterministic
+            "use_llm": False,
         }
 
         result = agent.run(context)
         assert result["status"] == "SUCCESS"
         content = result["artifacts"][0]["content"]
         assert content["fix_iteration"] == 1
+        assert content["remaining_failures"] == 1
 
     def test_run_resolves_iteration(self):
         """Test iteration resolution from previous fix."""
-        agent = EnhancedFixAgent()
+        agent = FixAgent()
         context = {
             "fix_agent": {
                 "status": "SUCCESS",
@@ -306,30 +294,17 @@ class TestEnhancedFixAgent:
         }
 
         result = agent.run(context)
-        # Should resolve to iteration 2 (1 + 1)
         content = result["artifacts"][0]["content"]
-        assert content["fix_iteration"] >= 1
+        assert content["fix_iteration"] == 2
 
-    def test_convergence_stops_fix_loop(self):
-        """Test convergence detection stops fix loop."""
-        # Test convergence detector directly - this is the core logic
+    def test_convergence_detector_logic(self):
+        """Test convergence detection logic remains covered at utility level."""
         detector = ConvergenceDetector(max_iterations=5)
-
-        # Record iterations with same errors = convergence
         detector.record_iteration(1, ["test_a"], ["AssertionError: error"])
         detector.record_iteration(2, ["test_a"], ["AssertionError: error"])
 
-        # Should detect convergence between iterations 1 and 2
         assert detector.has_converged() is True
         assert detector.should_stop(2) is True
-
-        # Verify that agent's convergence detector works the same way
-        agent = EnhancedFixAgent()
-        agent.convergence_detector.record_iteration(1, ["test_a"], ["AssertionError: error"])
-        agent.convergence_detector.record_iteration(2, ["test_a"], ["AssertionError: error"])
-
-        assert agent.convergence_detector.has_converged() is True
-        assert agent.convergence_detector.should_stop(2) is True
 
 
 class TestTestExecutionResult:

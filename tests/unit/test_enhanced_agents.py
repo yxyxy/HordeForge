@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agents.code_generator_v2 import EnhancedCodeGenerator
-from agents.specification_writer_v2 import EnhancedSpecificationWriter
+from agents.code_generator import EnhancedCodeGenerator
+from agents.specification_writer import EnhancedSpecificationWriter
 
 
 def _get_content(result: dict, artifact_type: str) -> dict:
@@ -17,14 +17,15 @@ def test_enhanced_specification_writer_basic():
     writer = EnhancedSpecificationWriter()
     context = {
         "use_llm": False,  # Skip LLM to test deterministic path
+        "feature_description": "Implement OAuth2 login flow",
     }
     result = writer.run(context)
 
     assert result["status"] == "SUCCESS"
     content = _get_content(result, "spec")
     assert "schema_version" in content
-    assert "requirements" in content
-    assert content["llm_enhanced"] is False
+    assert "acceptance_criteria" in content
+    assert "technical_specification" in content
 
 
 def test_enhanced_specification_writer_with_dod():
@@ -48,8 +49,7 @@ def test_enhanced_specification_writer_with_dod():
 
     assert result["status"] == "SUCCESS"
     content = _get_content(result, "spec")
-    # Should have requirements from DoD
-    assert len(content["requirements"]) >= 1
+    assert len(content["acceptance_criteria"]) >= 1
 
 
 def test_enhanced_code_generator_basic():

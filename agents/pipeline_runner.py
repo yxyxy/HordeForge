@@ -1,3 +1,4 @@
+import inspect
 import json
 import logging
 from datetime import datetime, timezone
@@ -159,9 +160,20 @@ class PipelineRunner:
     def _import_agent(self, agent_name: str):
         module = import_module(f"agents.{agent_name}")
         class_name = "".join(part.capitalize() for part in agent_name.split("_"))
-        if not hasattr(module, class_name):
-            raise AttributeError(f"Class '{class_name}' not found in module agents.{agent_name}")
-        return getattr(module, class_name)
+
+        if hasattr(module, class_name):
+            return getattr(module, class_name)
+
+        # Fallback for acronym-heavy names like `bdd_generator` -> `BDDGenerator`.
+        normalized_expected = "".join(ch for ch in class_name.lower() if ch.isalnum())
+        for attr_name, attr_value in vars(module).items():
+            if not inspect.isclass(attr_value):
+                continue
+            normalized_candidate = "".join(ch for ch in attr_name.lower() if ch.isalnum())
+            if normalized_candidate == normalized_expected:
+                return attr_value
+
+        raise AttributeError(f"Class '{class_name}' not found in module agents.{agent_name}")
 
     @staticmethod
     def _error_result(status: str, message: str) -> dict[str, Any]:

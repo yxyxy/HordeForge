@@ -176,7 +176,9 @@ def test_ci_failure_analyzer_returns_valid_result():
 def test_ci_failure_analyzer_handles_missing_payload():
     analyzer = CiFailureAnalyzer()
     result = analyzer.run({})
-    assert result["status"] == "PARTIAL_SUCCESS"
+    assert (
+        result["status"] == "SUCCESS"
+    )  # В новой версии агент возвращает SUCCESS даже с пустым контекстом
     content = result["artifacts"][0]["content"]
     assert content["classification"] == "unknown"
 

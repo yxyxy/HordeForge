@@ -72,8 +72,41 @@ class IssueCloser(BaseAgent):
     name = "issue_closer"
     description = "Closes issues after verifying DoD and CI status."
 
+    @staticmethod
+    def _extract_failed_count(ci_payload: Any) -> int | None:
+        if not isinstance(ci_payload, dict):
+            return None
+
+        failed = ci_payload.get("failed")
+        if isinstance(failed, int):
+            return max(0, failed)
+
+        nested = ci_payload.get("test_results")
+        if isinstance(nested, dict) and isinstance(nested.get("failed"), int):
+            return max(0, nested["failed"])
+
+        return None
+
+    @staticmethod
+    def _ci_passed(ci_payload: Any) -> bool:
+        failed_count = IssueCloser._extract_failed_count(ci_payload)
+        if failed_count is not None:
+            return failed_count == 0
+
+        if isinstance(ci_payload, str):
+            return verify_ci(ci_payload) == "passed"
+
+        if isinstance(ci_payload, dict):
+            status_value = str(ci_payload.get("status", "")).strip().lower()
+            conclusion = str(ci_payload.get("conclusion", "")).strip().lower()
+            if status_value in {"success", "passed", "green"}:
+                return True
+            if conclusion in {"success", "passed"}:
+                return True
+
+        return False
+
     def run(self, context: dict[str, Any]) -> dict:
-        # Extract DoD information from context - check direct key first, then use get_artifact_from_context
         dod_info = (
             context.get("dod")
             or get_artifact_from_context(
@@ -84,59 +117,63 @@ class IssueCloser(BaseAgent):
             or {}
         )
 
-        # Extract CI status from context - check direct key first, then use get_artifact_from_context
-        # Also check for ci_verification which may contain status directly
-        ci_verification = context.get("ci_verification", {})
-        if isinstance(ci_verification, dict):
-            ci_status = ci_verification.get("status", "unknown")
-        else:
-            ci_status = (
-                context.get("ci_status")
-                or get_artifact_from_context(
-                    context,
-                    "ci_status",
-                    preferred_steps=["ci_verification", "ci_monitoring"],
-                )
-                or "unknown"
+        ci_payload = (
+            context.get("ci_results")
+            or context.get("ci_verification")
+            or context.get("ci_status")
+            or get_artifact_from_context(
+                context,
+                "test_results",
+                preferred_steps=["ci_verification", "test_runner"],
             )
+            or {}
+        )
 
-        # Get issue ID from context
-        issue_id = context.get("issue_id", context.get("current_issue_id", 0))
+        issue = context.get("issue")
+        if isinstance(issue, dict) and isinstance(issue.get("id"), int):
+            issue_id = issue["id"]
+        else:
+            issue_id = context.get("issue_id", context.get("current_issue_id", 0))
 
-        # Perform DoD verification
         dod_result = verify_dod(dod_info)
+        ci_result = "passed" if self._ci_passed(ci_payload) else "failed"
 
-        # Perform CI verification
-        ci_result = verify_ci(ci_status)
+        close_issue_flag = dod_result == "passed" and ci_result == "passed"
+        if close_issue_flag:
+            reason_key = "ready_to_close"
+            final_status = "closed"
+        elif ci_result != "passed":
+            reason_key = "ci_still_failing"
+            final_status = "open"
+        else:
+            reason_key = "dod_not_satisfied"
+            final_status = "open"
 
-        # Attempt to close issue based on verification results
-        close_result = close_issue(issue_id, dod_result, ci_result)
-
-        # Determine agent status based on close result
-        agent_status = "SUCCESS" if close_result["status"] == "closed" else "PARTIAL_SUCCESS"
-
-        # Prepare result
         result = {
-            "issue_id": close_result["issue_id"],
-            "close_issue": close_result["status"] == "closed",
-            "final_status": close_result["status"],
+            "issue_id": issue_id,
+            "close_issue": close_issue_flag,
+            "final_status": final_status,
             "dod_result": dod_result,
             "ci_result": ci_result,
-            "close_reason": close_result["reason"],
+            "reason": reason_key,
+            "close_reason": reason_key,
         }
 
-        return build_agent_result(
-            status=agent_status,
+        agent_result = build_agent_result(
+            status="SUCCESS" if close_issue_flag else "PARTIAL_SUCCESS",
             artifact_type="close_status",
             artifact_content=result,
-            reason=f"Issue closure decision: {close_result['reason']}",
-            confidence=0.95 if close_result["status"] == "closed" else 0.75,
+            reason=f"Issue closure decision: {reason_key}",
+            confidence=0.95 if close_issue_flag else 0.75,
             logs=[
                 f"DoD verification: {dod_result}",
                 f"CI verification: {ci_result}",
-                f"Issue {issue_id} status: {close_result['status']} ({close_result['reason']})",
+                f"Issue {issue_id} status: {final_status} ({reason_key})",
             ],
-            next_actions=[]
-            if close_result["status"] == "closed"
-            else ["keep_open", "investigate_issues"],
+            next_actions=[] if close_issue_flag else ["keep_open", "investigate_issues"],
         )
+
+        # Backward compatibility for older tests/consumers.
+        agent_result.setdefault("artifacts", [])
+        agent_result["artifacts"].append({"type": "issue_closure_result", "content": result})
+        return agent_result

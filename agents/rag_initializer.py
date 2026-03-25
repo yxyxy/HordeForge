@@ -358,6 +358,11 @@ class RagInitializer(BaseAgent):
         repository_metadata = (
             get_artifact_from_context(
                 context,
+                "repository_metadata",
+                preferred_steps=["repo_connector"],
+            )
+            or get_artifact_from_context(
+                context,
                 "repository_data",
                 preferred_steps=["repo_connector"],
             )
@@ -365,11 +370,28 @@ class RagInitializer(BaseAgent):
         )
 
         local_path = repository_metadata.get("local_path")
-        if local_path:
+        mock_mode = bool(repository_metadata.get("mock_mode") or context.get("mock_mode", False))
+
+        if local_path and Path(local_path).exists():
             repo_path = Path(local_path)
         else:
-            repo_path_input = context.get("repo_path") or context.get("repo_url", "./")
-            repo_path = ensure_repo_local(repo_path_input)
+            repo_path_input = (
+                context.get("repo_path")
+                or context.get("repo_url")
+                or repository_metadata.get("repo_url")
+                or "./"
+            )
+            if (
+                mock_mode
+                and isinstance(repo_path_input, str)
+                and repo_path_input.startswith("http")
+            ):
+                logger.info(
+                    "RAG initializer: mock mode enabled, skipping repository clone and using current workspace"
+                )
+                repo_path = Path("./")
+            else:
+                repo_path = ensure_repo_local(repo_path_input)
 
         # Use structured indexing by default for better performance
         # Extract configuration parameters from context if available
@@ -399,14 +421,17 @@ class RagInitializer(BaseAgent):
         else:
             reason = "RAG index build failed"
 
+        indexed_files_count = index_result.get("total_files_processed") or index_result.get(
+            "indexed_files", 0
+        )
+        total_symbols_count = index_result.get("total_symbols_extracted") or index_result.get(
+            "total_symbols", 0
+        )
+
         rag_index = {
             "index_id": f"repo_index_{hash(str(repo_path))}",
-            "indexed_files_count": index_result.get(
-                "total_files_processed", 0
-            ),  # Updated field name
-            "total_symbols_count": index_result.get(
-                "total_symbols_extracted", 0
-            ),  # Updated field name
+            "indexed_files_count": indexed_files_count,
+            "total_symbols_count": total_symbols_count,
             "source_repo": repository_metadata.get("full_name", str(repo_path)),
             "vector_store_status": vector_ready,
             "keyword_index_status": keyword_ready,
@@ -422,8 +447,8 @@ class RagInitializer(BaseAgent):
             confidence=0.95 if rag_working else 0.6,
             logs=[
                 f"Repo path: {repo_path}",
-                f"Indexed files: {index_result.get('total_files_processed', 0)}",  # Updated field name
-                f"Extracted symbols: {index_result.get('total_symbols_extracted', 0)}",  # Updated field name
+                f"Indexed files: {indexed_files_count}",
+                f"Extracted symbols: {total_symbols_count}",
                 f"Chunks stored: {index_result.get('total_chunks_stored', 0)}",  # Added new metric
                 f"Vector store: {'ready' if vector_ready else 'unavailable'}",
                 f"Keyword index: {'ready' if keyword_ready else 'unavailable'}",

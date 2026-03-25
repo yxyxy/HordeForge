@@ -161,10 +161,8 @@ class TestGitHubIntegration:
         assert "artifact_type" in result
         assert result["artifact_type"] == "review_result"
 
-        artifacts = result.get("artifacts", [])
-        assert len(artifacts) > 0
-
-        content = artifacts[0].get("content", {})
+        # В новой версии агента результат возвращается в artifact_content
+        content = result.get("artifact_content", {})
         assert "decision" in content
         assert "policy_checks" in content
         assert content["decision"] in ["approve", "request_changes"]
