@@ -28,6 +28,13 @@ temp_cline/
 temp_openclaw/
 Local RAG/
 
+# Test temporary directories
+tests/_tmp_*/
+tests/**/_tmp_*/
+**/_tmp_*/
+*tmp*/
+
+
 # Development tasks
 # development_tasks/
 # development_tasks/subtasks/

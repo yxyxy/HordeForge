@@ -1,155 +1,221 @@
 ﻿# FR / NFR Specification
 
-Документ определяет целевые функциональные (FR) и нефункциональные (NFR) требования для HordeForge.
+Document defines target functional (FR) and non-functional (NFR) requirements for HordeForge.
 
-## 1. Область
+## 1. Scope
 
-В scope: pipeline orchestration для разработки и CI self-healing на GitHub.
+In scope: pipeline orchestration for development and CI self-healing on GitHub.
 
-Out of scope для MVP:
+Out of scope for MVP:
 
 - production deploy agents
 - multi-repo orchestration
-- глубокий RAG и knowledge graph
+- deep RAG and knowledge graph
 
 ## 2. Functional Requirements (FR)
 
-### FR-01. Запуск pipeline
+### FR-01. Pipeline trigger
 
-Система должна запускать pipeline через API и CLI.
+System must trigger pipelines via API and CLI.
 
-Критерии приемки:
+Acceptance criteria:
 
-- можно вызвать `POST /run-pipeline`
-- можно запустить через CLI
-- каждому запуску присваивается `run_id`
+- can call `POST /run-pipeline`
+- can run via CLI
+- each run gets assigned `run_id`
 
-### FR-02. Исполнение шагов pipeline
+### FR-02. Pipeline step execution
 
-Orchestrator должен последовательно исполнять шаги pipeline с передачей контекста между шагами.
+Orchestrator must execute pipeline steps sequentially with context passing between steps.
 
-Критерии приемки:
+Acceptance criteria:
 
-- шаги выполняются в порядке YAML
-- результат шага доступен следующему шагу
-- в случае ошибки фиксируется статус и причина
+- steps execute in YAML order
+- step result available to next step
+- on error, status and reason are recorded
 
-### FR-03. Контракт агента
+### FR-03. Agent contract
 
-Каждый агент должен реализовывать единый интерфейс и возвращать `AgentResult`.
+Each agent must implement unified interface and return `AgentResult`.
 
-Критерии приемки:
+Acceptance criteria:
 
-- любой агент вызывается через `run(context)`
-- результат валидируется schema
-- недопустимый результат переводит шаг в `FAILED`
+- any agent called via `run(context)`
+- result validated by schema
+- invalid result moves step to `FAILED`
 
 ### FR-04. Feature pipeline (MVP)
 
-Система должна поддерживать базовый flow feature-issue до PR.
+System must support basic feature-issue-to-PR flow.
 
-Критерии приемки:
+Acceptance criteria:
 
-- реализованы шаги MVP цепочки: DoD -> Spec -> Tests -> Code -> Fix
-- создается PR (или имитация PR в dry-run)
-- логируется итоговый статус issue
+- MVP chain steps implemented: DoD -> Spec -> Tests -> Code -> Fix
+- creates PR (or mock PR in dry-run)
+- logs final issue status
 
 ### FR-05. CI fix pipeline (MVP)
 
-Система должна обрабатывать CI failure и запускать цикл исправления.
+System must handle CI failure and trigger fix loop.
 
-Критерии приемки:
+Acceptance criteria:
 
-- принимает данные о падении CI
-- запускает fail analysis + fix + retest
-- завершает flow со статусом `SUCCESS` или `BLOCKED`
+- accepts CI failure data
+- runs fail analysis + fix + retest
+- finishes flow with `SUCCESS` or `BLOCKED` status
 
-### FR-06. Retry и loop
+### FR-06. Retry and loop
 
-Система должна поддерживать retry policy на уровне шагов.
+System must support retry policy on step level.
 
-Критерии приемки:
+Acceptance criteria:
 
-- можно настроить `retry_limit`
-- превышение лимита переводит шаг в `BLOCKED`
-- количество retry фиксируется в логе
+- can configure `retry_limit`
+- exceeding limit moves step to `BLOCKED`
+- retry count recorded in log
 
-### FR-07. Интеграция с GitHub
+### FR-07. GitHub integration
 
-Система должна поддерживать ключевые операции с GitHub.
+System must support key GitHub operations.
 
-Критерии приемки:
+Acceptance criteria:
 
 - read issue
 - create comment
 - create branch/PR
 - read workflow runs
 
-### FR-08. Наблюдаемость
+### FR-08. Observability
 
-Система должна логировать выполнение каждого шага.
+System must log execution of each step.
 
-Критерии приемки:
+Acceptance criteria:
 
-- лог старта/окончания шага
-- лог решения агента
-- итоговый summary по run
+- log step start/end
+- log agent decision
+- final run summary
+
+### FR-09. LLM Integration
+
+System must support multiple LLM providers with unified interface.
+
+Acceptance criteria:
+
+- supports 18+ providers (OpenAI, Anthropic, Google, Ollama, etc.)
+- unified streaming interface
+- token usage tracking and cost calculation
+- fallback mechanisms for provider failures
+
+### FR-10. Agent Memory
+
+System must store and retrieve historical solutions for agents.
+
+Acceptance criteria:
+
+- stores successful task executions
+- retrieves similar past solutions
+- combines memory with RAG context
+- automatic recording of successful pipeline steps
+
+### FR-11. Context Optimization
+
+System must optimize context size for efficient token usage.
+
+Acceptance criteria:
+
+- deduplication of redundant information
+- compression to fit token limits
+- preservation of semantic meaning
+- combination of memory and RAG context
+
+### FR-12. Token Budget System
+
+System must track and limit token usage costs.
+
+Acceptance criteria:
+
+- tracks usage by provider and date
+- enforces daily/monthly/session budget limits
+- calculates costs based on provider pricing
+- provides CLI interface for monitoring
 
 ## 3. Non-Functional Requirements (NFR)
 
-### NFR-01. Надежность
+### NFR-01. Reliability
 
-- шаги должны быть идемпотентны для повторного запуска
-- падение одного шага не должно ломать историю run
+- steps must be idempotent for re-run
+- failure of one step should not break run history
 
-### NFR-02. Безопасность
+### NFR-02. Security
 
-- токены не пишутся в логи
-- изменения кода только через branch + PR workflow
+- tokens not written to logs
+- code changes only via branch + PR workflow
 
-### NFR-03. Расширяемость
+### NFR-03. Extensibility
 
-- добавление агента не требует изменения ядра orchestrator
-- новый pipeline подключается декларативно
+- adding agent should not require orchestrator changes
+- new pipeline plugged in declaratively
 
-### NFR-04. Прозрачность
+### NFR-04. Transparency
 
-- все статусы шагов и причины ошибок доступны оператору
+- all step statuses and error reasons available to operator
 
-### NFR-05. Производительность (MVP)
+### NFR-05. Performance (MVP)
 
-- инициализация запуска pipeline: до 3 сек
-- накладные расходы orchestrator на шаг: до 500 мс (без работы LLM)
+- pipeline init: under 3 sec
+- orchestrator overhead: under 500 ms (excluding LLM work)
 
-### NFR-06. Тестопригодность
+### NFR-06. Testability
 
-- критический путь покрыт unit и integration тестами
-- для каждого MVP агента есть минимум 1 позитивный и 1 негативный тест
+- critical path covered by unit and integration tests
+- for each MVP agent at least 1 positive and 1 negative test
+
+### NFR-07. Scalability
+
+- support for multiple concurrent pipeline runs
+- horizontal scaling of agent execution
+- efficient resource utilization
+
+### NFR-08. Maintainability
+
+- modular architecture with clear boundaries
+- comprehensive documentation
+- consistent coding standards
 
 ## 4. Traceability
 
-- Архитектура: `docs/ARCHITECTURE.md`
-- Контракт агентов: `docs/AGENT_SPEC.md`
-- Матрица фич: `docs/features.md`
+- Architecture: `docs/ARCHITECTURE.md`
+- Agent contract: `docs/AGENT_SPEC.md`
+- Feature matrix: `docs/features.md`
 - User cases: `docs/use_cases.md`
+- LLM Integration: `docs/llm_integration.md`
+- Agent Memory: `docs/agent_memory.md`
+- Context Optimization: `docs/context_optimization.md`
+- Token Budget System: `docs/token_budget_system.md`
 
-## 5. Текущее покрытие требований
+## 5. Current requirement coverage
 
-Текущее состояние: **выполнено**
+Current state: **implemented**
 
 - FR-01: **done** — API + CLI trigger, run_id generation
-- FR-02: **done** — Orchestrator engine с parallel execution
-- FR-03: **done** — Agent contract в `context_utils.py`, schema validation
-- FR-04: **done** — feature_pipeline.yaml (12 шагов), LLM-enhanced agents
-- FR-05: **done** — ci_fix_pipeline.yaml (8 шагов), fix loop
-- FR-06: **done** — Retry policy в `orchestrator/retry.py`, loop conditions
+- FR-02: **done** — Orchestrator engine with parallel execution
+- FR-03: **done** — Agent contract in `context_utils.py`, schema validation
+- FR-04: **done** — feature_pipeline.yaml (12 steps), LLM-enhanced agents
+- FR-05: **done** — ci_fix_pipeline.yaml (8 steps), fix loop
+- FR-06: **done** — Retry policy in `orchestrator/retry.py`, loop conditions
 - FR-07: **done** — GitHub client, live_review, live_merge agents
 - FR-08: **done** — Webhook ingress, cron jobs, manual trigger
+- FR-09: **done** — 18+ LLM providers, unified interface, streaming
+- FR-10: **done** — Agent memory system with automatic recording
+- FR-11: **done** — Context optimization with deduplication/compression
+- FR-12: **done** — Token budget system with cost tracking
 
-NFR требования также реализованы:
+NFR requirements also implemented:
 - NFR-01 (Security): token redaction, HMAC validation, permission checks ✅
 - NFR-02 (Reliability): retry/timeout, idempotency suppression ✅
 - NFR-03 (Extensibility): agent registry, pipeline-first ✅
 - NFR-04 (Transparency): step logs, run status, error envelope ✅
 - NFR-05 (Performance): <3s pipeline init, <500ms orchestrator overhead ✅
 - NFR-06 (Testability): 280+ unit/integration tests ✅
+- NFR-07 (Scalability): parallel execution, resource management ✅
+- NFR-08 (Maintainability): modular design, documentation ✅

@@ -3,7 +3,6 @@ Structured indexing stages for RAG optimization.
 Implements the four main stages: parsing, symbol extraction, chunking, embedding, and storage.
 """
 
-import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,7 +20,9 @@ from rag.symbol_extractor_tree_sitter import TreeSitterSymbolExtractor
 from rag.tree_sitter_parser import get_language_for_file, parse_file
 from rag.vector_store import QdrantStore
 
-logger = logging.getLogger(__name__)
+from ..logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -210,6 +211,10 @@ class ChunkingStage:
         start_time = time.time()
         chunks = []
 
+        # Track statistics for summary log
+        total_structural_elements = 0
+        total_files_processed = 0
+
         if self.use_smart_chunking:
             # Group symbols by file to process with smart chunking
             symbols_by_file = {}
@@ -221,6 +226,7 @@ class ChunkingStage:
             # Process each file separately with smart chunking
             for file_path_str, file_symbols in symbols_by_file.items():
                 file_path = Path(file_path_str)
+                total_files_processed += 1
                 try:
                     # Read the file content to pass to the chunk generator
                     with open(file_path, encoding="utf-8") as f:
@@ -231,6 +237,10 @@ class ChunkingStage:
                         file_path, file_symbols, file_content
                     )
                     chunks.extend(file_chunks)
+
+                    # Count structural elements (this info comes from the chunking process)
+                    # We'll estimate based on the number of symbols processed for this file
+                    total_structural_elements += len(file_symbols)
 
                 except FileNotFoundError:
                     logger.warning(
@@ -247,8 +257,16 @@ class ChunkingStage:
         else:
             # Use the original basic chunking approach
             chunks.extend(await self._basic_chunking(symbols))
+            # For basic chunking, each symbol is treated as a structural element
+            total_structural_elements = len(symbols)
+            total_files_processed = len(set(symbol.file_path for symbol in symbols))
 
         duration = time.time() - start_time
+
+        # Summary log in the requested format
+        logger.info(
+            f"Identified {total_structural_elements} structural elements, Generated {len(chunks)} chunks for {total_files_processed} files"
+        )
         logger.info(f"ChunkingStage: Created {len(chunks)} chunks in {duration:.2f}s")
         return chunks
 

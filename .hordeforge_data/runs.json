@@ -1,1 +1,27 @@
-[]
+[
+  {
+    "run_id": "default:68904b24-c2c8-48cf-ae41-6cf5f6c35d9f",
+    "pipeline_name": "feature_pipeline",
+    "status": "RUNNING",
+    "source": "webhook",
+    "correlation_id": "delivery-issues-1",
+    "started_at": "2026-03-25T22:44:37.657073+00:00",
+    "tenant_id": "default",
+    "repository_full_name": "acme/hordeforge",
+    "finished_at": null,
+    "result": null,
+    "error": null,
+    "inputs": {
+      "issue": {
+        "body": "Implement X",
+        "id": 11,
+        "title": "Feature request"
+      },
+      "repository": {
+        "full_name": "acme/hordeforge"
+      }
+    },
+    "idempotency_key": "hf:8bf44057244d242fe37f220fc2e76cc96ad17bf05f084c6dd73ea1164e194d40",
+    "override_state": null
+  }
+]

@@ -270,3 +270,59 @@ Then register in the factory system in `llm_api.py`.
 4. **Streaming**: Use streaming for large responses to manage memory
 5. **Error Handling**: Implement proper error handling in production code
 6. **Environment**: Use environment variables for API keys and configuration
+
+## Advanced Features
+
+### Context Optimization
+The system includes context optimization features:
+- Deduplication to remove redundant information
+- Compression to reduce context size
+- Memory management to store and retrieve historical solutions
+
+### Agent Memory Integration
+LLM calls can leverage agent memory to:
+- Retrieve similar past solutions
+- Learn from historical patterns
+- Avoid repeating previous mistakes
+
+### RAG Integration
+The system seamlessly integrates with RAG (Retrieval Augmented Generation):
+- Context retrieval from documentation
+- Code snippet extraction
+- Historical solution lookup
+- Knowledge base integration
+
+### Multi-modal Support
+Some providers support multi-modal inputs:
+- Image processing (OpenAI GPT-4o, Anthropic Claude)
+- Audio processing (where supported)
+- Video processing (where supported)
+
+## Performance Considerations
+
+- Streaming responses to manage memory usage
+- Connection pooling for better performance
+- Caching for frequently requested information
+- Parallel processing where appropriate
+- Efficient token usage to minimize costs
+
+## Troubleshooting
+
+Common issues and solutions:
+
+1. **Rate Limits**: Implement exponential backoff and retry logic
+2. **Authentication**: Verify API keys are correctly set in environment variables
+3. **Network Issues**: Check connectivity to provider endpoints
+4. **Token Limits**: Implement context window management
+5. **Cost Overruns**: Monitor usage with the Token Budget System
+6. **Provider Unavailability**: Use fallback providers and graceful degradation
+
+## Monitoring and Observability
+
+The system provides comprehensive monitoring:
+- Token usage tracking
+- Cost monitoring
+- Response time metrics
+- Error rate tracking
+- Provider availability monitoring
+- Budget compliance checking

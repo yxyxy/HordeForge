@@ -3,7 +3,6 @@ Smart chunking module for RAG optimization.
 Implements structural code analysis and intelligent chunking based on code symbols.
 """
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,7 +10,9 @@ from uuid import uuid4
 
 from rag.models import Chunk, Symbol
 
-logger = logging.getLogger(__name__)
+from ..logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -58,7 +59,7 @@ class CodeStructureAnalyzer:
         Analyze the structure of code based on extracted symbols and file content.
         Creates a hierarchical representation of code elements.
         """
-        logger.info(f"Analyzing code structure for {file_path} with {len(symbols)} symbols")
+        logger.debug(f"Analyzing code structure for {file_path} with {len(symbols)} symbols")
 
         # Create code elements from symbols
         elements = []
@@ -84,7 +85,9 @@ class CodeStructureAnalyzer:
         # Identify parent-child relationships (e.g., methods within classes)
         elements_with_hierarchy = self._build_hierarchy(elements)
 
-        logger.info(f"Identified {len(elements_with_hierarchy)} structural elements in {file_path}")
+        logger.debug(
+            f"Identified {len(elements_with_hierarchy)} structural elements in {file_path}"
+        )
         return elements_with_hierarchy
 
     def _extract_symbol_content(
@@ -138,7 +141,7 @@ class SmartChunker:
         """
         Create chunks from structural elements with consideration for code hierarchy and overlap.
         """
-        logger.info(f"Creating chunks from {len(elements)} elements in {file_path}")
+        logger.debug(f"Creating chunks from {len(elements)} elements in {file_path}")
         chunks = []
 
         # Process each top-level element
@@ -162,7 +165,7 @@ class SmartChunker:
                 if overlap_chunk:
                     chunks.append(overlap_chunk)
 
-        logger.info(f"Created {len(chunks)} chunks from {file_path}")
+        logger.debug(f"Created {len(chunks)} chunks from {file_path}")
         return chunks
 
     def _create_element_chunk(self, element: CodeElement, file_path: str) -> Chunk | None:
@@ -276,7 +279,7 @@ class ChunkGenerator:
         """
         Generate smart chunks from a file using structural analysis.
         """
-        logger.info(f"Generating chunks for {file_path} using smart chunking")
+        logger.debug(f"Generating chunks for {file_path} using smart chunking")
 
         # Analyze the structure of the code
         elements = self.structure_analyzer.analyze(file_path, symbols, file_content)
@@ -284,7 +287,7 @@ class ChunkGenerator:
         # Create chunks based on the structural analysis
         chunks = self.chunker.create_chunks(elements, str(file_path))
 
-        logger.info(f"Generated {len(chunks)} chunks for {file_path}")
+        logger.debug(f"Generated {len(chunks)} chunks for {file_path}")
         return chunks
 
     async def generate_chunks_async(

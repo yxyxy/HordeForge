@@ -238,7 +238,12 @@ class TestRepoConnectorIntegration:
             mock_run_async.return_value = {
                 "status": "SUCCESS",
                 "artifact_type": "repository_metadata",
-                "artifacts": [{"type": "repository_metadata", "content": {"repo_url": "https://github.com/example/repo"}}],
+                "artifacts": [
+                    {
+                        "type": "repository_metadata",
+                        "content": {"repo_url": "https://github.com/example/repo"},
+                    }
+                ],
                 "decisions": [],
                 "logs": [],
                 "next_actions": [],

@@ -331,3 +331,28 @@ logging.basicConfig(level=logging.DEBUG)
 - No sensitive information in persisted data
 - Budget limits help control API costs
 - Rate limiting handled by individual providers
+
+## Configuration
+
+The Token Budget System can be configured through environment variables:
+
+- `HORDEFORGE_TOKEN_BUDGET_DAILY_LIMIT` - Daily token budget limit
+- `HORDEFORGE_TOKEN_BUDGET_MONTHLY_LIMIT` - Monthly token budget limit
+- `HORDEFORGE_TOKEN_BUDGET_SESSION_LIMIT` - Session token budget limit
+- `HORDEFORGE_TOKEN_BUDGET_ENABLED` - Enable/disable token budget tracking
+- `HORDEFORGE_TOKEN_BUDGET_ALERT_THRESHOLD` - Threshold for budget alerts
+
+## Integration with Other Systems
+
+### CLI Integration
+The system integrates with both CLI interfaces:
+- `hordeforge llm tokens` - View token usage
+- `horde llm tokens` - View token usage
+- `hordeforge llm cost` - View cost information
+- `horde llm cost` - View cost information
+
+### Pipeline Integration
+Token usage is tracked automatically during pipeline execution, with costs aggregated per pipeline run.
+
+### Monitoring Integration
+The system exports metrics to the monitoring system for cost tracking and alerting.

@@ -137,10 +137,20 @@ horde pipeline run feature --inputs '{"prompt": "Add user authentication"}'
 - `anthropic` - Anthropic Claude models
 - `google` - Google Gemini models
 - `ollama` - Local Ollama models
-- `bedrock` - AWS Bedrock models
-- `vertex` - Google Cloud Vertex AI
-- `groq` - Groq models
+- `openrouter` - OpenRouter models
+- `aws_bedrock` - AWS Bedrock models
+- `google_vertex` - Google Cloud Vertex AI
+- `lm_studio` - LM Studio models
+- `deepseek` - DeepSeek models
+- `fireworks` - Fireworks AI models
 - `together` - Together AI models
+- `qwen` - Alibaba Qwen models
+- `mistral` - Mistral AI models
+- `huggingface` - Hugging Face models
+- `litellm` - LiteLLM proxy
+- `moonshot` - Moonshot AI models
+- `groq` - Groq models
+- `other` - Other OpenAI-compatible providers
 - And many more...
 
 ### Selecting a Provider
@@ -272,10 +282,10 @@ horde llm --provider ollama --base-url http://localhost:11434 --model llama2 "Yo
 
 ```bash
 # AWS Bedrock
-horde llm --provider bedrock --region us-west-2 --model anthropic.claude-sonnet-4-5-20250929-v1:0 "Your prompt"
+horde llm --provider aws_bedrock --region us-west-2 --model anthropic.claude-sonnet-4-5-20250929-v1:0 "Your prompt"
 
 # Google Vertex AI
-horde llm --provider vertex --project-id my-project --model gemini-1.5-pro-001 "Your prompt"
+horde llm --provider google_vertex --project-id my-project --model gemini-1.5-pro-001 "Your prompt"
 ```
 
 ## Token and Cost Tracking
@@ -387,12 +397,20 @@ Both CLIs respect the following environment variables:
 - `HORDEFORGE_PIPELINES_DIR` - Pipelines directory (default: pipelines)
 - `HORDEFORGE_STORAGE_DIR` - Storage directory (default: .hordeforge_data)
 - `HORDEFORGE_QUEUE_BACKEND` - Queue backend (default: memory)
-- `OPENAI_API_KEY` - OpenAI API key
-- `ANTHROPIC_API_KEY` - Anthropic API key
-- `GOOGLE_API_KEY` - Google API key
-- `AWS_ACCESS_KEY_ID` - AWS access key (for Bedrock)
-- `AWS_SECRET_ACCESS_KEY` - AWS secret key (for Bedrock)
-- `AWS_SESSION_TOKEN` - AWS session token (for Bedrock)
+- `HORDEFORGE_LLM_PROVIDER` - Default LLM provider (default: openai)
+- `HORDEFORGE_OPENAI_API_KEY` - OpenAI API key
+- `HORDEFORGE_ANTHROPIC_API_KEY` - Anthropic API key
+- `HORDEFORGE_GOOGLE_API_KEY` - Google API key
+- `HORDEFORGE_AWS_ACCESS_KEY_ID` - AWS access key (for Bedrock)
+- `HORDEFORGE_AWS_SECRET_ACCESS_KEY` - AWS secret key (for Bedrock)
+- `HORDEFORGE_AWS_SESSION_TOKEN` - AWS session token (for Bedrock)
+- `HORDEFORGE_OLLAMA_BASE_URL` - Ollama base URL (default: http://localhost:11434)
+- `HORDEFORGE_VERTEX_PROJECT_ID` - Google Vertex project ID
+- `HORDEFORGE_VERTEX_LOCATION` - Google Vertex location
+- `HORDEFORGE_BEDROCK_REGION` - AWS Bedrock region (default: us-east-1)
+- `HORDEFORGE_TOKEN_BUDGET_DAILY_LIMIT` - Daily token budget limit
+- `HORDEFORGE_TOKEN_BUDGET_MONTHLY_LIMIT` - Monthly token budget limit
+- `HORDEFORGE_TOKEN_BUDGET_SESSION_LIMIT` - Session token budget limit
 
 ## Configuration Files
 
@@ -468,4 +486,62 @@ docker exec hordeforge-gateway horde pipeline list
 # Enter container for interactive session
 docker exec -it hordeforge-gateway bash
 horde  # Start interactive mode
+```
+
+### Token Budget Management
+```bash
+# Check current token usage
+horde llm tokens
+
+# Check cost information
+horde llm cost
+
+# Set daily budget limit
+horde llm budget --set-daily 10.0
+
+# View current budget status
+horde llm budget
+```
+
+### Advanced LLM Operations
+```bash
+# Run with specific model and temperature
+horde llm --provider openai --model gpt-4o --temperature 0.7 "Generate code for..."
+
+# Use streaming mode
+horde llm --stream --provider anthropic "Explain this concept..."
+
+# Run with custom system prompt
+horde llm --system "You are a Python expert" --provider openai "Write a function..."
+
+# Test provider connectivity
+horde llm test --provider google
+
+# List all available models for a provider
+horde llm list-models --provider openai
+```
+
+### Memory and Context Management
+```bash
+# The CLI automatically uses Agent Memory and RAG context when available
+# No special commands needed - context is automatically included in requests
+horde task "Implement feature based on previous solutions"
+```
+
+### Agent and Pipeline Management
+```bash
+# List all available agents
+horde agents list
+
+# Get detailed information about an agent
+horde agents show code_generator
+
+# List pipeline runs
+horde runs list
+
+# Get details of a specific run
+horde runs show RUN_ID
+
+# Override a running pipeline
+horde runs override RUN_ID --action retry --reason "manual retry"
 ```

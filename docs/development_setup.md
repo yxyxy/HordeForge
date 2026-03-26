@@ -69,3 +69,119 @@ make format
 - `run_id` can be used to query run status via `GET /runs/{run_id}`.
 - Use `GET /runs` with filters to list multiple runs.
 - Override commands require `X-Operator-Key`, `X-Operator-Role`, and `X-Command-Source` headers.
+
+## CLI Interfaces
+
+HordeForge provides two CLI interfaces:
+
+### Main CLI (`hordeforge`)
+```bash
+# Run a pipeline
+hordeforge run --pipeline init_pipeline --inputs "{}"
+
+# Check status
+hordeforge status
+
+# Run with specific provider
+hordeforge llm --provider openai --model gpt-4o "Hello, world!"
+
+# Interactive chat
+hordeforge llm chat
+```
+
+### Interactive CLI (`horde`)
+```bash
+# Interactive development
+horde task "Implement user authentication"
+
+# Plan/act modes
+horde --plan "How should I refactor this codebase?"
+horde --act "Write a Python function to sort an array"
+
+# Pipeline management
+horde pipeline run feature --inputs '{"prompt": "Add user management"}'
+
+# View history
+horde history
+```
+
+## LLM Configuration
+
+To use LLM features, configure your API keys in `.env`:
+
+```bash
+# OpenAI
+HORDEFORGE_LLM_PROVIDER=openai
+HORDEFORGE_OPENAI_API_KEY=your-openai-key
+
+# Anthropic
+HORDEFORGE_LLM_PROVIDER=anthropic
+HORDEFORGE_ANTHROPIC_API_KEY=your-anthropic-key
+
+# Google
+HORDEFORGE_LLM_PROVIDER=google
+HORDEFORGE_GOOGLE_API_KEY=your-google-key
+
+# Or use local models with Ollama
+HORDEFORGE_LLM_PROVIDER=ollama
+```
+
+## RAG Configuration
+
+Configure RAG settings in `.env`:
+
+```bash
+# Vector store mode: local, host, or auto (default: auto)
+HORDEFORGE_VECTOR_STORE_MODE=auto
+
+# Qdrant configuration (used when mode is host or auto)
+QDRANT_HOST=qdrant
+QDRANT_PORT=6333
+```
+
+## Development workflow
+
+1. Make changes to code
+2. Run linters and formatters: `make lint && make format`
+3. Run tests: `make test`
+4. Commit changes with conventional commits
+5. Push to remote branch
+6. Create pull request
+
+## Debugging
+
+For debugging pipeline runs:
+
+```bash
+# Get detailed run information
+GET /runs/{run_id}
+
+# Get run logs
+GET /runs/{run_id}/logs
+
+# Override a running pipeline
+POST /runs/{run_id}/override
+Headers: X-Operator-Key, X-Operator-Role, X-Command-Source
+Body: {"action": "stop", "reason": "debugging"}
+```
+
+## Testing
+
+Run different types of tests:
+
+```bash
+# All tests
+make test
+
+# Unit tests only
+pytest tests/unit/
+
+# Integration tests only
+pytest tests/integration/
+
+# RAG tests only
+pytest tests/test_rag/
+
+# With coverage
+pytest --cov=. --cov-report=html
+```

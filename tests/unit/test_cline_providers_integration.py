@@ -26,77 +26,6 @@ from agents.llm_providers import (
 )
 
 
-async def test_provider_streaming(provider_name: str, llm_api: LlmApi):
-    """Test streaming functionality for a provider."""
-    print(f"\nTesting {provider_name} streaming...")
-
-    try:
-        # Simple test message
-        system_prompt = "You are a helpful assistant. Respond briefly."
-        messages = [{"role": "user", "content": "Hello, test message!"}]
-
-        response_chunks = []
-        async for chunk in llm_api.create_message(system_prompt, messages):
-            if hasattr(chunk, "text") and chunk.text:
-                response_chunks.append(chunk.text)
-                print(f"  Received chunk: {chunk.text[:50]}...")
-                if len(response_chunks) >= 3:  # Limit for testing
-                    break
-
-        response = "".join(response_chunks)
-        print(f"  Final response length: {len(response)} chars")
-        return True
-
-    except Exception as e:
-        print(f"  ❌ Streaming test failed: {e}")
-        return False
-
-
-async def test_provider_model_info(provider_name: str, llm_api: LlmApi):
-    """Test model information retrieval."""
-    print(f"Testing {provider_name} model info...")
-
-    try:
-        model_id, model_info = llm_api.get_model_info()
-        print(f"  Model ID: {model_id}")
-        print(f"  Context window: {model_info.context_window}")
-        print(f"  Supports images: {model_info.supports_images}")
-        print(f"  Supports reasoning: {model_info.supports_reasoning}")
-        return True
-
-    except Exception as e:
-        print(f"  ❌ Model info test failed: {e}")
-        return False
-
-
-async def test_single_provider(provider_enum: ApiProvider, config: ApiConfiguration):
-    """Test a single provider with basic functionality."""
-    provider_name = provider_enum.value
-
-    print(f"\n{'=' * 50}")
-    print(f"Testing {provider_name}")
-    print(f"{'=' * 50}")
-
-    try:
-        llm_api = LlmApi(config)
-
-        # Test model info
-        model_success = await test_provider_model_info(provider_name, llm_api)
-
-        # Test streaming (only if API key is available)
-        await test_provider_streaming(provider_name, llm_api)
-
-        success = model_success  # Don't require streaming for test to pass (may need API keys)
-        status = "✅ PASS" if success else "❌ FAIL"
-        print(f"\n{provider_name}: {status}")
-
-        return success
-
-    except Exception as e:
-        print(f"  ❌ Provider initialization failed: {e}")
-        return False
-
-
 async def run_comprehensive_tests():
     """Run comprehensive tests for all providers."""
     print("Testing Cline Provider Integration in HordeForge")
@@ -195,6 +124,77 @@ async def run_comprehensive_tests():
         return True
     else:
         print(f"⚠️ {total - passed} providers need attention")
+        return False
+
+
+async def test_single_provider(provider_enum: ApiProvider, config: ApiConfiguration):
+    """Test a single provider with basic functionality."""
+    provider_name = provider_enum.value
+
+    print(f"\n{'=' * 50}")
+    print(f"Testing {provider_name}")
+    print(f"{'=' * 50}")
+
+    try:
+        llm_api = LlmApi(config)
+
+        # Test model info
+        model_success = await test_provider_model_info(provider_name, llm_api)
+
+        # Test streaming (only if API key is available)
+        await test_provider_streaming(provider_name, llm_api)
+
+        success = model_success  # Don't require streaming for test to pass (may need API keys)
+        status = "✅ PASS" if success else "❌ FAIL"
+        print(f"\n{provider_name}: {status}")
+
+        return success
+
+    except Exception as e:
+        print(f"  ❌ Provider initialization failed: {e}")
+        return False
+
+
+async def test_provider_streaming(provider_name: str, llm_api):
+    """Test streaming functionality for a provider."""
+    print(f"\nTesting {provider_name} streaming...")
+
+    try:
+        # Simple test message
+        system_prompt = "You are a helpful assistant. Respond briefly."
+        messages = [{"role": "user", "content": "Hello, test message!"}]
+
+        response_chunks = []
+        async for chunk in llm_api.create_message(system_prompt, messages):
+            if hasattr(chunk, "text") and chunk.text:
+                response_chunks.append(chunk.text)
+                print(f"  Received chunk: {chunk.text[:50]}...")
+                if len(response_chunks) >= 3:  # Limit for testing
+                    break
+
+        response = "".join(response_chunks)
+        print(f"  Final response length: {len(response)} chars")
+        return True
+
+    except Exception as e:
+        print(f"  ❌ Streaming test failed: {e}")
+        return False
+
+
+async def test_provider_model_info(provider_name: str, llm_api):
+    """Test model information retrieval."""
+    print(f"Testing {provider_name} model info...")
+
+    try:
+        model_id, model_info = llm_api.get_model_info()
+        print(f"  Model ID: {model_id}")
+        print(f"  Context window: {model_info.context_window}")
+        print(f"  Supports images: {model_info.supports_images}")
+        print(f"  Supports reasoning: {model_info.supports_reasoning}")
+        return True
+
+    except Exception as e:
+        print(f"  ❌ Model info test failed: {e}")
         return False
 
 

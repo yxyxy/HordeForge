@@ -119,11 +119,11 @@ async def test_token_budget_system():
     )
 
     usage = TokenUsage(
-        input_tokens=1000,
-        output_tokens=500,
-        cache_write_tokens=0,
-        cache_read_tokens=0,
-        thoughts_token_count=0,
+        inputTokens=1000,
+        outputTokens=500,
+        cacheWriteTokens=0,
+        cacheReadTokens=0,
+        thoughtsTokenCount=0,
     )
 
     # This would normally be called through the budget system

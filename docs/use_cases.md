@@ -1,143 +1,146 @@
 # Use Cases
 
-�������� ��������� ������� �������� � ������� ������� ����������.
+Описываются основные сценарии использования системы в различных контекстах.
 
-## UC-01: ������������� �������
+## UC-01: Инициализация репозитория
 
 - Actor: Tech Lead / Developer
-- Trigger: ������ `init` ����� CLI/API
+- Trigger: команда `init` через CLI/API
 - Priority: P0
-- Current status: **partial**
+- Current status: **done**
 
-### �������� �����
+### Основной сценарий
 
-1. ������������ �������� `repo_url` � �����.
-2. ������� ��������� `init_pipeline`.
-3. ����������� ���� ������������ ������� � ���������� ���������.
-4. ����������� ����� � ���������� � feature/ci pipeline.
+1. Пользователь предоставляет `repo_url` и токен.
+2. Система запускает `init_pipeline`.
+3. Создаются основные компоненты системы и настраивается окружение.
+4. Подготавливаются шаблоны для feature/ci pipeline.
 
-### ����������
+### Артефакты
 
-- `pipelines/init_pipeline.yaml` � ������ pipeline � 6 ������
-- ������: `repo_connector`, `rag_initializer`, `memory_agent`, `architecture_evaluator`, `test_analyzer`, `pipeline_initializer`
+- `pipelines/init_pipeline.yaml` — основной pipeline из 6 шагов
+- Агенты: `repo_connector`, `rag_initializer`, `memory_agent`, `architecture_evaluator`, `test_analyzer`, `pipeline_initializer`
 - CLI: `python cli.py init --repo-url <URL> --token <TOKEN>`
 
-### �����������
+### Ограничения
 
-- RAG � vector DB ������� �� ������� ��������� (`qdrant_client`, `sentence_transformers`).
+- RAG и vector DB зависят от внешних сервисов (`qdrant_client`, `sentence_transformers`).
 
-## UC-02: ��������� feature issue
+## UC-02: Обработка feature issue
 
 - Actor: Product Manager / Developer
-- Trigger: issue � ������ `feature`
+- Trigger: issue с меткой `feature`
 - Priority: P0
-- Current status: **partial**
+- Current status: **done**
 
-### �������� ����� (�������)
+### Основной сценарий (успешный путь)
 
-1. `dod_extractor` ��������� DoD.
-2. `architecture_planner` ������ ����������� ����.
-3. `specification_writer` ��������� ������������.
-4. `task_decomposer` ������������� �� ���������.
-5. `bdd_generator` ���������� BDD ��������.
-6. `test_generator` ������� �����.
-7. `code_generator` ��������� �������.
-8. `test_runner` ��������� �����.
-9. `fix_agent` ��������� ������� ������.
-10. `review_agent` ��������� ���������.
-11. `pr_merge_agent` ��������� ����������.
-12. `ci_failure_analyzer` ��������� CI ����� �����.
+1. `dod_extractor` извлекает DoD.
+2. `architecture_planner` создает архитектурный план.
+3. `specification_writer` генерирует спецификацию.
+4. `task_decomposer` разбивает на подзадачи.
+5. `bdd_generator` генерирует BDD сценарии.
+6. `test_generator` создает тесты.
+7. `code_generator` генерирует код.
+8. `test_runner` запускает тесты.
+9. `fix_agent` исправляет ошибки в коде.
+10. `review_agent` проводит ревью.
+11. `pr_merge_agent` создает и объединяет PR.
+12. `ci_monitor_agent` мониторит CI после слияния.
 
-### ����������
+### Артефакты
 
-- `pipelines/feature_pipeline.yaml` � ������ pipeline � 12 ������ + loops
-- LLM-enchancement: `llm_wrapper.py` (OpenAI, Anthropic, Google GenAI)
-- GitHub integration: `live_review.py`, `live_merge.py` ��� real-time operations
-- Fix loop: �� 5 �������� � retry policy
+- `pipelines/feature_pipeline.yaml` — основной pipeline из 12 шагов + loops
+- LLM-enchancement: `llm_wrapper.py`, `llm_api.py` (OpenAI, Anthropic, Google, Ollama и др.)
+- GitHub integration: `live_review.py`, `live_merge.py` для real-time операций
+- Fix loop: до 5 итераций с retry policy
+- Agent Memory: использование исторических решений для улучшения качества кода
+- Context optimization: compression и deduplication для эффективного использования токенов
 
-### �����������
+### Ограничения
 
-- ����� ������� ���������� ����������������� fallback-����������.
-- ��������� ���������� ��� YAML placeholders ������� �������������� ��������� (��. registry-����).
+- Некоторые агенты имеют детерминированные fallback-реализации.
+- YAML placeholders заменяются на реальные значения из реестра (см. registry-слой).
 
-### ������������
+### Исключения
 
-- ���� ��������� ������������ -> `BLOCKED` � human action
-- ���� fix loop ��������� ����� -> `FAILED/BLOCKED` � issue-������������
+- Если спецификация нечеткая -> `BLOCKED` с человеческим вмешательством
+- Если fix loop не достигает успеха -> `FAILED/BLOCKED` с issue-трекингом
 
 ## UC-03: CI self-healing
 
 - Actor: Scheduler / QA
-- Trigger: ������� CI
-- Priority: P1
-- Current status: **partial**
-
-### �������� ����� (�������)
-
-1. `ci_failure_analyzer` �������������� ��� �������.
-2. `fix_agent` ���������� �����������.
-3. `test_runner` ��������� �����.
-4. ��� ������ ���������/����������� PR.
-5. `ci_verification` �������� ��������� ������ CI suite.
-6. `issue_closer` ��������� issue ���� ��� ����� ��������.
-
-### ����������
-
-- `pipelines/ci_fix_pipeline.yaml` � 8 ����� + loops
-- ���������� � GitHub Actions ��� real-time test execution
-- Convergence detection ��� ����������� ����� ���������� fix loop
-- Cron job `ci_monitor` ��� ������������� ��������
-
-### �����������
-
-- � ��������� ���� YAML ����, �� �������� loader-�� (��������, step-level `loops`).
-
-## UC-04: ������ ���������� pipeline
-
-- Actor: Maintainer
-- Trigger: ������� ��������� (`stop/retry/resume`)
+- Trigger: сбой CI
 - Priority: P1
 - Current status: **done**
 
-### ����
+### Основной сценарий (успешный путь)
 
-���������� �������������� ���������� � ���������� override �������������� ��������.
+1. `ci_failure_analyzer` анализирует причину сбоя.
+2. `fix_agent` генерирует исправления.
+3. `test_runner` запускает тесты.
+4. При необходимости создается/обновляется PR.
+5. `ci_verification` проверяет результаты CI suite.
+6. `issue_closer` закрывает issue после успешного исправления.
 
-### ����������
+### Артефакты
+
+- `pipelines/ci_fix_pipeline.yaml` — pipeline из 8 шагов + loops
+- Интеграция с GitHub Actions для real-time тестирования
+- Convergence detection для определения завершения fix loop
+- Cron job `ci_monitor` для периодического мониторинга
+- Использование Agent Memory для поиска аналогичных решений
+
+### Ограничения
+
+- В текущей реализации YAML loader поддерживает все конструкции (включая step-level `loops`).
+
+## UC-04: Управление запущенным pipeline
+
+- Actor: Maintainer
+- Trigger: команды управления (`stop/retry/resume`)
+- Priority: P1
+- Current status: **done**
+
+### Цель
+
+Предоставить возможность человеку управлять запущенными процессами через override команды.
+
+### Артефакты
 
 - `POST /runs/{run_id}/override` endpoint
-- �������������� actions: `stop`, `retry`, `resume`, `explain`
-- Permission checks: `X-Operator-Key`, `X-Operator-Role`, `X-Command-Source`
-- Audit logging ���� override ��������
-- State machine enforcement (stop ������ ��� RUNNING, retry ��� FAILED/BLOCKED)
+- Поддерживаемые actions: `stop`, `retry`, `resume`, `explain`
+- Проверки прав: `X-Operator-Key`, `X-Operator-Role`, `X-Command-Source`
+- Audit logging для override команд
+- State machine enforcement (stop только для RUNNING, retry только для FAILED/BLOCKED)
 
 ### RBAC
 
-| ����    | ���������� |
+| Роль    | Права |
 |---------|------------|
-| `admin` | ��� �������� |
+| `admin` | все операции |
 | `operator` | pipeline:run, override:execute, cron:trigger, queue:drain, runs:read, metrics:read |
 | `viewer` | pipeline:read, cron:read, queue:read, runs:read, metrics:read |
 
-## UC-05: ������������� backlog scan
+## UC-05: Периодический сканирование бэклога
 
 - Actor: Scheduler
 - Trigger: cron
 - Priority: P2
 - Current status: **done**
 
-### ����
+### Цель
 
-�������� ������� � ������ issue � ������������� �������������� �� � ���������� feature pipeline.
+Периодический поиск задач в репозитории и направление их в соответствующий feature pipeline.
 
-### ����������
+### Артефакты
 
-- Cron job `issue_scanner` � `scheduler/jobs/issue_scanner.py`
-- `scheduler/schedule_registry.py` � cron expressions ��� �����
-- `scheduler/cron_dispatcher.py` � interval-based dispatch
-- `POST /cron/run-due` � manual trigger ��� due jobs
-- `POST /cron/jobs/{job_name}/trigger` � trigger ���������� ������
-- JWT/RBAC ������ cron endpoints
+- Cron job `issue_scanner` в `scheduler/jobs/issue_scanner.py`
+- `scheduler/schedule_registry.py` — cron expressions для задач
+- `scheduler/cron_dispatcher.py` — interval-based dispatch
+- `POST /cron/run-due` — ручной запуск для due jobs
+- `POST /cron/jobs/{job_name}/trigger` — запуск конкретной задачи
+- JWT/RBAC защита cron endpoints
 
 ### Cron Jobs
 
@@ -147,130 +150,171 @@
 | ci_monitor | configurable | Monitor CI failures |
 | dependency_checker | configurable | Check for outdated dependencies |
 
-## UC-06: CI monitoring
+## UC-06: Мониторинг CI
 
 - Actor: Scheduler / DevOps Engineer
-- Trigger: cron ��� webhook
+- Trigger: cron или webhook
 - Priority: P1
 - Current status: **done**
 
-### ����
+### Цель
 
-���������� ������� CI/CD ���������, �������������� �����, ��������� ������� � �����������.
+Мониторинг CI/CD процессов, самовосстановление при сбоях, анализ результатов.
 
-### ����������
+### Артефакты
 
-- `agents/ci_monitor_agent/` � ������ ����� ��� ����������� CI
-- `scheduler/jobs/ci_monitor.py` � cron job ��� �������������� �����������
-- ��������� ��������� ����������� CI (GitHub Actions, Jenkins, GitLab CI)
-- ���������� � `pipelines/ci_monitoring_pipeline.yaml`
-- �������������� �������� ����� ��� ����������� �������
-- ��������� � ������ ����� CI/CD ���������
+- `agents/ci_monitor_agent/` — основной агент для мониторинга CI
+- `scheduler/jobs/ci_monitor.py` — cron job для периодического мониторинга
+- Поддержка различных CI систем (GitHub Actions, Jenkins, GitLab CI)
+- Интеграция с `pipelines/ci_monitoring_pipeline.yaml`
+- Самовосстановление при сбоях CI
+- Интеграция с различными CI/CD системами
 
-## UC-07: Dependency checking
+## UC-07: Проверка зависимостей
 
 - Actor: Scheduler / Security Team
-- Trigger: cron ��� ������ ������
+- Trigger: cron или ручной запуск
 - Priority: P1
 - Current status: **done**
 
-### ����
+### Цель
 
-�������� ������������ ������� �� ������� ����������� � ���������� �����������.
+Проверка зависимостей проекта на уязвимости и устаревание.
 
-### ����������
+### Артефакты
 
-- `agents/dependency_checker_agent/` � ����� ��� ������� ������������
-- `scheduler/jobs/dependency_checker.py` � cron job ��� ������������� ��������
-- ������������ ��������� �������� ������ ������������ (package.json, requirements.txt, � ��.)
-- �������� ������� ����������� � ������������ (CVE, security advisories)
-- ���������� � ������ ������ ����������� (NVD, Snyk, OWASP � ��.)
-- ��������� ������� � ��������� ������������
-- �������� ����� ��� ���������� ����������� ������������
+- `agents/dependency_checker_agent/` — основной агент для проверки зависимостей
+- `scheduler/jobs/dependency_checker.py` — cron job для периодической проверки
+- Анализ различных форматов зависимостей (package.json, requirements.txt и др.)
+- Проверка уязвимостей и устаревших компонентов (CVE, security advisories)
+- Интеграция с различными источниками уязвимостей (NVD, Snyk, OWASP и др.)
+- Генерация отчетов о зависимостях
+- Уведомления о критических уязвимостях
 
-## UC-08: �������������� � �����������
+## UC-08: Аутентификация и авторизация
 
 - Actor: System / API Consumer
-- Trigger: ����� API ������
+- Trigger: любые API вызовы
 - Priority: P0
 - Current status: **done**
 
-### ����
+### Цель
 
-�������� ����������� ��������� � ������� JWT ������� � RBAC.
+Обеспечение безопасного доступа к системе через JWT токены и RBAC.
 
-### ����������
+### Артефакты
 
-- JWT validation middleware � `scheduler/auth/middleware.py`
-- JWT validator � `scheduler/auth/jwt_validator.py`
-- RBAC � `scheduler/auth/rbac.py` � ������ admin/operator/viewer
-- ������������ ����� `hordeforge_config.py`:
+- JWT validation middleware в `scheduler/auth/middleware.py`
+- JWT validator в `scheduler/auth/jwt_validator.py`
+- RBAC в `scheduler/auth/rbac.py` с ролями admin/operator/viewer
+- Конфигурационные параметры в `hordeforge_config.py`:
   - `HORDEFORGE_AUTH_ENABLED`
   - `HORDEFORGE_JWT_SECRET_KEY`
   - `HORDEFORGE_JWT_ALGORITHM`
   - `HORDEFORGE_SESSION_TTL_SECONDS`
 
-### ���������� endpoints
+### Защищенные endpoints
 
-- `/queue/drain` � ������� `queue:drain` permission
-- `/cron/run-due` � ������� `cron:trigger` permission
-- `/cron/jobs/{job_name}/trigger` � ������� `cron:trigger` permission
-- `/runs/{run_id}/override` � ������� `override:execute` permission
-- `/metrics/export` � ������� `metrics:read` permission
+- `/queue/drain` — требует `queue:drain` permission
+- `/cron/run-due` — требует `cron:trigger` permission
+- `/cron/jobs/{job_name}/trigger` — требует `cron:trigger` permission
+- `/runs/{run_id}/override` — требует `override:execute` permission
+- `/metrics/export` — требует `metrics:read` permission
 
-## UC-09: Observability � �������
+## UC-09: Observability и метрики
 
 - Actor: DevOps / SRE
-- Trigger: periodic ��� manual
+- Trigger: периодически или вручную
 - Priority: P1
 - Current status: **done**
 
-### ����
+### Цель
 
-�������������� ������� � �����-���� �� ������� ������� �����������.
+Предоставление метрик и логов для мониторинга производительности системы.
 
-### ����������
+### Артефакты
 
-- Metrics exporter � `scheduler/jobs/metrics_exporter.py`
-- ��������� Prometheus Pushgateway � Datadog
-- ������������:
+- Metrics exporter в `scheduler/jobs/metrics_exporter.py`
+- Поддержка Prometheus Pushgateway и Datadog
+- Конфигурационные параметры:
   - `HORDEFORGE_METRICS_EXPORTER=prometheus_pushgateway|datadog`
   - `HORDEFORGE_METRICS_EXPORT_INTERVAL_SECONDS`
   - `HORDEFORGE_PROMETHEUS_PUSHGATEWAY_URL`
   - `HORDEFORGE_DATADOG_API_KEY`
-- Audit logger � `observability/audit_logger.py`
-- Data retention � `scheduler/jobs/data_retention.py`
-- Trace correlation: `run_id`, `correlation_id`, `trace_id` � summary
+- Audit logger в `observability/audit_logger.py`
+- Data retention в `scheduler/jobs/data_retention.py`
+- Trace correlation: `run_id`, `correlation_id`, `trace_id` в summary
+- Token Budget System: отслеживание стоимости использования LLM
 
 ### Endpoints
 
-- `GET /metrics` � Prometheus metrics (���������)
-- `POST /metrics/export` � ������ ������� ������
+- `GET /metrics` — Prometheus metrics (агрегированные)
+- `POST /metrics/export` — ручной экспорт метрик
 
-## UC-10: Queue management
+## UC-10: Управление очередью
 
 - Actor: Operator / Scheduler
-- Trigger: ������ ��� ��������������
+- Trigger: автоматически или вручную
 - Priority: P1
 - Current status: **done**
 
-### ����
+### Цель
 
-���������� ������������ �������� ����� queue backend.
+Управление асинхронными задачами через очередь выполнения.
 
-### ����������
+### Артефакты
 
-- Task queue � `scheduler/task_queue.py`
-- Queue backends: memory (�� ���������), Redis
-- `POST /run-pipeline?async_mode=true` � ���������� � �������
-- `GET /queue/tasks/{task_id}` � ��������� ������� ������
-- `POST /queue/drain` � ��������� �������
+- Task queue в `scheduler/task_queue.py`
+- Queue backends: memory (по умолчанию), Redis
+- `POST /run-pipeline?async_mode=true` — отправка в очередь
+- `GET /queue/tasks/{task_id}` — статус конкретной задачи
+- `POST /queue/drain` — обработка очереди
 
-## Definition of Ready ��� ������� UC � ����
+## UC-11: Генерация кода с использованием LLM
 
-�������� ����������� � production, ����:
+- Actor: Developer
+- Trigger: задача на генерацию кода
+- Priority: P1
+- Current status: **done**
 
-1. ���� runtime-���������� ���� ����� use case
-2. ���� �������� �������� (happy path + failure path)
-3. ���� ����������� � �������� ������
-4. ���� rollback/override �������� (��� P0/P1)
+### Цель
+
+Генерация кода на основе спецификаций с использованием различных LLM провайдеров.
+
+### Артефакты
+
+- `agents/code_generator.py` — генерация кода
+- `agents/llm_api.py` — универсальный интерфейс для LLM
+- Поддержка 18+ провайдеров: OpenAI, Anthropic, Google, Ollama, OpenRouter, AWS Bedrock, Google Vertex AI, и др.
+- Token Budget System для отслеживания стоимости
+- Использование RAG и Agent Memory для контекста
+
+## UC-12: Управление памятью агентов
+
+- Actor: System
+- Trigger: успешное выполнение шага pipeline
+- Priority: P1
+- Current status: **done**
+
+### Цель
+
+Хранение исторических решений и патчей для использования в будущих задачах.
+
+### Артефакты
+
+- `rag/memory_store.py` — хранилище памяти
+- `orchestrator/hooks.py` — hooks для сохранения результатов
+- `rag/memory_collections.py` — коллекции для разных типов памяти
+- `rag/context_builder.py` — построение контекста с использованием памяти
+- Memory Hook автоматически сохраняет успешные результаты
+
+## Definition of Ready для UC в продакшене
+
+Use case считается готовым к продакшену, когда:
+
+1. Есть runtime-реализация всего use case
+2. Есть покрытие тестами (happy path + failure path)
+3. Есть документация по использованию
+4. Есть rollback/override механизмы (для P0/P1)
+5. Интеграция с системой мониторинга и логирования
+6. Поддержка всех основных LLM провайдеров (если применимо)

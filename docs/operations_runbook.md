@@ -151,6 +151,19 @@ curl -X POST "http://localhost:8000/cron/jobs/issue_scanner/trigger" \
 2. Проверить права записи процесса.
 3. Выполнить health/readiness и тестовый trigger `init_pipeline`.
 
+### 4.6 Проблемы с LLM
+
+1. Проверить настройки провайдера в `.env` файле
+2. Проверить лимиты токенов через `GET /metrics`
+3. Проверить Token Budget System через `agents/token_budget_system.py`
+4. Убедиться, что API ключи действительны
+
+### 4.7 Проблемы с RAG
+
+1. Проверить настройки векторного хранилища: `HORDEFORGE_VECTOR_STORE_MODE`, `QDRANT_HOST`, `QDRANT_PORT`
+2. Проверить доступность Qdrant сервера
+3. Проверить индексацию документов в `rag/indexer.py`
+
 ## 5. Наблюдаемость
 
 1. Метрики: `GET /metrics`
@@ -169,6 +182,14 @@ curl -X POST "http://localhost:8000/cron/jobs/issue_scanner/trigger" \
 - `HORDEFORGE_ALERT_SMTP_USERNAME`
 - `HORDEFORGE_ALERT_SMTP_PASSWORD`
 - `HORDEFORGE_ALERT_SMTP_USE_TLS`
+
+### 5.2 Token Budget Monitoring
+
+Мониторинг использования токенов и стоимости:
+
+- `GET /metrics` - для просмотра метрик использования
+- `agents/token_budget_system.py` - для проверки бюджета
+- `hordeforge llm tokens` - CLI команда для просмотра использования
 
 ## 6. Миграции базы данных
 
@@ -242,10 +263,50 @@ make docker-exec CMD="python -m scheduler.jobs.trigger_job --job data_retention"
 make docker-exec CMD="python -m scheduler.jobs.trigger_job --job data_retention --payload '{\"dry_run\": true, \"retention_runs_days\": 30, \"retention_logs_days\": 14, \"retention_artifacts_days\": 3, \"retention_audit_days\": 90}'"
 ```
 
-## 9. Post-incident checklist
+## 9. CLI интерфейсы
+
+HordeForge предоставляет два CLI интерфейса:
+
+### Основной CLI (`hordeforge`)
+```bash
+# Запуск pipeline
+hordeforge run --pipeline init_pipeline --inputs "{}"
+
+# Проверка статуса
+hordeforge status
+
+# Запуск с конкретным провайдером
+hordeforge llm --provider openai --model gpt-4o "Hello, world!"
+
+# Проверка токенов
+hordeforge llm tokens
+
+# Проверка бюджета
+hordeforge llm budget
+```
+
+### Интерактивный CLI (`horde`)
+```bash
+# Интерактивная разработка
+horde task "Implement user authentication"
+
+# План/акт режимы
+horde --plan "How should I refactor this codebase?"
+horde --act "Write a Python function to sort an array"
+
+# Управление пайплайнами
+horde pipeline run feature --inputs '{"prompt": "Add user management"}'
+
+# Просмотр истории
+horde history
+```
+
+## 10. Post-incident checklist
 
 1. Зафиксировать `run_id`/`correlation_id`.
 2. Сохранить error envelope и override audit события.
 3. Добавить/обновить regression test для обнаруженного кейса.
 4. Обновить runbook, если кейс новый.
+5. Проверить Token Budget System на предмет превышения лимитов.
+6. Проверить логи RAG и памяти агентов на предмет проблем.
 

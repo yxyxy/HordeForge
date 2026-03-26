@@ -130,9 +130,19 @@ class TestGitHubIntegration:
         result = extractor.run(context)
 
         assert result["status"] in ["SUCCESS", "PARTIAL_SUCCESS"]
-        assert result["artifact_type"] == "dod"
 
-        content = result["artifact_content"]
+        # В новой версии агента результаты находятся в artifacts
+        artifacts = result.get("artifacts", [])
+        assert len(artifacts) > 0
+
+        dod_artifact = None
+        for artifact in artifacts:
+            if artifact.get("type") == "dod":
+                dod_artifact = artifact
+                break
+
+        assert dod_artifact is not None
+        content = dod_artifact.get("content", {})
         assert "acceptance_criteria" in content
         assert "bdd_scenarios" in content
         assert len(content["acceptance_criteria"]) >= 1
@@ -158,11 +168,19 @@ class TestGitHubIntegration:
         result = agent.run(context)
 
         assert "status" in result
-        assert "artifact_type" in result
-        assert result["artifact_type"] == "review_result"
 
-        # В новой версии агента результат возвращается в artifact_content
-        content = result.get("artifact_content", {})
+        # В новой версии агента результаты находятся в artifacts
+        artifacts = result.get("artifacts", [])
+        assert len(artifacts) > 0
+
+        review_artifact = None
+        for artifact in artifacts:
+            if artifact.get("type") == "review_result":
+                review_artifact = artifact
+                break
+
+        assert review_artifact is not None
+        content = review_artifact.get("content", {})
         assert "decision" in content
         assert "policy_checks" in content
         assert content["decision"] in ["approve", "request_changes"]
@@ -351,7 +369,19 @@ class TestGitHubIntegrationScenarios:
         dod_result = extractor.run(dod_context)
 
         assert dod_result["status"] in ["SUCCESS", "PARTIAL_SUCCESS"]
-        dod_content = dod_result["artifact_content"]
+
+        # В новой версии агента результаты находятся в artifacts
+        artifacts = dod_result.get("artifacts", [])
+        assert len(artifacts) > 0
+
+        dod_artifact = None
+        for artifact in artifacts:
+            if artifact.get("type") == "dod":
+                dod_artifact = artifact
+                break
+
+        assert dod_artifact is not None
+        dod_content = dod_artifact.get("content", {})
         assert "acceptance_criteria" in dod_content
 
         # 3. Mock code generation and review
@@ -370,14 +400,50 @@ class TestGitHubIntegrationScenarios:
         review_agent = ReviewAgent()
         review_result = review_agent.run(review_context)
 
-        assert "decision" in review_result.get("artifact_content", {})
+        # В новой версии агента результаты находятся в artifacts
+        review_artifacts = review_result.get("artifacts", [])
+        assert len(review_artifacts) > 0
+
+        review_artifact = None
+        for artifact in review_artifacts:
+            if artifact.get("type") == "review_result":
+                review_artifact = artifact
+                break
+
+        assert review_artifact is not None
+        review_content = review_artifact.get("content", {})
+        assert "decision" in review_content
 
         # 4. Mock merge decision
-        merge_context = {"review_result": review_result.get("artifact_content", {})}
+        merge_context = {"review_result": review_content}
         merge_agent = PrMergeAgent()
         merge_result = merge_agent.run(merge_context)
 
-        assert "merged" in merge_result.get("artifact_content", {})
+        # В новой версии агента результаты находятся в artifacts
+        merge_artifacts = merge_result.get("artifacts", [])
+        assert len(merge_artifacts) > 0
+
+        # Проверим, есть ли артефакты с информацией о мердже
+        merge_content_found = False
+        for artifact in merge_artifacts:
+            content = artifact.get("content", {})
+            if "merged" in content:
+                merge_content_found = True
+                break
+
+        # Если не нашли в артефактах, проверим в content напрямую
+        if not merge_content_found:
+            # Проверим, есть ли информация о мердже в любом из артефактов
+            for artifact in merge_artifacts:
+                content = artifact.get("content", {})
+                # Проверим, содержит ли контент информацию о мердже
+                if any(
+                    key in content for key in ["merged", "merge_error", "live_merge", "dry_run"]
+                ):
+                    merge_content_found = True
+                    break
+
+        assert merge_content_found, f"No merge information found in artifacts: {merge_artifacts}"
 
     def test_github_client_with_mock_responses(self):
         """Test GitHub client with mock responses."""

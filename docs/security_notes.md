@@ -56,7 +56,21 @@ Audit events:
 - Configurable: failure_threshold, success_threshold, timeout
 - Registry для управления множественными circuit breakers
 
-## 5. Recommendations for production
+## 5. LLM Security
+
+1. Token Budget System (`agents/token_budget_system.py`) для отслеживания и ограничения стоимости использования LLM
+2. Валидация и санитизация входных данных для LLM
+3. Ограничение на количество токенов в запросах к LLM
+4. Поддержка нескольких провайдеров LLM для отказоустойчивости
+
+## 6. RBAC и аутентификация
+
+1. JWT-аутентификация и RBAC для защиты критических эндпоинтов
+2. Поддержка ролей: `admin`, `operator`, `viewer`
+3. Проверка разрешений на уровне эндпоинтов
+4. Включение аутентификации через `HORDEFORGE_AUTH_ENABLED`
+
+## 7. Recommendations for production
 
 1. Использовать short-lived/fine-grained GitHub tokens.
 2. Ограничить ingress override/admin endpoint-ов сетевыми ACL и API gateway policy.
@@ -67,3 +81,6 @@ Audit events:
 7. Подключить external metrics export (Prometheus Pushgateway или Datadog).
 8. Настроить alerting destinations (Slack/Email) и верифицировать доставку.
 9. Определить retention политики для runs/logs/artifacts/audit и активировать scheduled cleanup.
+10. Настроить JWT-аутентификацию и RBAC для защиты эндпоинтов.
+11. Внедрить Token Budget System для контроля затрат на LLM.
+12. Регулярно обновлять зависимости и проверять наличие уязвимостей.

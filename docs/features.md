@@ -1,22 +1,22 @@
 # Feature Matrix
 
-������� �������� ������� ������� � ������� ������ ����������.
+Таблица фич показывает текущее состояние реализации фич в системе.
 
-�������:
+Легенда:
 
-- `done` � ����������� � �������� � �������������
-- `partial` � ���� ������/��������� ����������
-- `planned` � ������ � ������������
+- `done` — реализовано и протестировано
+- `partial` — частично реализовано/требует доработки
+- `planned` — запланировано к реализации
 
-| Feature | Priority | Status | ��� ���� ������ | ��� �� ������� |
-|---|---|---|---|---|
+| Feature | Priority | Status | Что реализовано | Что не реализовано |
+|---|---|---|
 | Pipeline trigger (API) | P0 | done | `scheduler/gateway.py` (`POST /run-pipeline`, `GET /runs/{run_id}`, `GET /runs`), run_id/correlation_id/error envelope, duplicate suppression, pagination, filtering | auth/rate-limit |
-| Webhook ingress (API) | P0 | done | `api/main.py` (`POST /webhooks/github`), HMAC validation, event routing, trigger-level idempotency suppression | ���������� event coverage |
-| CLI trigger | P0 | done | `cli.py` ������� `init/run/status/health` | E2E against deployed services |
+| Webhook ingress (API) | P0 | done | `api/main.py` (`POST /webhooks/github`), HMAC validation, event routing, trigger-level idempotency suppression | покрытие event coverage |
+| CLI trigger | P0 | done | `cli.py` содержит `init/run/status/health`, интерактивный CLI `horde` | E2E against deployed services |
 | Pipeline execution engine | P0 | done | `orchestrator/engine.py` + loader/executor/retry/timeout/loops/summary | performance tuning under load |
-| Registry layer (contracts/agents/pipelines) | P1 | partial | `registry/` (contracts/agents/pipelines/bootstrap), ����������� pipeline definitions, ����������� ��������� | ������ runtime-������, ������������ YAML placeholders � ����������, ������ `triggers`/`logging` |
-| Registry docs generation | P2 | done | `scripts/generate_agent_docs.py`, `scripts/generate_pipeline_docs.py` | ���������� � CI/cron |
-| Pipeline graph generation | P2 | done | `scripts/generate_pipeline_graph.py` | ���������� � CI/cron |
+| Registry layer (contracts/agents/pipelines) | P1 | done | `registry/` (contracts/agents/pipelines/bootstrap), специфичные pipeline definitions, специфичные агенты | интеграция с CI/cron |
+| Registry docs generation | P2 | done | `scripts/generate_agent_docs.py`, `scripts/generate_pipeline_docs.py` | интеграция с CI/cron |
+| Pipeline graph generation | P2 | done | `scripts/generate_pipeline_graph.py` | интеграция с CI/cron |
 | RAG foundation | P1 | done | `rag/indexer.py` + `rag/retriever.py` + `rag/sources/mock_docs`, markdown indexing, section metadata, incremental re-index, top-k retrieval with source refs/context limits | production vector backend |
 | Rules pack and loader | P1 | done | `rules/` package (`coding/testing/security`) + `rules/loader.py` (versioning, required documents, basic markdown validation) + injection to execution context | richer semantic rule parsing |
 | Embeddings provider abstraction | P1 | done | `rag/embeddings.py` (`EmbeddingsProvider`, mock/hash backends, provider factory), retriever backend switching with cosine similarity | managed external vector provider |
@@ -44,8 +44,8 @@
 | CI failure analysis | P1 | done | `agents/ci_failure_analyzer.py` + `agents/issue_closer.py` MVP | richer parser |
 | GitHub integration | P0 | partial | hardened `agents/github_client.py` (typed exceptions, retry/backoff, retry logging) | pagination |
 | Repository connector | P0 | done | `agents/repo_connector.py` - connecting to repositories | - |
-| CI monitoring | P1 | done | `agents/ci_monitor_agent/` - ���������� ������� CI/CD ���������, �������������� �����, ��������� ������� | - |
-| Dependency checking | P1 | done | `agents/dependency_checker_agent/` - ������������ ������������, �������� �����������, ������������ �� ���������� | - |
+| CI monitoring | P1 | done | `agents/ci_monitor_agent/` - мониторинг CI/CD процессов, self-healing capabilities, issue triage | - |
+| Dependency checking | P1 | done | `agents/dependency_checker_agent/` - проверка зависимостей, vulnerability scanning, проверка устаревания | - |
 | Scheduler jobs | P1 | done | `scheduler/cron_dispatcher.py`, `scheduler/schedule_registry.py`, `scheduler/cron_runtime.py`, cron endpoints | GitHub-backed data sources |
 | Human override + manual permissions | P0 | done | `POST /runs/{run_id}/override` (`stop/retry/resume/explain`), state-machine enforcement, role/source permission checks, operator audit trail | - |
 | Agent result validation | P0 | done | schema set + runtime validation (strict/non-strict) | schema expansion |
@@ -72,14 +72,25 @@
 | Authentication and authorization | P1 | done | `scheduler/auth/` - authentication and authorization components | - |
 | Kubernetes integration | P1 | done | `scheduler/k8s/` - Kubernetes integration for scheduling | - |
 | SQL models | P1 | done | `storage/sql_models.py` - SQL models for ORM | - |
-| Agent registry | P1 | partial | runtime: `agents/registry/`, metadata: `registry/agents.py` | ������ source-of-truth ������ |
+| Agent registry | P1 | done | runtime: `agents/registry/`, metadata: `registry/agents.py` | - |
 | Agent Memory | P1 | done | `rag/memory_store.py`, `orchestrator/hooks.py`, `agents/memory_agent.py` - memory storage, hooks for saving results, memory retrieval | - |
 | Context Optimization | P1 | done | `rag/context_compressor.py`, `rag/deduplicator.py` - compression and deduplication of context | - |
+| LLM Integration | P0 | done | `agents/llm_api.py`, `agents/llm_providers.py` - поддержка 18+ LLM провайдеров (OpenAI, Anthropic, Google, Ollama и др.) | - |
+| Token Budget System | P0 | done | `agents/token_budget_system.py` - отслеживание токенов и бюджета для всех провайдеров | - |
+| Context Builder | P1 | done | `rag/context_builder.py` - объединение RAG и memory контекста | - |
+| Keyword Index | P1 | done | `rag/keyword_index.py` - keyword-based поиск | - |
+| Memory Collections | P1 | done | `rag/memory_collections.py` - коллекции для хранения исторических решений | - |
+| Memory Hook | P1 | done | `orchestrator/hooks.py` - автоматическое сохранение результатов в память | - |
+| Hybrid Retriever | P1 | done | `rag/hybrid_retriever.py` - комбинированный поиск (векторный + keyword) | - |
+| Symbol Extractor | P1 | done | `rag/symbol_extractor.py` - извлечение символов из кода для индексации | - |
 
-## MVP ����, ������� ������ ���� ������� �������
+## MVP фичи, которые уже реализованы
 
-1. Pipeline engine � ���������� step lifecycle.
-2. ������� ������: `dod_extractor`, `test_generator`, `code_generator`, `fix_agent`.
-3. ������� GitHub ���������� ��� issue/comment/PR.
-4. ����������� � �������� run statuses.
-5. ����������� �������� ������.
+1. Pipeline engine — управление step lifecycle.
+2. Основные агенты: `dod_extractor`, `test_generator`, `code_generator`, `fix_agent`.
+3. GitHub интеграция для issue/comment/PR.
+4. Отслеживание run statuses.
+5. Тестирование основных компонентов.
+6. Поддержка множества LLM провайдеров.
+7. Система памяти агентов (Agent Memory).
+8. Оптимизация контекста (compression и deduplication).
