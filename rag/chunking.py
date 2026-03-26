@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from rag.models import Chunk, Symbol
 
-from ..logging_config import get_logger
+from logging_config import get_logger
 
 logger = get_logger(__name__)
 
