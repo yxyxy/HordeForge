@@ -1,1 +1,62 @@
-[]
+[
+  {
+    "run_id": "default:1af58d44-4efa-4ffc-804c-fcdd2046ef5e",
+    "step_name": "repo_connector",
+    "status": "SUCCESS",
+    "tenant_id": "default",
+    "started_at": "2026-03-26T22:36:17.558662+00:00",
+    "finished_at": "2026-03-26T22:36:17.562245+00:00",
+    "error": null,
+    "retry_count": 0
+  },
+  {
+    "run_id": "default:1af58d44-4efa-4ffc-804c-fcdd2046ef5e",
+    "step_name": "rag_initializer",
+    "status": "SUCCESS",
+    "tenant_id": "default",
+    "started_at": "2026-03-26T22:36:17.563198+00:00",
+    "finished_at": "2026-03-26T22:36:21.303446+00:00",
+    "error": null,
+    "retry_count": 0
+  },
+  {
+    "run_id": "default:1af58d44-4efa-4ffc-804c-fcdd2046ef5e",
+    "step_name": "architecture_evaluator",
+    "status": "SUCCESS",
+    "tenant_id": "default",
+    "started_at": "2026-03-26T22:36:17.564241+00:00",
+    "finished_at": "2026-03-26T22:36:17.564782+00:00",
+    "error": null,
+    "retry_count": 0
+  },
+  {
+    "run_id": "default:1af58d44-4efa-4ffc-804c-fcdd2046ef5e",
+    "step_name": "test_analyzer",
+    "status": "PARTIAL_SUCCESS",
+    "tenant_id": "default",
+    "started_at": "2026-03-26T22:36:17.565226+00:00",
+    "finished_at": null,
+    "error": null,
+    "retry_count": 0
+  },
+  {
+    "run_id": "default:1af58d44-4efa-4ffc-804c-fcdd2046ef5e",
+    "step_name": "memory_agent",
+    "status": "SUCCESS",
+    "tenant_id": "default",
+    "started_at": "2026-03-26T22:36:21.304737+00:00",
+    "finished_at": "2026-03-26T22:36:21.305890+00:00",
+    "error": null,
+    "retry_count": 0
+  },
+  {
+    "run_id": "default:1af58d44-4efa-4ffc-804c-fcdd2046ef5e",
+    "step_name": "pipeline_initializer",
+    "status": "SUCCESS",
+    "tenant_id": "default",
+    "started_at": "2026-03-26T22:36:21.306130+00:00",
+    "finished_at": "2026-03-26T22:36:21.315656+00:00",
+    "error": null,
+    "retry_count": 0
+  }
+]

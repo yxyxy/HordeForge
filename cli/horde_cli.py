@@ -246,9 +246,8 @@ def build_parser() -> argparse.ArgumentParser:
 def run_task_interactive(prompt: str, args) -> int:
     """Run a task in interactive mode."""
     print_info(f"Running task: {prompt}")
-    print_info("This would launch an interactive UI similar to Cline...")
+    print_info("Submitting feature pipeline run through gateway...")
 
-    # For now, simulate the task execution
     try:
         inputs = {"prompt": prompt}
 
@@ -260,8 +259,12 @@ def run_task_interactive(prompt: str, args) -> int:
         if hasattr(args, "model") and args.model:
             inputs["model"] = args.model
 
-        result = trigger_pipeline("feature_pipeline", inputs)
-        print_success("Task completed successfully!")
+        result = trigger_pipeline("feature_pipeline", inputs, source="horde_task")
+        run_id = result.get("run_id")
+        if run_id:
+            print_success(f"Task submitted successfully (run_id={run_id})")
+        else:
+            print_success("Task submitted successfully")
         print(json.dumps(result, indent=2))
         return EXIT_OK
     except Exception as e:
@@ -271,14 +274,36 @@ def run_task_interactive(prompt: str, args) -> int:
 
 def show_history(limit: int = 10, page: int = 1) -> int:
     """Show task history."""
-    print_info(f"Showing task history (limit: {limit}, page: {page})")
-    print("This would show historical tasks in an interactive UI...")
+    normalized_limit = max(1, int(limit))
+    normalized_page = max(1, int(page))
+    offset = (normalized_page - 1) * normalized_limit
 
-    # Simulate history display
-    print("Recent tasks:")
-    print("- Task 1: Implement user authentication (completed)")
-    print("- Task 2: Design database schema (completed)")
-    print("- Task 3: Add CI/CD pipeline (running)")
+    print_info(f"Showing task history (limit: {normalized_limit}, page: {normalized_page})")
+
+    try:
+        response = requests.get(
+            f"{CONFIG.gateway_url}/runs",
+            params={"offset": offset, "limit": normalized_limit},
+            timeout=CONFIG.status_timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as e:
+        print_error(f"Failed to fetch history: {e}")
+        return EXIT_ERROR
+
+    items = payload.get("items", []) if isinstance(payload, dict) else []
+    if not items:
+        print_info("No runs found.")
+        return EXIT_OK
+
+    print("Recent runs:")
+    for run in items:
+        run_id = run.get("run_id", "-")
+        pipeline_name = run.get("pipeline_name", "-")
+        status = run.get("status", "-")
+        started_at = run.get("started_at") or run.get("created_at") or "-"
+        print(f"- {run_id} | {pipeline_name} | {status} | {started_at}")
 
     return EXIT_OK
 

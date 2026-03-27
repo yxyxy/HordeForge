@@ -4,13 +4,14 @@
 
 ## 1. Что важно понимать заранее
 
-Репозиторий находится в стадии skeleton/MVP bootstrap:
+Репозиторий находится в стадии позднего MVP / pre-production hardening:
 
-- часть компонентов работает только как каркас
-- pipeline-файлы описаны шире, чем текущая реализация агентов
-- registry-слой (contracts/agents/pipelines) реализован, но не полностью интегрирован в runtime
+- runtime-ядро (orchestrator/gateway/registry/storage) реализовано и покрыто тестами
+- pipeline-файлы реально исполняются через runtime и registry-валидацию
+- есть компоненты со статусом `partial` (часть интерактивного CLI UX, отдельные агентные/интеграционные сценарии)
 
-Этот onboarding предназначен для разработки платформы, а не для production использования.
+Этот onboarding предназначен для development + controlled staging/private alpha.
+Для широкого production rollout требуется отдельный launch-audit (security/performance/deploy E2E).
 
 ## 2. Предварительные требования
 
@@ -128,6 +129,9 @@ python cli.py init --repo-url <GITHUB_URL> --token <GITHUB_TOKEN>
 - И многие другие
 
 Ключевые агенты зарегистрированы в metadata-реестре `registry/agents.py` и runtime-реестре `agents/registry/`.
+
+Важно: часть расширенных сценариев (например, отдельные интерактивные CLI UX ветки и некоторые provider-specific агенты)
+требует дополнительного hardening перед широким production использованием.
 
 ## 8. Рекомендуемый workflow разработки
 

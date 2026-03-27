@@ -34,6 +34,15 @@
 10. P10 Production Hardening — DONE (HF-P10-001..HF-P10-003 COMPLETE).
 11. P11 Agent Development Phase 1 — IN PROGRESS (HF-P11-001..HF-P11-022 COMPLETE).
 
+Примечание по статусам:
+`DONE` в этом разделе означает закрытие внутреннего backlog по фазам.
+Это не заменяет финальный launch-audit перед широким production rollout.
+
+Сквозной launch gate (текущий статус):
+
+1. Staging deploy E2E validation (Docker/K8s, webhook/cron/override/backup/restore) — PENDING.
+2. Security + performance release audit с фиксированными baseline — PENDING.
+
 ## Phase 5 Backlog (COMPLETED)
 
 - ✅ PostgreSQL storage adapter (`storage/backends.py`)

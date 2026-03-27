@@ -24,6 +24,7 @@ Welcome to the comprehensive documentation for HordeForge, an autonomous AI soft
 
 ### Operations
 - [Operations Runbook](operations_runbook.md) - Operational procedures and runbooks
+- [Launch Readiness Plan](launch_readiness_plan.md) - Production hardening and launch gates
 - [Troubleshooting Guide](troubleshooting_guide.md) - Common issues and solutions
 - [System Requirements](system_requirements.md) - Hardware and software requirements
 - [Security Notes](security_notes.md) - Security practices and considerations
@@ -101,8 +102,8 @@ Welcome to the comprehensive documentation for HordeForge, an autonomous AI soft
 ## Version Information
 
 Current version: 2.0.0
-Last updated: March 26, 2026
-Documentation status: Complete and up-to-date
+Last updated: March 27, 2026
+Documentation status: Synced with codebase for MVP/P2; launch hardening items remain
 
 ## Contributing to Documentation
 

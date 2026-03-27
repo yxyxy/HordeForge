@@ -13,14 +13,13 @@ import tree_sitter
 from fastembed import TextEmbedding
 from qdrant_client import models
 
+from logging_config import get_logger
 from rag.chunking import ChunkGenerator
 from rag.config import get_embedding_model
 from rag.models import Chunk, Symbol
 from rag.symbol_extractor_tree_sitter import TreeSitterSymbolExtractor
 from rag.tree_sitter_parser import get_language_for_file, parse_file
 from rag.vector_store import QdrantStore
-
-from logging_config import get_logger
 
 logger = get_logger(__name__)
 

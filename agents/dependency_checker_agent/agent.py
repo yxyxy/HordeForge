@@ -75,7 +75,7 @@ class DependencyCheckerAgent(BaseAgent):
             "Gemfile",  # bundler (Ruby)
             "go.mod",  # Go modules
         ]
-        self.vulnerability_db_url = "https://services.nvd.nist.gov/rest/json/cves/1.0"
+        self.vulnerability_db_url = "https://api.osv.dev/v1/query"
 
     def run(self, context: DependencyContext) -> dict[str, Any]:
         """
@@ -349,10 +349,7 @@ class DependencyCheckerAgent(BaseAgent):
                 if version == "unknown":
                     continue
 
-                # Query NVD for vulnerabilities (simplified approach)
-                # In a real implementation, we would use a service like Snyk or OSS Index
-                # For now, we'll simulate checking against a vulnerability database
-                vulns = self._query_vulnerability_database(name, version)
+                vulns = self._query_vulnerability_database(name, version, dep.get("type", ""))
                 if vulns:
                     vulnerabilities.extend(vulns)
 
@@ -372,47 +369,98 @@ class DependencyCheckerAgent(BaseAgent):
             )
 
     def _query_vulnerability_database(
-        self, package_name: str, version: str
+        self, package_name: str, version: str, package_type: str
     ) -> list[dict[str, Any]]:
         """
-        Query vulnerability database for a specific package and version
+        Query vulnerability database for a specific package and version.
 
         Args:
             package_name: Name of the package
             version: Version of the package
+            package_type: Type of package manager (npm, pip, etc.)
 
         Returns:
             List of vulnerabilities for the package
         """
-        # This is a simplified simulation
-        # In a real implementation, we would query services like NVD, Snyk, etc.
-        vulnerabilities = []
+        ecosystem = self._resolve_osv_ecosystem(package_type)
+        if ecosystem is None:
+            return []
 
-        # For demonstration purposes, we'll return some mock vulnerabilities
-        # for common packages that are known to have had vulnerabilities
-        vulnerable_packages = {
-            "lodash": ["CVE-2018-1647", "CVE-2019-10744"],
-            "moment": ["CVE-2017-18214", "CVE-2020-15945"],
-            "jquery": ["CVE-2012-6708", "CVE-2015-9251"],
-            "django": ["CVE-2018-14574", "CVE-2020-9402"],
-            "requests": ["CVE-2018-18074"],  # Example CVE for older versions
+        payload = {
+            "package": {
+                "name": package_name,
+                "ecosystem": ecosystem,
+            },
+            "version": version,
         }
 
-        if package_name in vulnerable_packages:
-            for cve in vulnerable_packages[package_name]:
-                # In a real implementation, we would check if the specific version is affected
-                vulnerabilities.append(
-                    {
-                        "id": cve,
-                        "package": package_name,
-                        "version": version,
-                        "severity": "HIGH" if "HIGH" in [cve] else "MEDIUM",  # Simplified
-                        "description": f"Mock vulnerability for {package_name} version {version}",
-                        "url": f"https://nvd.nist.gov/vuln/detail/{cve}",
-                    }
-                )
+        try:
+            response = requests.post(self.vulnerability_db_url, json=payload, timeout=10)
+            if response.status_code != 200:
+                return []
+            data = response.json()
+        except Exception:
+            return []
+
+        vulnerabilities = []
+        for vuln in data.get("vulns", []):
+            if not isinstance(vuln, dict):
+                continue
+
+            vuln_id = str(vuln.get("id", "UNKNOWN"))
+            details = vuln.get("details") or vuln.get("summary") or ""
+            if not isinstance(details, str):
+                details = str(details)
+
+            aliases = vuln.get("aliases")
+            primary_alias = None
+            if isinstance(aliases, list) and aliases:
+                primary_alias = aliases[0]
+
+            vulnerabilities.append(
+                {
+                    "id": vuln_id,
+                    "package": package_name,
+                    "version": version,
+                    "severity": self._extract_osv_severity(vuln),
+                    "description": details[:5000] if details else "No description provided",
+                    "url": f"https://osv.dev/vulnerability/{vuln_id}",
+                    "alias": primary_alias,
+                }
+            )
 
         return vulnerabilities
+
+    @staticmethod
+    def _resolve_osv_ecosystem(package_type: str) -> str | None:
+        mapping = {
+            "npm": "npm",
+            "pip": "PyPI",
+            "pipenv": "PyPI",
+            "poetry": "PyPI",
+            "go": "Go",
+            "gem": "RubyGems",
+            "maven": "Maven",
+        }
+        return mapping.get(str(package_type).strip().lower())
+
+    @staticmethod
+    def _extract_osv_severity(vuln: dict[str, Any]) -> str:
+        database_specific = vuln.get("database_specific")
+        if isinstance(database_specific, dict):
+            severity = database_specific.get("severity")
+            if isinstance(severity, str) and severity.strip():
+                return severity.strip().upper()
+
+        severity_list = vuln.get("severity")
+        if isinstance(severity_list, list) and severity_list:
+            first_item = severity_list[0]
+            if isinstance(first_item, dict):
+                sev_type = first_item.get("type")
+                if isinstance(sev_type, str) and sev_type.strip():
+                    return sev_type.strip().upper()
+
+        return "UNKNOWN"
 
     def recommend_updates(self, dependencies: list[dict[str, Any]]) -> UpdateRecommendationResult:
         """
@@ -436,7 +484,6 @@ class DependencyCheckerAgent(BaseAgent):
                 if current_version == "unknown":
                     continue
 
-                # Get latest version (simulated)
                 latest_version = self._get_latest_version(name, dep.get("type", ""))
 
                 if latest_version and self._is_outdated(current_version, latest_version):
@@ -492,8 +539,7 @@ class DependencyCheckerAgent(BaseAgent):
             # If online lookup fails, return None
             pass
 
-        # For demo purposes, return a mock latest version
-        return "2.0.0"
+        return None
 
     def _is_outdated(self, current_version: str, latest_version: str) -> bool:
         """
@@ -512,8 +558,7 @@ class DependencyCheckerAgent(BaseAgent):
             latest_ver = packaging.version.parse(latest_version)
             return curr_ver < latest_ver
         except Exception:
-            # If version comparison fails, assume it's outdated
-            return True
+            return False
 
 
 # Backward compatibility for testing

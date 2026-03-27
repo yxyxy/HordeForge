@@ -9,19 +9,19 @@
 - `planned` — запланировано к реализации
 
 | Feature | Priority | Status | Что реализовано | Что не реализовано |
-|---|---|---|
+|---|---|---|---|---|
 | Pipeline trigger (API) | P0 | done | `scheduler/gateway.py` (`POST /run-pipeline`, `GET /runs/{run_id}`, `GET /runs`), run_id/correlation_id/error envelope, duplicate suppression, pagination, filtering | auth/rate-limit |
 | Webhook ingress (API) | P0 | done | `api/main.py` (`POST /webhooks/github`), HMAC validation, event routing, trigger-level idempotency suppression | покрытие event coverage |
-| CLI trigger | P0 | done | `cli.py` содержит `init/run/status/health`, интерактивный CLI `horde` | E2E against deployed services |
-| Pipeline execution engine | P0 | done | `orchestrator/engine.py` + loader/executor/retry/timeout/loops/summary | performance tuning under load |
-| Registry layer (contracts/agents/pipelines) | P1 | done | `registry/` (contracts/agents/pipelines/bootstrap), специфичные pipeline definitions, специфичные агенты | интеграция с CI/cron |
-| Registry docs generation | P2 | done | `scripts/generate_agent_docs.py`, `scripts/generate_pipeline_docs.py` | интеграция с CI/cron |
-| Pipeline graph generation | P2 | done | `scripts/generate_pipeline_graph.py` | интеграция с CI/cron |
-| RAG foundation | P1 | done | `rag/indexer.py` + `rag/retriever.py` + `rag/sources/mock_docs`, markdown indexing, section metadata, incremental re-index, top-k retrieval with source refs/context limits | production vector backend |
+| CLI trigger | P0 | partial | `cli.py` (`init/run/status/health`) и `horde` (`pipeline run`, `task`, `history`) работают через gateway API | E2E against deployed services |
+| Pipeline execution engine | P0 | partial | `orchestrator/engine.py` + loader/executor/retry/timeout/loops/summary + parallel DAG execution | production load tuning и staged performance gates |
+| Registry layer (contracts/agents/pipelines) | P1 | done | `registry/` (contracts/agents/pipelines/bootstrap) интегрирован в runtime (`orchestrator/engine.py`, `orchestrator/executor.py`) | - |
+| Registry docs generation | P2 | partial | `scripts/generate_agent_docs.py`, `scripts/generate_pipeline_docs.py` | автоматический запуск в CI/cron |
+| Pipeline graph generation | P2 | partial | `scripts/generate_pipeline_graph.py` | автоматический запуск в CI/cron |
+| RAG foundation | P1 | done | `rag/indexer.py` + `rag/retriever.py` + `rag/vector_store.py` (Qdrant local/host/auto), incremental indexing, retrieval with source refs/context limits | managed cloud vector backends (например Pinecone/Weaviate) |
 | Rules pack and loader | P1 | done | `rules/` package (`coding/testing/security`) + `rules/loader.py` (versioning, required documents, basic markdown validation) + injection to execution context | richer semantic rule parsing |
-| Embeddings provider abstraction | P1 | done | `rag/embeddings.py` (`EmbeddingsProvider`, mock/hash backends, provider factory), retriever backend switching with cosine similarity | managed external vector provider |
+| Embeddings provider abstraction | P1 | partial | `rag/embeddings.py` (`EmbeddingsProvider`, mock/hash backends, provider factory), retriever backend switching with cosine similarity | managed external embeddings provider |
 | Parallel execution planner | P1 | done | `orchestrator/parallel.py` + DAG dependency graph + lock-aware batch selection + runtime parallel step execution with `max_parallel_workers` | adaptive concurrency control |
-| Queue abstraction | P1 | done | `scheduler/task_queue.py` (`TaskQueueBackend`, `InMemoryTaskQueue`) + `scheduler/queue_backends.py` (`RedisTaskQueue`), gateway async enqueue + queue drain/status endpoints | - |
+| Queue abstraction | P1 | partial | `scheduler/task_queue.py` (`TaskQueueBackend`, `InMemoryTaskQueue`) + `scheduler/queue_backends.py` (`RedisTaskQueue`), gateway async enqueue + queue drain/status endpoints | `ExternalBrokerQueueAdapter` пока placeholder |
 | Multi-repo + Tenant isolation | P0 | done | `scheduler/tenant_registry.py` (tenant/repo mapping, normalization, wildcard support, validation), `RunConfig` tenant settings, tenant-aware storage, gateway tenant filters, queue tenant propagation | audit logging (P4 added) |
 | Cost tracking | P0 | done | `observability/cost_tracker.py` (`CostTracker`, `CostRecord`, `CostSummary`), default pricing for OpenAI/Anthropic/Google, cost aggregation by run/model/step, budget limits with alerts, Prometheus metrics integration | - |
 | External metrics export | P1 | done | `observability/exporters.py` (Prometheus Pushgateway, Datadog) | - |
@@ -42,10 +42,10 @@
 | Test analysis | P0 | done | `agents/test_analyzer.py` - analysis of test results | - |
 | Review + Merge | P1 | done | `agents/review_agent.py` + `agents/pr_merge_agent.py` / `live_merge.py` - live GitHub integration | - |
 | CI failure analysis | P1 | done | `agents/ci_failure_analyzer.py` + `agents/issue_closer.py` MVP | richer parser |
-| GitHub integration | P0 | partial | hardened `agents/github_client.py` (typed exceptions, retry/backoff, retry logging) | pagination |
+| GitHub integration | P0 | done | hardened `agents/github_client.py` (typed exceptions, retry/backoff, pagination, pull/issue/commit listing helpers) | live-production regression matrix against multiple GitHub API scenarios |
 | Repository connector | P0 | done | `agents/repo_connector.py` - connecting to repositories | - |
-| CI monitoring | P1 | done | `agents/ci_monitor_agent/` - мониторинг CI/CD процессов, self-healing capabilities, issue triage | - |
-| Dependency checking | P1 | done | `agents/dependency_checker_agent/` - проверка зависимостей, vulnerability scanning, проверка устаревания | - |
+| CI monitoring | P1 | partial | `agents/ci_monitor_agent/` с провайдерными клиентами (GitHub Actions/Jenkins/GitLab), нормализацией статусов и runtime-контекстом | полноценная live regression matrix по провайдерам |
+| Dependency checking | P1 | partial | `agents/dependency_checker_agent/` с разбором manifest-файлов, lookup версий (npm/PyPI) и OSV vulnerability query | расширение coverage по ecosystem + offline/cache/rate-limit hardening |
 | Scheduler jobs | P1 | done | `scheduler/cron_dispatcher.py`, `scheduler/schedule_registry.py`, `scheduler/cron_runtime.py`, cron endpoints | GitHub-backed data sources |
 | Human override + manual permissions | P0 | done | `POST /runs/{run_id}/override` (`stop/retry/resume/explain`), state-machine enforcement, role/source permission checks, operator audit trail | - |
 | Agent result validation | P0 | done | schema set + runtime validation (strict/non-strict) | schema expansion |
@@ -56,7 +56,7 @@
 | Data retention policies | P1 | done | `scripts/cleanup/`, `scheduler/jobs/data_retention.py` | - |
 | State persistence | P1 | done | `storage/` package + repositories + `storage/backends.py` (JSON + Postgres backends) | - |
 | Storage abstraction | P1 | done | `storage/backends.py` (`StorageBackend`, `JsonStorageBackend`, `PostgresStorageBackend`, factory) | - |
-| Tests (unit/integration) | P0 | done | 280+ unit/integration tests, pipeline smokes, E2E flows, load tests, benchmark tests | soak/chaos profile |
+| Tests (unit/integration) | P0 | partial | 500+ unit/integration test cases, pipeline smokes, load tests, benchmark tests | deploy-level E2E against live services, soak/chaos profile |
 | Memory management | P1 | done | `agents/memory_agent.py` - managing memory and context for agents | - |
 | RAG initialization | P1 | done | `agents/rag_initializer.py` - initializing RAG components | - |
 | Pipeline runner | P1 | done | `agents/pipeline_runner.py` - running pipelines | - |

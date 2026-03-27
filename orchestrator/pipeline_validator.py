@@ -236,6 +236,7 @@ class PipelineValidator:
             "github_token",
             "repository",
             "issue",
+            "dependency",
             "issue_body",
             "issue_title",
             "pr_title",

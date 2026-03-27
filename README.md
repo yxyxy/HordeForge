@@ -4,7 +4,11 @@ Autonomous AI software development orchestrator. Reads GitHub issues and automat
 
 ## Current State
 
-The system is in P3 execution phase: P2 (production readiness) work is complete, working on scale features (P3).
+The system is in late MVP / pre-production hardening:
+
+- Core runtime capabilities are implemented (orchestrator, scheduler gateway, registry, storage, observability).
+- Suitable for internal pilot and controlled staging usage.
+- Broad production rollout still requires final launch audit (staging E2E, security review, load/performance verification).
 
 ## Key Features
 
@@ -61,7 +65,7 @@ Core layers: agents → orchestrator → scheduler → integrations → storage
 - ✅ **Agent Memory system** with automatic recording of successful solutions
 - ✅ **Context optimization** with compression and deduplication
 - ✅ **Token Budget System** with comprehensive cost tracking
-- ✅ **Interactive CLI** with `horde` command
+- ⚠️ **Interactive CLI** with `horde` command (pipeline/LLM operations are implemented; `task/history` UX paths are scaffolded)
 - ✅ **Memory Hook integration** for automatic solution recording
 - ✅ **Context Builder** with memory and RAG integration
 - ✅ **Deduplication and compression** algorithms
@@ -71,8 +75,8 @@ Core layers: agents → orchestrator → scheduler → integrations → storage
 - ✅ **Provider routing** and fallback mechanisms
 - ✅ **Performance optimization** with caching
 - ✅ **Security hardening** with token redaction
-- ✅ **Comprehensive testing** with 280+ tests
-- ✅ **Production-ready deployment** with Docker/Kubernetes
+- ✅ **Comprehensive testing** with 500+ test cases (unit + integration)
+- ⚠️ **Deployment assets** for Docker/Kubernetes are implemented; production launch hardening is still required
 - ✅ **Multi-tenant isolation** and security
 - ✅ **Performance monitoring** and alerting
 - ✅ **Error handling** and retry mechanisms

@@ -193,29 +193,32 @@ Acceptance criteria:
 - Context Optimization: `docs/context_optimization.md`
 - Token Budget System: `docs/token_budget_system.md`
 
-## 5. Current requirement coverage
+## 5. Current requirement coverage (validated on 2026-03-27)
 
-Current state: **implemented**
+Current state: **FR implemented; NFR partially validated for broad production rollout**
 
-- FR-01: **done** — API + CLI trigger, run_id generation
-- FR-02: **done** — Orchestrator engine with parallel execution
-- FR-03: **done** — Agent contract in `context_utils.py`, schema validation
-- FR-04: **done** — feature_pipeline.yaml (12 steps), LLM-enhanced agents
-- FR-05: **done** — ci_fix_pipeline.yaml (8 steps), fix loop
-- FR-06: **done** — Retry policy in `orchestrator/retry.py`, loop conditions
-- FR-07: **done** — GitHub client, live_review, live_merge agents
-- FR-08: **done** — Webhook ingress, cron jobs, manual trigger
-- FR-09: **done** — 18+ LLM providers, unified interface, streaming
-- FR-10: **done** — Agent memory system with automatic recording
-- FR-11: **done** — Context optimization with deduplication/compression
-- FR-12: **done** — Token budget system with cost tracking
+Functional requirements:
 
-NFR requirements also implemented:
-- NFR-01 (Security): token redaction, HMAC validation, permission checks ✅
-- NFR-02 (Reliability): retry/timeout, idempotency suppression ✅
-- NFR-03 (Extensibility): agent registry, pipeline-first ✅
-- NFR-04 (Transparency): step logs, run status, error envelope ✅
-- NFR-05 (Performance): <3s pipeline init, <500ms orchestrator overhead ✅
-- NFR-06 (Testability): 280+ unit/integration tests ✅
-- NFR-07 (Scalability): parallel execution, resource management ✅
-- NFR-08 (Maintainability): modular design, documentation ✅
+- FR-01: **done** — API + CLI trigger, run_id/correlation_id generation
+- FR-02: **done** — Orchestrator executes sequential/parallel DAG steps with context passing
+- FR-03: **done** — Unified agent contract + runtime schema validation
+- FR-04: **done** — `feature_pipeline.yaml` implemented (expanded chain, including planning/test/code/fix/review/merge flow)
+- FR-05: **done** — `ci_fix_pipeline.yaml` implemented with fix/retest loop
+- FR-06: **done** — Step retry and loop handling (`retry_limit`, blocked/failed transitions)
+- FR-07: **done** — GitHub client supports issue/comment/branch/PR/workflow ops, including pagination
+- FR-08: **done** — Step/run logging, run summaries, metrics, webhook + cron + manual trigger paths
+- FR-09: **done** — 18+ LLM providers, unified interface, streaming/chunk handling
+- FR-10: **done** — Agent Memory storage/retrieval + automatic recording hooks
+- FR-11: **done** — Context deduplication/compression + memory/RAG context building
+- FR-12: **done** — Token usage/cost tracking + budget limits and CLI/API exposure
+
+Non-functional requirements:
+
+- NFR-01 Reliability: **partial** — runtime reliability mechanisms implemented (retry/timeout/idempotency), but no sustained staged soak validation
+- NFR-02 Security: **partial** — security controls implemented (redaction/HMAC/RBAC), final launch security audit not yet documented
+- NFR-03 Extensibility: **done** — registry-first architecture and declarative pipeline model
+- NFR-04 Transparency: **done** — step statuses, error envelopes, run/metrics visibility
+- NFR-05 Performance: **partial** — load/burst tests exist, but release-grade production baselines and hard limits are not finalized
+- NFR-06 Testability: **partial** — extensive unit/integration coverage, but deploy-level E2E against live services is still pending
+- NFR-07 Scalability: **partial** — concurrency and queue backends implemented, horizontal production scaling not fully validated in staging
+- NFR-08 Maintainability: **done** — modular boundaries and broad documentation are in place
