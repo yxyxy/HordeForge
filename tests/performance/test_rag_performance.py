@@ -128,8 +128,36 @@ def test_performance_comparison():
 
 
 @pytest.mark.performance
-def test_indexing_orchestrator_performance():
+def test_indexing_orchestrator_performance(monkeypatch):
     """Test the performance of the IndexingOrchestrator specifically."""
+
+    class _FakeEmbeddingStage:
+        def __init__(self, batch_size: int = 512, embedding_model: str | None = None):
+            self.batch_size = batch_size
+            self.embedding_model = embedding_model or "fake-model"
+
+        async def run(self, chunks):
+            for chunk in chunks:
+                chunk.metadata["embedding"] = [0.1] * 384
+            return chunks
+
+    class _FakeStorageStage:
+        def __init__(self, collection_name: str = "repo_chunks", vector_size: int = 384):
+            self.collection_name = collection_name
+            self.vector_size = vector_size
+
+        async def run(self, chunks):
+            return {
+                "total_chunks_processed": len(chunks),
+                "total_inserted": len(chunks),
+                "collection_name": self.collection_name,
+                "duration_seconds": 0.0,
+                "success_rate": 1.0,
+            }
+
+    monkeypatch.setattr("rag.orchestrator.EmbeddingStage", _FakeEmbeddingStage)
+    monkeypatch.setattr("rag.orchestrator.StorageStage", _FakeStorageStage)
+
     with tempfile.TemporaryDirectory() as temp_dir:
         repo_path = Path(temp_dir) / "test_repo"
         create_test_repo(repo_path)

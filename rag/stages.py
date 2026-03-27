@@ -60,6 +60,7 @@ class ParsingStage:
         logger.info(f"ParsingStage: Starting to parse {len(file_paths)} files")
         start_time = time.time()
         parsed_files = []
+        failed_parse_count = 0
 
         for i, file_path in enumerate(file_paths):
             if file_path.suffix.lower() not in self.supported_extensions:
@@ -68,33 +69,38 @@ class ParsingStage:
 
             logger.debug(f"Parsing file {i + 1}/{len(file_paths)}: {file_path}")
 
-            try:
-                # Read file content
-                with open(file_path, encoding="utf-8") as f:
-                    content = f.read()
-
-                # Parse the file using Tree-sitter
-                ast = parse_file(file_path)
-                if ast is None:
-                    logger.warning(f"Failed to parse file: {file_path}")
-                    continue
-
-                # Get language for the file
-                language = get_language_for_file(file_path)
-                if not language:
-                    logger.warning(f"Unknown language for file: {file_path}")
-                    continue
-
-                parsed_file = ParsedFile(
-                    file_path=file_path, ast=ast, language=language, content=content
-                )
-                parsed_files.append(parsed_file)
-
-            except Exception as e:
-                logger.error(f"Error parsing file {file_path}: {e}")
+            # Parse the file using Tree-sitter first. If parser is unavailable for
+            # this extension, skip expensive content reads.
+            ast = parse_file(file_path)
+            if ast is None:
+                failed_parse_count += 1
+                if failed_parse_count <= 3:
+                    logger.debug(f"Failed to parse file: {file_path}")
                 continue
 
+            # Get language for the file
+            language = get_language_for_file(file_path)
+            if not language:
+                logger.warning(f"Unknown language for file: {file_path}")
+                continue
+
+            try:
+                with open(file_path, encoding="utf-8") as f:
+                    content = f.read()
+            except Exception as e:
+                logger.error(f"Error reading file {file_path}: {e}")
+                continue
+
+            parsed_file = ParsedFile(
+                file_path=file_path, ast=ast, language=language, content=content
+            )
+            parsed_files.append(parsed_file)
+
         duration = time.time() - start_time
+        if failed_parse_count:
+            logger.info(
+                f"ParsingStage: Skipped {failed_parse_count} files that could not be parsed"
+            )
         logger.info(f"ParsingStage: Completed parsing {len(parsed_files)} files in {duration:.2f}s")
         return parsed_files
 

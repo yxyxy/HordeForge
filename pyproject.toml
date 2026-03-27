@@ -3,6 +3,21 @@ pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q -p no:cacheprovider"
 asyncio_mode = "auto"
+norecursedirs = [
+  ".git",
+  ".venv",
+  "node_modules",
+  ".pytest_tmp",
+  ".pytest_tmp_runtime",
+  "tests/_tmp_runtime",
+  "tests/_tmp_pytest",
+  "tests/_tmp_*",
+]
+markers = [
+  "slow: long-running tests",
+  "performance: performance-focused tests",
+  "benchmark: benchmark tests",
+]
 
 [tool.black]
 line-length = 100

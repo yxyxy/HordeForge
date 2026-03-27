@@ -100,10 +100,11 @@ class TestIngestionPipelineBehavior:
         return embedder
 
     @pytest.mark.asyncio
-    async def test_pipeline_initialization(self, mock_qdrant_client):
+    async def test_pipeline_initialization(self, mock_qdrant_client, mock_embedder):
         """Scenario: Initialize pipeline with custom parameters"""
         pipeline = IngestionPipeline(
             client=mock_qdrant_client,
+            embedder=mock_embedder,
             batch_size=1024,
             num_workers=8,
             queue_size=30,
@@ -114,10 +115,11 @@ class TestIngestionPipelineBehavior:
         assert pipeline.queue.maxsize == 30
 
     @pytest.mark.asyncio
-    async def test_workers_start_and_stop(self, mock_qdrant_client):
+    async def test_workers_start_and_stop(self, mock_qdrant_client, mock_embedder):
         """Scenario: Workers start and stop gracefully"""
         pipeline = IngestionPipeline(
             client=mock_qdrant_client,
+            embedder=mock_embedder,
             num_workers=2,
             queue_size=5,
         )

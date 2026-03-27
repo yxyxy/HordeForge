@@ -1,6 +1,6 @@
 [
   {
-    "run_id": "default:1af58d44-4efa-4ffc-804c-fcdd2046ef5e",
+    "run_id": "default:5e15fcce-9e61-430c-b7a5-f499318f9b89",
     "step_name": "repo_connector",
     "artifact_type": "repository_metadata",
     "content": {
@@ -28,7 +28,7 @@
     "tenant_id": "default"
   },
   {
-    "run_id": "default:1af58d44-4efa-4ffc-804c-fcdd2046ef5e",
+    "run_id": "default:5e15fcce-9e61-430c-b7a5-f499318f9b89",
     "step_name": "repo_connector",
     "artifact_type": "repository_data",
     "content": {
@@ -56,24 +56,24 @@
     "tenant_id": "default"
   },
   {
-    "run_id": "default:1af58d44-4efa-4ffc-804c-fcdd2046ef5e",
+    "run_id": "default:5e15fcce-9e61-430c-b7a5-f499318f9b89",
     "step_name": "rag_initializer",
     "artifact_type": "rag_index",
     "content": {
-      "index_id": "repo_index_4861445751998098741",
+      "index_id": "repo_index_6165886820996434011",
       "indexed_files_count": 0,
       "total_symbols_count": 0,
       "source_repo": "acme/hordeforge",
       "vector_store_status": false,
-      "keyword_index_status": false,
-      "collection_name": "repo_chunks",
-      "rag_working": true
+      "keyword_index_status": true,
+      "collection_name": null,
+      "rag_working": false
     },
-    "size_bytes": 248,
+    "size_bytes": 239,
     "tenant_id": "default"
   },
   {
-    "run_id": "default:1af58d44-4efa-4ffc-804c-fcdd2046ef5e",
+    "run_id": "default:5e15fcce-9e61-430c-b7a5-f499318f9b89",
     "step_name": "architecture_evaluator",
     "artifact_type": "architecture_report",
     "content": {
@@ -92,7 +92,7 @@
     "tenant_id": "default"
   },
   {
-    "run_id": "default:1af58d44-4efa-4ffc-804c-fcdd2046ef5e",
+    "run_id": "default:5e15fcce-9e61-430c-b7a5-f499318f9b89",
     "step_name": "test_analyzer",
     "artifact_type": "test_coverage_report",
     "content": {
@@ -108,7 +108,7 @@
     "tenant_id": "default"
   },
   {
-    "run_id": "default:1af58d44-4efa-4ffc-804c-fcdd2046ef5e",
+    "run_id": "default:5e15fcce-9e61-430c-b7a5-f499318f9b89",
     "step_name": "memory_agent",
     "artifact_type": "memory_state",
     "content": {
@@ -120,7 +120,7 @@
       },
       "knowledge": {
         "documents_count": 0,
-        "index_id": "repo_index_4861445751998098741"
+        "index_id": "repo_index_6165886820996434011"
       },
       "events": [
         {
@@ -134,7 +134,7 @@
     "tenant_id": "default"
   },
   {
-    "run_id": "default:1af58d44-4efa-4ffc-804c-fcdd2046ef5e",
+    "run_id": "default:5e15fcce-9e61-430c-b7a5-f499318f9b89",
     "step_name": "pipeline_initializer",
     "artifact_type": "pipeline_config",
     "content": {

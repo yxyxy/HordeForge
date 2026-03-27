@@ -56,7 +56,7 @@
 | Data retention policies | P1 | done | `scripts/cleanup/`, `scheduler/jobs/data_retention.py` | - |
 | State persistence | P1 | done | `storage/` package + repositories + `storage/backends.py` (JSON + Postgres backends) | - |
 | Storage abstraction | P1 | done | `storage/backends.py` (`StorageBackend`, `JsonStorageBackend`, `PostgresStorageBackend`, factory) | - |
-| Tests (unit/integration) | P0 | partial | 500+ unit/integration test cases, pipeline smokes, load tests, benchmark tests | deploy-level E2E against live services, soak/chaos profile |
+| Tests (unit/integration) | P0 | partial | 500+ unit/integration test cases, pipeline smokes, load tests, benchmark tests, plus pipeline-catalog static/runtime smoke gates (`tests/unit/test_pipeline_catalog_validation.py`, `tests/integration/test_pipeline_catalog_runtime.py`) | deploy-level E2E against live services, soak/chaos profile |
 | Memory management | P1 | done | `agents/memory_agent.py` - managing memory and context for agents | - |
 | RAG initialization | P1 | done | `agents/rag_initializer.py` - initializing RAG components | - |
 | Pipeline runner | P1 | done | `agents/pipeline_runner.py` - running pipelines | - |

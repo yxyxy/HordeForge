@@ -29,7 +29,9 @@ SUPPORTED_LANGUAGES = {
 }
 
 # Language parsers cache to improve performance
-_PARSER_CACHE: dict[str, Parser] = {}
+_PARSER_CACHE: dict[str, Parser | None] = {}
+_LANGUAGE_INIT_LOGGED: set[str] = set()
+_UNAVAILABLE_EXTENSION_LOGGED: set[str] = set()
 
 
 def initialize_language(language_name: str) -> Language | None:
@@ -89,10 +91,16 @@ def initialize_language(language_name: str) -> Language | None:
         # Create Language object from the PyCapsule returned by tree-sitter language modules
         return Language(lang_capsule)
     except ImportError as e:
-        logger.error(f"Failed to import Tree-sitter language parser for {language_name}: {e}")
+        if language_name not in _LANGUAGE_INIT_LOGGED:
+            logger.error(f"Failed to import Tree-sitter language parser for {language_name}: {e}")
+            _LANGUAGE_INIT_LOGGED.add(language_name)
         return None
     except Exception as e:
-        logger.error(f"Failed to initialize Tree-sitter language parser for {language_name}: {e}")
+        if language_name not in _LANGUAGE_INIT_LOGGED:
+            logger.error(
+                f"Failed to initialize Tree-sitter language parser for {language_name}: {e}"
+            )
+            _LANGUAGE_INIT_LOGGED.add(language_name)
         return None
 
 
@@ -119,6 +127,7 @@ def get_parser(file_extension: str) -> Parser | None:
     # Initialize the language
     lang_obj = initialize_language(language_name)
     if lang_obj is None:
+        _PARSER_CACHE[language_name] = None
         return None
 
     # Create and cache the parser
@@ -150,7 +159,9 @@ def parse_file(file_path: str | Path) -> tree_sitter.Tree | None:
     parser = get_parser(file_extension)
 
     if parser is None:
-        logger.warning(f"Cannot parse file {file_path} - unsupported language")
+        if file_extension not in _UNAVAILABLE_EXTENSION_LOGGED:
+            logger.warning(f"Cannot parse files with extension {file_extension}")
+            _UNAVAILABLE_EXTENSION_LOGGED.add(file_extension)
         return None
 
     try:
@@ -197,4 +208,6 @@ def reset_parser_cache():
     """
     global _PARSER_CACHE
     _PARSER_CACHE.clear()
+    _LANGUAGE_INIT_LOGGED.clear()
+    _UNAVAILABLE_EXTENSION_LOGGED.clear()
     logger.debug("Parser cache cleared")

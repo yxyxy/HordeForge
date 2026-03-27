@@ -99,7 +99,7 @@ async def run_comprehensive_tests():
 
     for provider_enum, config in test_configs.items():
         try:
-            success = await test_single_provider(provider_enum, config)
+            success = await run_single_provider(provider_enum, config)
             results[provider_enum.value] = success
         except Exception as e:
             print(f"  ❌ Test failed completely: {e}")
@@ -127,7 +127,7 @@ async def run_comprehensive_tests():
         return False
 
 
-async def test_single_provider(provider_enum: ApiProvider, config: ApiConfiguration):
+async def run_single_provider(provider_enum: ApiProvider, config: ApiConfiguration):
     """Test a single provider with basic functionality."""
     provider_name = provider_enum.value
 
@@ -139,10 +139,10 @@ async def test_single_provider(provider_enum: ApiProvider, config: ApiConfigurat
         llm_api = LlmApi(config)
 
         # Test model info
-        model_success = await test_provider_model_info(provider_name, llm_api)
+        model_success = await run_provider_model_info(provider_name, llm_api)
 
         # Test streaming (only if API key is available)
-        await test_provider_streaming(provider_name, llm_api)
+        await run_provider_streaming(provider_name, llm_api)
 
         success = model_success  # Don't require streaming for test to pass (may need API keys)
         status = "✅ PASS" if success else "❌ FAIL"
@@ -155,7 +155,7 @@ async def test_single_provider(provider_enum: ApiProvider, config: ApiConfigurat
         return False
 
 
-async def test_provider_streaming(provider_name: str, llm_api):
+async def run_provider_streaming(provider_name: str, llm_api):
     """Test streaming functionality for a provider."""
     print(f"\nTesting {provider_name} streaming...")
 
@@ -181,7 +181,7 @@ async def test_provider_streaming(provider_name: str, llm_api):
         return False
 
 
-async def test_provider_model_info(provider_name: str, llm_api):
+async def run_provider_model_info(provider_name: str, llm_api):
     """Test model information retrieval."""
     print(f"Testing {provider_name} model info...")
 
@@ -198,7 +198,7 @@ async def test_provider_model_info(provider_name: str, llm_api):
         return False
 
 
-async def test_handler_directly():
+async def run_handler_directly():
     """Test handlers directly to ensure they're properly implemented."""
     print("\nTesting handlers directly...")
 
@@ -243,7 +243,7 @@ if __name__ == "__main__":
     print("Starting Cline Provider Integration Tests...")
 
     # Test handlers directly first
-    handlers_ok = asyncio.run(test_handler_directly())
+    handlers_ok = asyncio.run(run_handler_directly())
 
     # Test full integration
     integration_ok = asyncio.run(run_comprehensive_tests())

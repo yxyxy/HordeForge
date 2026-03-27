@@ -6,6 +6,7 @@ import os
 import shutil
 import sys
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,11 +16,9 @@ import pytest
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-# Force temporary files into workspace-local directory to avoid permission issues
-# in restricted environments (CI sandboxes, containers, etc.).
-_workspace_tmp = project_root / "tests" / "_tmp_runtime"
-_workspace_tmp.mkdir(parents=True, exist_ok=True)
-_tmp_root = str(_workspace_tmp.resolve())
+_workspace_tmp_root = project_root / ".pytest_tmp_runtime"
+_workspace_tmp_root.mkdir(parents=True, exist_ok=True)
+_tmp_root = str(_workspace_tmp_root.resolve())
 os.environ["TMPDIR"] = _tmp_root
 os.environ["TMP"] = _tmp_root
 os.environ["TEMP"] = _tmp_root
@@ -28,8 +27,8 @@ tempfile.tempdir = _tmp_root
 
 def _workspace_mkdtemp(
     suffix: str | None = None, prefix: str | None = None, dir: str | None = None
-):
-    base_dir = Path(dir) if dir else _workspace_tmp
+) -> str:
+    base_dir = Path(dir).resolve() if dir else _workspace_tmp_root
     base_dir.mkdir(parents=True, exist_ok=True)
     safe_prefix = prefix or "tmp"
     safe_suffix = suffix or ""
@@ -56,13 +55,22 @@ class _WorkspaceTemporaryDirectory:
         self.cleanup()
 
     def cleanup(self) -> None:
-        shutil.rmtree(self.name, ignore_errors=True)
+        shutil.rmtree(self.name, ignore_errors=self._ignore_cleanup_errors)
 
 
-# Patch stdlib tempfile helpers used heavily in tests so they always create
-# writable temp directories inside the workspace.
+# Ensure stdlib tempfile helpers create writable directories inside workspace.
 tempfile.mkdtemp = _workspace_mkdtemp  # type: ignore[assignment]
 tempfile.TemporaryDirectory = _WorkspaceTemporaryDirectory  # type: ignore[assignment]
+
+
+@pytest.fixture
+def tmp_path() -> Iterator[Path]:
+    """Workspace-local replacement for pytest tmp_path with deterministic cleanup."""
+    temp_path = Path(_workspace_mkdtemp(prefix="tmp_path_"))
+    try:
+        yield temp_path
+    finally:
+        shutil.rmtree(temp_path, ignore_errors=True)
 
 
 @pytest.fixture

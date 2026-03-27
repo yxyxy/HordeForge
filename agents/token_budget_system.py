@@ -403,6 +403,18 @@ class TokenBudgetSystem:
             self.session_usage.clear()
             self.total_cost = 0.0
 
+    def _usage_file_path(self) -> str:
+        """Resolve persisted usage file path with optional env overrides."""
+        explicit_file = os.getenv("HORDEFORGE_TOKEN_USAGE_FILE")
+        if explicit_file:
+            return explicit_file
+
+        explicit_dir = os.getenv("HORDEFORGE_TOKEN_USAGE_DIR")
+        if explicit_dir:
+            return os.path.join(explicit_dir, "token_usage.json")
+
+        return os.path.expanduser("~/.hordeforge/token_usage.json")
+
     def save_usage_data(self):
         """Save usage data to file."""
         data = {
@@ -435,14 +447,15 @@ class TokenBudgetSystem:
             "total_cost": self.total_cost,
         }
 
-        os.makedirs(os.path.expanduser("~/.hordeforge"), exist_ok=True)
-        usage_file = os.path.expanduser("~/.hordeforge/token_usage.json")
+        usage_file = self._usage_file_path()
+        usage_dir = os.path.dirname(usage_file) or "."
+        os.makedirs(usage_dir, exist_ok=True)
         with open(usage_file, "w") as f:
             json.dump(data, f, indent=2)
 
     def load_usage_data(self):
         """Load usage data from file."""
-        usage_file = os.path.expanduser("~/.hordeforge/token_usage.json")
+        usage_file = self._usage_file_path()
         if os.path.exists(usage_file):
             try:
                 with open(usage_file) as f:

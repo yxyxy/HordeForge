@@ -1,4 +1,4 @@
-﻿# pipelines/ci_fix_pipeline.yaml
+# pipelines/ci_fix_pipeline.yaml
 # CI Self-Healing Pipeline for HordeForge
 # Description: Automates detection and fixing of failing tests after merge
 
@@ -90,26 +90,14 @@ steps:
     output: "{{close_status}}"
     on_failure: escalate_to_human
 
-# Logging
-
 logging:
   level: INFO
   log_decisions: true
   log_artifacts: true
   post_to_github: true
 
-# Loops
-
-loops:
-  - condition: "{{ci_verification_results.failed}} > 0"
-    steps:
-      - fix_loop
-      - test_runner
-      - ci_verification
-
 # Notes:
-
-# - Each step follows AGENT_SPEC.md contract
-# - Fix loop ensures self-healing until all tests pass or retry limit reached
-# - CI monitoring can be triggered by cron or GitHub webhook
-# - All outputs validated and logged
+# - Step-level loop on `fix_loop` handles iterative test stabilization.
+# - `ci_verification` is always executed after merge to avoid dead-loop scenarios.
+# - CI monitoring can be triggered by cron or GitHub webhook.
+# - All outputs are validated and logged.

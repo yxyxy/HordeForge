@@ -39,7 +39,12 @@ COMMON_INPUTS = {
 PIPELINE_CASES = [
     pytest.param("init_pipeline", {}, {"repo_connector", "pipeline_initializer"}, id="init"),
     pytest.param("feature_pipeline", {}, {"dod_extractor", "pr_merge_agent"}, id="feature"),
-    pytest.param("ci_fix_pipeline", {}, {"ci_failure_analyzer", "close_issue_agent"}, id="ci_fix"),
+    pytest.param(
+        "ci_fix_pipeline",
+        {},
+        {"ci_failure_analyzer", "ci_verification", "close_issue_agent"},
+        id="ci_fix",
+    ),
     pytest.param(
         "code_generation", {}, {"memory_retrieval", "memory_writer"}, id="code_generation"
     ),

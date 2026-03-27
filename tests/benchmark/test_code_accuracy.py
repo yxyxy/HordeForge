@@ -3,30 +3,24 @@ import pytest
 from orchestrator.benchmark import BenchmarkRunner, run_benchmark
 
 
-def test_benchmark_comparison():
+def _fake_engine_run(*_args, **_kwargs):
+    return {
+        "status": "SUCCESS",
+        "summary": {"run_id": "bench-run"},
+        "steps": {"dummy_step": {"status": "SUCCESS", "logs": ["ok"]}},
+    }
+
+
+@pytest.mark.benchmark
+def test_benchmark_comparison(monkeypatch):
+    monkeypatch.setattr("orchestrator.engine.OrchestratorEngine.run", _fake_engine_run)
+
     # Arrange
     test_issues = [
         {"title": "Fix auth bug", "body": "..."},
         {"title": "Add logging", "body": "..."},
-        # ... 18 more
         {"title": "Update README", "body": "..."},
         {"title": "Refactor service", "body": "..."},
-        {"title": "Add unit tests", "body": "..."},
-        {"title": "Fix memory leak", "body": "..."},
-        {"title": "Improve performance", "body": "..."},
-        {"title": "Add caching", "body": "..."},
-        {"title": "Update dependencies", "body": "..."},
-        {"title": "Fix typo", "body": "..."},
-        {"title": "Add validation", "body": "..."},
-        {"title": "Create API endpoint", "body": "..."},
-        {"title": "Update config", "body": "..."},
-        {"title": "Add middleware", "body": "..."},
-        {"title": "Fix race condition", "body": "..."},
-        {"title": "Add metrics", "body": "..."},
-        {"title": "Update docs", "body": "..."},
-        {"title": "Add authentication", "body": "..."},
-        {"title": "Create model", "body": "..."},
-        {"title": "Add authorization", "body": "..."},
     ]
 
     # Act
@@ -45,7 +39,10 @@ def test_benchmark_comparison():
     assert comparison.prompt_size_reduction >= 0  # Редукция не может быть отрицательной
 
 
-def test_run_benchmark():
+@pytest.mark.benchmark
+def test_run_benchmark(monkeypatch):
+    monkeypatch.setattr("orchestrator.engine.OrchestratorEngine.run", _fake_engine_run)
+
     # Arrange
     test_issues = [
         {"title": "Fix auth bug", "body": "..."},

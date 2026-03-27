@@ -2,12 +2,42 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 import api.main as webhook_api
 from api.security import compute_github_signature
 from hordeforge_config import RunConfig
 from scheduler.gateway import RUNS
+
+
+@pytest.fixture(autouse=True)
+def _stub_run_pipeline(monkeypatch):
+    """Keep webhook tests focused on routing/signature/idempotency behavior."""
+    seen_runs: dict[str, str] = {}
+    counter = {"value": 0}
+
+    def _fake_run_pipeline(request):
+        idempotency_key = getattr(request, "idempotency_key", "") or ""
+        pipeline_name = getattr(request, "pipeline_name", "unknown")
+
+        if idempotency_key in seen_runs:
+            run_id = seen_runs[idempotency_key]
+            status = "duplicate"
+        else:
+            counter["value"] += 1
+            run_id = f"run-{counter['value']}"
+            seen_runs[idempotency_key] = run_id
+            status = "started"
+
+        return {
+            "status": status,
+            "pipeline": pipeline_name,
+            "run_id": run_id,
+            "result": {"summary": {"run_id": run_id}},
+        }
+
+    monkeypatch.setattr(webhook_api, "run_pipeline", _fake_run_pipeline)
 
 
 def _set_test_secret(monkeypatch) -> str:

@@ -52,6 +52,78 @@ SUPPORTED_EXTENSIONS = {
     ".cs",
 }
 
+IGNORED_SCAN_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".idea",
+    ".vscode",
+    "dist",
+    "build",
+}
+
+
+def _discover_git_tracked_files(repo_path: Path) -> list[Path] | None:
+    """Return tracked source files when repo_path is a git repository."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_path), "ls-files"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    files: list[Path] = []
+    for rel_path in result.stdout.splitlines():
+        if not rel_path:
+            continue
+        file_path = repo_path / rel_path
+        if file_path.suffix in SUPPORTED_EXTENSIONS and file_path.is_file():
+            files.append(file_path)
+    return files
+
+
+def _is_path_ignored(repo_path: Path, file_path: Path) -> bool:
+    try:
+        rel_parts = file_path.relative_to(repo_path).parts
+    except Exception:
+        return False
+    return any(part in IGNORED_SCAN_DIRS for part in rel_parts)
+
+
+def _discover_source_files(repo_path: Path) -> list[Path]:
+    """
+    Discover files to index.
+    Prefer git-tracked files to avoid scanning transient directories in CI/tests.
+    """
+    tracked = _discover_git_tracked_files(repo_path)
+    if tracked is not None:
+        return tracked
+
+    files: list[Path] = []
+    for file_path in repo_path.rglob("*"):
+        if not file_path.is_file():
+            continue
+        if file_path.suffix not in SUPPORTED_EXTENSIONS:
+            continue
+        if _is_path_ignored(repo_path, file_path):
+            continue
+        files.append(file_path)
+    return files
+
 
 def ensure_repo_local(repo_path: str) -> Path:
     path = Path(repo_path)
@@ -91,9 +163,7 @@ def extract_and_index_repository_async(
             overlap=overlap_size,
             embedding_batch_size=embedding_batch_size,
         )
-        files = [
-            f for f in repo_path.rglob("*") if f.is_file() and f.suffix in SUPPORTED_EXTENSIONS
-        ]
+        files = _discover_source_files(repo_path)
         result = orchestrator.run_sync(files)
         # Update status to success if structured indexing worked
         if result.get("status") == "success":
@@ -155,9 +225,7 @@ def _extract_and_index_repository_original(
         texts_to_embed = []
         symbol_metadata = []
 
-        files = [
-            f for f in repo_path.rglob("*") if f.is_file() and f.suffix in SUPPORTED_EXTENSIONS
-        ]
+        files = _discover_source_files(repo_path)
 
         if not files:
             logger.warning("No files found for indexing")
@@ -377,6 +445,7 @@ class RagInitializer(BaseAgent):
         else:
             repo_path_input = (
                 context.get("repo_path")
+                or context.get("docs_dir")
                 or context.get("repo_url")
                 or repository_metadata.get("repo_url")
                 or "./"

@@ -14,6 +14,12 @@ from agents.token_budget_system import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_token_usage_file(tmp_path, monkeypatch):
+    usage_file = tmp_path / ".hordeforge" / "token_usage.json"
+    monkeypatch.setenv("HORDEFORGE_TOKEN_USAGE_FILE", str(usage_file))
+
+
 class TestTokenBudgetSystem:
     """Test cases for TokenBudgetSystem."""
 
