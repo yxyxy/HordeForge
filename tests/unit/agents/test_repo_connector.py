@@ -64,7 +64,6 @@ class TestPRFetching:
         pass
 
 
-@pytest.mark.asyncio
 class TestRepoConnectorIntegration:
     """Integration tests for RepoConnector agent"""
 

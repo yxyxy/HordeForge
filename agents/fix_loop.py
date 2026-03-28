@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 class TestResultData:
     """Result of a test run."""
 
+    __test__ = False
+
     passed: bool
     total_tests: int = 0
     passed_tests: int = 0
@@ -50,6 +52,8 @@ class FixLoopResultData:
 
 class TestRunner:
     """Executes tests and parses results."""
+
+    __test__ = False
 
     def __init__(self, github_client: GitHubClient) -> None:
         self.client = github_client

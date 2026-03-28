@@ -506,7 +506,7 @@ Progress: 3/3 completed.
 - `horde llm profile add openai-main --provider openai --model gpt-4o --api-key ... --set-default`: saves LLM profile with secret reference.
 - `horde llm --profile openai-main list-providers`: profile resolution path verified through CLI.
 - Unit/integration/smoke tests:
-  - `tests/unit/test_infra_cli.py`
+  - `tests/unit/cli/test_infra_cli.py`
   - `tests/integration/test_infra_compose_modes.py`
   - `tests/integration/test_infra_smoke.py`
   - Result: all passed.

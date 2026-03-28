@@ -1,7 +1,7 @@
 """Unit tests for agent quality benchmarks (HF-P5-009)."""
 
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -110,7 +110,7 @@ class TestAgentBenchmark:
             "agent_name": "test_agent",
             "version": "1.0.0",
             "overall_score": 0.9,
-            "run_at": datetime.utcnow().isoformat(),
+            "run_at": datetime.now(timezone.utc).isoformat(),
             "results": [
                 {
                     "name": "test1",
@@ -118,7 +118,7 @@ class TestAgentBenchmark:
                     "duration_ms": 100,
                     "passed": True,
                     "metrics": {},
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "error": None,
                 }
             ],

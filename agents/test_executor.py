@@ -20,6 +20,8 @@ from agents.github_client import GitHubApiError, GitHubClient
 class TestExecutionResult:
     """Result of test execution."""
 
+    __test__ = False
+
     success: bool = False
     total: int = 0
     passed: int = 0

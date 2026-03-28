@@ -51,6 +51,22 @@ def test_pipeline_runner_feature_pipeline_missing_agent_fails_fast(monkeypatch):
 
 def test_pipeline_runner_logs_json_with_run_id_correlation_and_step(caplog):
     runner = PipelineRunner()
+    original_import_agent = runner._import_agent
+
+    class _StubAgent:
+        def run(self, context):  # noqa: ANN001
+            return {
+                "status": "SUCCESS",
+                "artifacts": [],
+                "decisions": [],
+                "logs": [],
+                "next_actions": [],
+            }
+
+    def _import_agent_stub(agent_name: str):  # noqa: ARG001
+        return _StubAgent
+
+    runner._import_agent = _import_agent_stub
     with caplog.at_level("INFO", logger="hordeforge.runner"):
         result = runner.run(
             "init_pipeline",
@@ -58,8 +74,9 @@ def test_pipeline_runner_logs_json_with_run_id_correlation_and_step(caplog):
             run_id="runner-log-1",
             correlation_id="runner-corr-1",
         )
+    runner._import_agent = original_import_agent
 
-    assert result["status"] in {"SUCCESS", "PARTIAL_SUCCESS"}
+    assert result["status"] == "SUCCESS"
     payloads = [
         json.loads(record.message)
         for record in caplog.records

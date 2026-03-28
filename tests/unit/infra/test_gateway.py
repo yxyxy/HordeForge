@@ -18,6 +18,7 @@ from scheduler.gateway import (
     TASK_QUEUE,
     app,
 )
+from scheduler.tenant_registry import TenantRepositoryRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +31,15 @@ def _clean_gateway_storage():
     RUN_RUNTIME_INPUTS.clear()
     TASK_QUEUE.clear()
     gateway.CRON_DISPATCHER = None
+    gateway.TENANT_REGISTRY = TenantRepositoryRegistry(
+        mapping={
+            "default": ("*",),
+            "acme": ("acme/hordeforge",),
+            "beta": ("beta/hordeforge",),
+        },
+        default_tenant_id="default",
+        enforce_boundaries=True,
+    )
     yield
 
 

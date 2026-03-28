@@ -73,7 +73,7 @@ class AgentBenchmark:
             agent_name=data["agent_name"],
             version=data["version"],
             overall_score=data.get("overall_score", 0.0),
-            run_at=data.get("run_at", datetime.utcnow().isoformat()),
+            run_at=data.get("run_at", datetime.now(timezone.utc).isoformat()),
         )
 
         for result_data in data.get("results", []):
@@ -84,7 +84,7 @@ class AgentBenchmark:
                     duration_ms=result_data["duration_ms"],
                     passed=result_data["passed"],
                     metrics=result_data.get("metrics", {}),
-                    timestamp=result_data.get("timestamp", datetime.utcnow().isoformat()),
+                    timestamp=result_data.get("timestamp", datetime.now(timezone.utc).isoformat()),
                     error=result_data.get("error"),
                 )
             )

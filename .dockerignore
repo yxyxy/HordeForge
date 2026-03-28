@@ -26,3 +26,11 @@ tests/
 development_tasks/
 temp_cline/
 temp_openclaw/
+docs/
+examples/
+.idea/
+.vscode/
+.coverage
+coverage.xml
+KODA.md
+AGENTS.md

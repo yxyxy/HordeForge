@@ -291,7 +291,7 @@ The system includes comprehensive test coverage:
 
 Run tests with:
 ```bash
-pytest tests/unit/test_token_budget_system.py
+pytest tests/unit/llm/test_token_budget_system.py
 ```
 
 ## Migration Guide
