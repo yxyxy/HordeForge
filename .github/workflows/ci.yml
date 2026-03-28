@@ -63,7 +63,7 @@ jobs:
         env:
           HORDEFORGE_STORAGE_DIR: .hordeforge_data_test
         run: |
-          pytest -q tests/unit/test_pipeline_catalog_validation.py tests/integration/test_pipeline_catalog_runtime.py
+          pytest -q tests/unit/pipelines/test_pipeline_catalog_validation.py tests/integration/test_pipeline_catalog_runtime.py
 
   test-unit:
     name: Test Unit
@@ -176,7 +176,6 @@ jobs:
 
       - name: Run bandit
         run: bandit -r . -x ./tests,./.github --format json -o bandit-report.json
-        continue-on-error: true
 
       - name: Upload security report
         uses: actions/upload-artifact@v4

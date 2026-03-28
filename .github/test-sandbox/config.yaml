@@ -208,6 +208,6 @@ test_files:
 
 # CI workflow configuration
 ci_config:
-  python_version: "3.10"
+  python_version: "3.11"
   test_command: "pytest tests/ -v"
   lint_command: "ruff check ."
