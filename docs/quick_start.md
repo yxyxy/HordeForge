@@ -127,8 +127,12 @@ hordeforge status
 ### Using Interactive CLI (`horde`) - Recommended
 
 ```bash
-# Run init pipeline to set up repository
-horde pipeline run init --repo-url https://github.com/user/repo --token YOUR_TOKEN
+# One-time setup: save repository profile and token
+horde repo add yxyxy/HordeForge --url https://github.com/yxyxy/HordeForge --token YOUR_TOKEN --set-default
+
+# Run init pipeline by repository profile id
+horde init yxyxy/HordeForge
+horde pipeline run init yxyxy/HordeForge
 
 # Run feature pipeline
 horde pipeline run feature --inputs '{"prompt": "Add user authentication"}'
@@ -393,7 +397,7 @@ horde pipeline list
 hordeforge pipeline list
 
 # Run specific pipeline
-horde pipeline run init --repo-url https://github.com/user/repo --token YOUR_TOKEN
+horde init yxyxy/HordeForge
 horde pipeline run feature --inputs '{"prompt": "Add user management"}'
 ```
 

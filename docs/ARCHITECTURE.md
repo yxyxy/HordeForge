@@ -16,7 +16,7 @@ HordeForge — автономная pipeline-ориентированная си
 ### Структура основных компонентов
 
 **API/Gateway Layer:**
-- `cli.py` — CLI-интерфейс запуска pipeline
+- `cli/` (`horde`, `hordeforge`) — CLI-интерфейс запуска pipeline
 - `scheduler/gateway.py` — FastAPI endpoints (POST /run-pipeline, GET /runs, /runs/{run_id}, /override, /cron/*, /metrics)
 - `api/main.py` — Webhook API (POST /webhooks/github) — HMAC валидация
 - `scheduler/idempotency.py` — Idempotency suppression

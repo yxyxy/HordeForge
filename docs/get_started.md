@@ -110,7 +110,9 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/runs
 ## 6. Запуск CLI
 
 ```bash
-python cli.py init --repo-url <GITHUB_URL> --token <GITHUB_TOKEN>
+# Recommended: profile-based init via horde CLI
+horde repo add <OWNER/REPO> --url <GITHUB_URL> --token <GITHUB_TOKEN> --set-default
+horde init <OWNER/REPO>
 ```
 
 ## 7. Проверка результата

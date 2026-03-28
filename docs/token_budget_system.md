@@ -157,31 +157,31 @@ except RuntimeError as e:
 ### View Token Usage
 ```bash
 # Show current token usage
-python cli.py tokens
+horde llm tokens
 
 # Show usage history
-python cli.py tokens --history
+horde llm tokens --history
 ```
 
 ### View Cost Information
 ```bash
 # Show total cost
-python cli.py cost
+horde llm cost
 ```
 
 ### Manage Budget Limits
 ```bash
 # Show current budget status
-python cli.py budget
+horde llm budget
 
 # Set daily budget limit
-python cli.py budget --set-daily 10.0
+horde llm budget --set-daily 10.0
 
 # Set monthly budget limit
-python cli.py budget --set-monthly 100.0
+horde llm budget --set-monthly 100.0
 
 # Set session budget limit
-python cli.py budget --set-session 5.0
+horde llm budget --set-session 5.0
 ```
 
 ## Provider Integration

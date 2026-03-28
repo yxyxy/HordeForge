@@ -57,7 +57,7 @@ HordeForge/
 │   ├── dependency_checker_agent/ # Агент проверки зависимостей
 │   └── ...                    # Другие специализированные агенты
 ├── api/                       # API слой (webhooks, event routing)
-├── cli.py                     # CLI-триггер для запуска pipeline
+├── cli/                       # CLI интерфейсы (`horde`, `hordeforge`)
 ├── contracts/                 # JSON-схемы для валидации
 │   └── schemas/               # Agent contracts
 ├── docs/                      # Документация проекта

@@ -5,6 +5,16 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+.pytest_safe_root
+.pytest_safe_root/
+.pytest_safe_root/**
+.pytest_tmp
+.pytest_tmp/
+.pytest_tmp/**
+.pytest_tmp_runtime
+.pytest_tmp_runtime/
+.pytest_tmp_runtime/**
+.pytest_*
 .mypy_cache/
 .ruff_cache/
 pytest-cache-files-*/

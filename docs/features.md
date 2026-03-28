@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | Pipeline trigger (API) | P0 | done | `scheduler/gateway.py` (`POST /run-pipeline`, `GET /runs/{run_id}`, `GET /runs`), run_id/correlation_id/error envelope, duplicate suppression, pagination, filtering | auth/rate-limit |
 | Webhook ingress (API) | P0 | done | `api/main.py` (`POST /webhooks/github`), HMAC validation, event routing, trigger-level idempotency suppression | покрытие event coverage |
-| CLI trigger | P0 | partial | `cli.py` (`init/run/status/health`) и `horde` (`pipeline run`, `task`, `history`) работают через gateway API | E2E against deployed services |
+| CLI trigger | P0 | partial | `horde` / `hordeforge` (`init/run/status/health`, `pipeline run`, `task`, `history`) работают через gateway API | E2E against deployed services |
 | Pipeline execution engine | P0 | partial | `orchestrator/engine.py` + loader/executor/retry/timeout/loops/summary + parallel DAG execution | production load tuning и staged performance gates |
 | Registry layer (contracts/agents/pipelines) | P1 | done | `registry/` (contracts/agents/pipelines/bootstrap) интегрирован в runtime (`orchestrator/engine.py`, `orchestrator/executor.py`) | - |
 | Registry docs generation | P2 | partial | `scripts/generate_agent_docs.py`, `scripts/generate_pipeline_docs.py` | автоматический запуск в CI/cron |

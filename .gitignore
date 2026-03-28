@@ -31,6 +31,10 @@ Local RAG/
 # Test temporary directories
 tests/_tmp_*/
 tests/**/_tmp_*/
+tests/_tmp_runtime/
+.pytest_tmp_runtime/
+.pytest_tmp/
+.pytest_safe_root/
 **/_tmp_*/
 *tmp*/
 

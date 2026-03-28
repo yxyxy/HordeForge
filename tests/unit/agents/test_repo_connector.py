@@ -310,6 +310,30 @@ class TestRepoConnectorIntegration:
             assert result["artifact_type"] == "repository_data"
             mock_run_async.assert_called_once()
 
+    def test_run_method_does_not_force_mock_mode_for_real_repo_owner(self):
+        """Real GitHub owners must not implicitly switch connector into mock mode."""
+        connector = RepoConnector()
+        context = {
+            "repo_url": "https://github.com/yxyxy/HordeForge",
+            "github_token": "ghp_real_like_token",
+            "operation": "connect",
+        }
+
+        with patch.object(connector, "_run_async", new_callable=AsyncMock) as mock_run_async:
+            mock_run_async.return_value = {
+                "status": "SUCCESS",
+                "artifact_type": "repository_metadata",
+                "artifacts": [{"type": "repository_metadata", "content": {}}],
+                "decisions": [],
+                "logs": [],
+                "next_actions": [],
+            }
+
+            connector.run(context)
+
+            called_context = mock_run_async.call_args.args[0]
+            assert called_context.get("mock_mode") is not True
+
     def test_run_method_invalid_operation(self):
         """Test the run method with invalid operation"""
         connector = RepoConnector()

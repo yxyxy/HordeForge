@@ -20,7 +20,7 @@
 
 - `pipelines/init_pipeline.yaml` — основной pipeline из 6 шагов
 - Агенты: `repo_connector`, `rag_initializer`, `memory_agent`, `architecture_evaluator`, `test_analyzer`, `pipeline_initializer`
-- CLI: `python cli.py init --repo-url <URL> --token <TOKEN>`
+- CLI (recommended): `horde repo add <OWNER/REPO> --url <URL> --token <TOKEN> --set-default` then `horde init <OWNER/REPO>`
 
 ### Ограничения
 

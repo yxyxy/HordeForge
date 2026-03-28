@@ -1,4 +1,4 @@
-# Migration Guide
+﻿# Migration Guide
 
 ## Overview
 
@@ -53,11 +53,11 @@ class NewAgent(BaseAgent):
 ### 2. Configuration Changes
 
 #### Environment Variables
-Old variables → New variables:
-- `HORDE_GATEWAY_URL` → `HORDEFORGE_GATEWAY_URL`
-- `HORDE_STORAGE_DIR` → `HORDEFORGE_STORAGE_DIR`
-- `HORDE_OPERATOR_API_KEY` → `HORDEFORGE_OPERATOR_API_KEY`
-- `HORDE_MAX_PARALLEL_WORKERS` → `HORDEFORGE_MAX_PARALLEL_WORKERS`
+Old variables в†’ New variables:
+- `HORDE_GATEWAY_URL` в†’ `HORDEFORGE_GATEWAY_URL`
+- `HORDE_STORAGE_DIR` в†’ `HORDEFORGE_STORAGE_DIR`
+- `HORDE_OPERATOR_API_KEY` в†’ `HORDEFORGE_OPERATOR_API_KEY`
+- `HORDE_MAX_PARALLEL_WORKERS` в†’ `HORDEFORGE_MAX_PARALLEL_WORKERS`
 
 #### New Required Variables
 ```bash
@@ -266,7 +266,8 @@ pytest tests/integration/test_memory.py
 pytest tests/integration/test_token_budget.py
 
 # Test pipeline execution
-horde pipeline run init --repo-url https://github.com/test/repo --token TEST_TOKEN
+horde repo add test/repo --url https://github.com/test/repo --token TEST_TOKEN --set-default
+horde init test/repo
 ```
 
 ## Feature-Specific Migrations
@@ -543,7 +544,8 @@ horde memory status  # Should show memory system status
 horde rag status   # Should show RAG status
 
 # Test pipeline execution
-horde pipeline run init --repo-url https://github.com/test/repo --token TEST_TOKEN
+horde repo add test/repo --url https://github.com/test/repo --token TEST_TOKEN --set-default
+horde init test/repo
 ```
 
 ### Integration Tests
@@ -769,7 +771,8 @@ horde memory status
 horde rag status
 
 # Test pipeline execution
-horde pipeline run init --repo-url https://github.com/test/repo --token TEST_TOKEN
+horde repo add test/repo --url https://github.com/test/repo --token TEST_TOKEN --set-default
+horde init test/repo
 ```
 
 ### Performance Verification

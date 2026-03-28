@@ -17,7 +17,7 @@ uvicorn scheduler.gateway:app --host 0.0.0.0 --port 8000 --reload
 3. Trigger a pipeline:
 
 ```bash
-python cli.py run --pipeline init_pipeline --inputs "{}"
+horde pipeline run init_pipeline
 ```
 
 ## Environment policy

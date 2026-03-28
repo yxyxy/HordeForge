@@ -327,7 +327,6 @@ class RepoConnector(BaseAgent):
                 or "example" in repo_url.lower()
                 or "fake" in repo_url.lower()
                 or "dummy" in repo_url.lower()
-                or "yxyxy" in repo_url.lower()  # Specific test pattern from failing test
                 or github_token == "secret"
             ):  # Common test token
                 context = context.copy()  # Don't modify original context

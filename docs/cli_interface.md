@@ -1,4 +1,4 @@
-# CLI Interface Documentation
+﻿# CLI Interface Documentation
 
 ## Overview
 
@@ -73,12 +73,28 @@ horde health
 # List available pipelines
 horde pipeline list
 
-# Run specific pipeline
-horde pipeline run init --repo-url https://github.com/user/repo --token YOUR_TOKEN
+# One-time repository profile setup
+horde repo add yxyxy/HordeForge --url https://github.com/yxyxy/HordeForge --token YOUR_GITHUB_TOKEN --set-default
+
+# Run init by repository profile id
+horde init yxyxy/HordeForge
+horde pipeline run init yxyxy/HordeForge
+
+# Infra operations
+horde infra mode show
+horde infra mode set team --save
+horde infra stack up
+horde infra stack up --build
+horde infra stack up --recreate
+horde infra mcp up
 
 # LLM operations
 horde llm --provider openai --model gpt-4o "Your prompt here"
 horde llm list-providers
+
+# LLM profile management
+horde llm profile add openai-main --provider openai --model gpt-4o --api-key YOUR_OPENAI_KEY --set-default
+horde llm --profile openai-main test
 ```
 
 #### Original CLI (`hordeforge`)
@@ -122,8 +138,9 @@ Manage development pipelines directly from CLI:
 # List available pipelines
 horde pipeline list
 
-# Run init pipeline
-horde pipeline run init --repo-url https://github.com/user/repo --token YOUR_TOKEN
+# Run init pipeline by profile id
+horde init yxyxy/HordeForge
+horde pipeline run init yxyxy/HordeForge
 
 # Run feature pipeline
 horde pipeline run feature --inputs '{"prompt": "Add user authentication"}'
@@ -221,29 +238,37 @@ horde llm chat --file system_prompt.txt
 
 ### Profile Management
 
-Manage multiple configuration profiles (available in both CLIs):
+Manage repository and LLM profiles from local JSON store (`~/.hordeforge/config.json`) and secrets store (`~/.hordeforge/secrets.json`):
 
 ```bash
-# Save current settings
-horde llm settings --save --profile work
+# Repository profiles
+horde repo add yxyxy/HordeForge --url https://github.com/yxyxy/HordeForge --token YOUR_GITHUB_TOKEN --set-default
+horde repo list
+horde repo use yxyxy/HordeForge
+horde repo show yxyxy/HordeForge
 
-# Load settings
-horde llm settings --load --profile work
+# Secrets
+horde secret set llm.openai YOUR_OPENAI_KEY
+horde secret list
+horde secret remove llm.openai
 
-# List all profiles
+# LLM profiles
+horde llm profile add openai-main --provider openai --model gpt-4o --secret-ref llm.openai --set-default
+horde llm profile list
+horde llm profile use openai-main
+horde llm profile show openai-main
+horde llm profile remove openai-main
+horde llm --profile openai-main test
+```
+
+### Legacy LLM Settings
+
+Legacy `horde llm settings` subcommands are still available for compatibility:
+
+```bash
 horde llm settings --list-profiles
-
-# Switch to profile
-horde llm settings --switch-profile work
-
-# Delete profile
-horde llm settings --delete-profile old-profile
-
-# Export profile
-horde llm settings --export-profile work
-
-# Import profile
-horde llm settings --import-profile work_settings.json
+horde llm settings --save --profile work
+horde llm settings --load --profile work
 ```
 
 ### Global Settings Mode
@@ -357,6 +382,27 @@ Subcommands:
 - `list`: List available pipelines
 - `run [NAME]`: Run a specific pipeline
 
+### `infra` - Manage Infrastructure
+```bash
+horde infra [SUBCOMMAND]
+```
+Subcommands:
+- `mode show`: Show effective mode and resolved backends
+- `mode set local|team [--save] [--profile NAME]`: Set mode defaults
+- `qdrant up|down|status`: Manage Qdrant service
+- `mcp up|down|status`: Manage MCP bridge service
+- `stack up|down|status`: Manage full stack
+
+`stack up` behavior:
+- default is safe (`--no-recreate`)
+- use `--build` to rebuild images
+- use `--recreate` to force container recreation
+- example: `horde infra stack up --build --recreate`
+
+`mode set` behavior:
+- without `--save`, values apply only to the current CLI process call
+- use `--save` (or `--save --profile ...`) to persist mode defaults
+
 ### `llm` - LLM Operations
 ```bash
 horde llm [OPTIONS] [SUBCOMMANDS]
@@ -415,18 +461,17 @@ Both CLIs respect the following environment variables:
 ## Configuration Files
 
 Settings are stored in:
-- `~/.hordeforge/llm_settings.json` - Default settings
-- `~/.hordeforge/profiles/` - Named profiles
+- `~/.hordeforge/config.json` - Repository and LLM profiles (including default selections)
+- `~/.hordeforge/secrets.json` - Secret values referenced by profiles
+- `~/.hordeforge/llm_settings.json` - Legacy LLM settings storage (compatibility mode)
+- `~/.hordeforge/profiles/` - Legacy named profile files used by `llm settings`
 
 ## Examples
 
 ### Quick Start with New CLI
 ```bash
-# Simple query with new interactive CLI
-horde "What is Python?"
-
-# With specific provider
-horde llm --provider anthropic "Explain machine learning"
+# Simple LLM query
+horde llm --provider anthropic llm "Explain machine learning"
 
 # Run a development task
 horde task "Implement user authentication system"
@@ -450,7 +495,8 @@ horde config
 ```bash
 # List and run pipelines
 horde pipeline list
-horde pipeline run init --repo-url https://github.com/user/repo --token YOUR_TOKEN
+horde repo add yxyxy/HordeForge --url https://github.com/yxyxy/HordeForge --token YOUR_GITHUB_TOKEN --set-default
+horde init yxyxy/HordeForge
 
 # Run feature pipeline
 horde pipeline run feature --inputs '{"prompt": "Add user management"}'
@@ -459,29 +505,36 @@ horde pipeline run feature --inputs '{"prompt": "Add user management"}'
 ### Multi-Provider Workflow
 ```bash
 # Compare responses with new CLI
-horde llm --provider openai "Write a poem" > openai_poem.txt
-horde llm --provider anthropic "Write a poem" > anthropic_poem.txt
+horde llm --provider openai llm "Write a poem" > openai_poem.txt
+horde llm --provider anthropic llm "Write a poem" > anthropic_poem.txt
 ```
 
 ### Profile-Based Workflows
 ```bash
-# Setup work profile
-horde llm --provider openai --model gpt-4o --save --profile work
-horde llm settings --switch-profile work
+# Setup OpenAI profile with stored secret
+horde secret set llm.openai YOUR_OPENAI_KEY
+horde llm profile add work --provider openai --model gpt-4o --secret-ref llm.openai --set-default
+horde llm --profile work test
 
 # Setup local development profile
-horde llm --provider ollama --model llama2 --save --profile local
-horde llm settings --switch-profile local
+horde llm profile add local --provider ollama --model llama2 --base-url http://localhost:11434
+horde llm --profile local test
 ```
 
 ### Docker Compose Usage
 ```bash
 # Start services
-docker-compose up -d
+docker compose up -d
 
 # Run commands in container
 docker exec hordeforge-gateway horde task "Implement new feature"
 docker exec hordeforge-gateway horde pipeline list
+
+# Safe infra stack up (no recreate)
+docker exec hordeforge-gateway horde infra stack up
+
+# Explicit rebuild/recreate when needed
+docker exec hordeforge-gateway horde infra stack up --build --recreate
 
 # Enter container for interactive session
 docker exec -it hordeforge-gateway bash
@@ -545,3 +598,4 @@ horde runs show RUN_ID
 # Override a running pipeline
 horde runs override RUN_ID --action retry --reason "manual retry"
 ```
+

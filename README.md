@@ -88,13 +88,18 @@ Core layers: agents → orchestrator → scheduler → integrations → storage
 
 1. Install dependencies: `pip install -r requirements-dev.txt`
 2. Run gateway: `uvicorn scheduler.gateway:app --host 0.0.0.0 --port 8000 --reload`
-3. Trigger a pipeline: `python cli.py run --pipeline init_pipeline --inputs "{}"`
+3. Trigger a pipeline: `horde pipeline run init_pipeline`
 
 ### Docker Compose
 
 1. Create env file: `cp .env.example .env` (edit with your settings)
-2. Build and run: `docker-compose up --build -d`
-3. Check health: `curl http://localhost:8000/health`
+2. Build and run local mode: `docker compose up --build`
+3. Optional team mode: `docker compose --profile team up --build -d`
+4. Optional local infra from CLI:
+   - `horde infra mode show`
+   - `horde infra qdrant up`
+   - `horde infra mcp up`
+5. Check health: `curl http://localhost:8000/health`
 
 ## Environment Configuration
 
@@ -165,6 +170,17 @@ hordeforge llm budget
 
 ### Interactive CLI (`horde`)
 ```bash
+# One-time repo profile setup (stores URL + token reference locally)
+horde repo add yxyxy/HordeForge --url https://github.com/yxyxy/HordeForge --token YOUR_GITHUB_TOKEN --set-default
+
+# Optional secret management
+horde secret set github.main YOUR_GITHUB_TOKEN
+horde secret list
+
+# Run init by repo profile id (no need to pass --repo-url/--token every time)
+horde init yxyxy/HordeForge
+horde pipeline run init yxyxy/HordeForge
+
 # Interactive development
 horde task "Implement user authentication"
 
@@ -175,6 +191,17 @@ horde --act "Write a Python function to sort an array"
 # Pipeline management
 horde pipeline run feature --inputs '{"prompt": "Add user management"}'
 
+# Infra management
+horde infra mode show
+horde infra mode set local --save
+horde infra mode set team --save
+horde infra qdrant up
+horde infra mcp up
+horde infra stack up                # safe default: --no-recreate
+horde infra stack up --build        # rebuild image(s)
+horde infra stack up --recreate     # force container recreate
+horde infra stack status
+
 # View history
 horde history
 
@@ -182,6 +209,11 @@ horde history
 horde llm tokens
 horde llm cost
 horde llm budget
+
+# LLM profiles backed by local JSON store + secret refs
+horde llm profile add openai-main --provider openai --model gpt-4o --api-key YOUR_OPENAI_KEY --set-default
+horde llm profile list
+horde llm --profile openai-main test
 ```
 
 ## Memory System

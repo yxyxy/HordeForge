@@ -15,7 +15,7 @@ HordeForge/
 +-- .gitignore
 +-- .pre-commit-config.yaml
 +-- alembic.ini
-+-- cli.py
++-- cli/
 +-- docker-compose.yml
 +-- Dockerfile
 +-- hordeforge_config.py
