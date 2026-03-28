@@ -31,6 +31,20 @@ def _parse_args() -> StorageRestoreConfig:
     )
 
 
+def _validate_tar_members(
+    archive: tarfile.TarFile,
+    target_dir: Path,
+) -> list[tarfile.TarInfo]:
+    target_root = target_dir.resolve()
+    safe_members: list[tarfile.TarInfo] = []
+    for member in archive.getmembers():
+        member_path = (target_root / member.name).resolve()
+        if not str(member_path).startswith(str(target_root)):
+            raise ValueError(f"Unsafe archive member path: {member.name}")
+        safe_members.append(member)
+    return safe_members
+
+
 def run_restore(config: StorageRestoreConfig) -> int:
     if not config.archive_path.exists():
         print(f"Archive not found: {config.archive_path}")
@@ -42,7 +56,8 @@ def run_restore(config: StorageRestoreConfig) -> int:
 
     config.target_dir.mkdir(parents=True, exist_ok=True)
     with tarfile.open(config.archive_path, "r:gz") as tar:
-        tar.extractall(path=config.target_dir)
+        safe_members = _validate_tar_members(tar, config.target_dir)
+        tar.extractall(path=config.target_dir, members=safe_members)
 
     print("Storage restore completed.")
     return 0

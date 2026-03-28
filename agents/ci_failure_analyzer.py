@@ -359,7 +359,7 @@ def _fingerprint(text: str) -> str:
         return ""
     normalized = re.sub(r"\d+", "N", text.lower())
     normalized = re.sub(r"\s+", " ", normalized).strip()
-    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
+    return hashlib.sha1(normalized.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
 
 
 # =========================================================================

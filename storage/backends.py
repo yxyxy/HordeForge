@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
@@ -126,9 +127,15 @@ class PostgresStorageBackend(StorageBackend):
         self._connection_string = connection_string or os.getenv(
             "HORDEFORGE_POSTGRES_CONNECTION_STRING", ""
         )
-        self._table_name = table_name
+        self._table_name = self._validate_table_name(table_name)
         self._conn = None
         self._ensure_connection()
+
+    @staticmethod
+    def _validate_table_name(table_name: str) -> str:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_name):
+            raise ValueError(f"Invalid table name: {table_name}")
+        return table_name
 
     def _ensure_connection(self) -> None:
         if self._conn is not None:
@@ -149,10 +156,15 @@ class PostgresStorageBackend(StorageBackend):
     def _create_table_if_not_exists(self) -> None:
         if self._conn is None:
             return
+        from psycopg2 import sql
+
+        table = sql.Identifier(self._table_name)
+        index = sql.Identifier(f"idx_{self._table_name}_key")
         with self._conn.cursor() as cur:
             cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {self._table_name} (
+                sql.SQL(
+                    """
+                CREATE TABLE IF NOT EXISTS {} (
                     id SERIAL PRIMARY KEY,
                     key VARCHAR(255) NOT NULL,
                     value JSONB NOT NULL,
@@ -160,12 +172,15 @@ class PostgresStorageBackend(StorageBackend):
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 """
+                ).format(table)
             )
             cur.execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS idx_{self._table_name}_key
-                ON {self._table_name}(key);
+                sql.SQL(
+                    """
+                CREATE INDEX IF NOT EXISTS {}
+                ON {}(key);
                 """
+                ).format(index, table)
             )
             self._conn.commit()
 
@@ -174,8 +189,12 @@ class PostgresStorageBackend(StorageBackend):
         if self._conn is None:
             return []
         try:
+            from psycopg2 import sql
+
             with self._conn.cursor() as cur:
-                cur.execute(f"SELECT key, value FROM {self._table_name}")
+                cur.execute(
+                    sql.SQL("SELECT key, value FROM {}").format(sql.Identifier(self._table_name))
+                )
                 return [value for _, value in cur.fetchall()]
         except Exception:
             return []
@@ -185,13 +204,17 @@ class PostgresStorageBackend(StorageBackend):
         if self._conn is None:
             return
         try:
+            from psycopg2 import sql
+
             with self._conn.cursor() as cur:
                 # Clear existing data and insert new
-                cur.execute(f"DELETE FROM {self._table_name}")
+                cur.execute(sql.SQL("DELETE FROM {}").format(sql.Identifier(self._table_name)))
                 for item in items:
                     if isinstance(item, dict):
                         cur.execute(
-                            f"INSERT INTO {self._table_name} (key, value) VALUES (%s, %s)",
+                            sql.SQL("INSERT INTO {} (key, value) VALUES (%s, %s)").format(
+                                sql.Identifier(self._table_name)
+                            ),
                             (item.get("run_id", str(self._uuid4())), self._json.dumps(item)),
                         )
                 self._conn.commit()

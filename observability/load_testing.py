@@ -7,6 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 
 @dataclass
@@ -69,6 +70,10 @@ class LoadTester:
         }
 
         try:
+            if urlparse(self._config.target_url).scheme.lower() not in {"http", "https"}:
+                result["error"] = "Unsupported URL scheme"
+                return result
+
             data = None
             if self._config.payload:
                 data = json.dumps(self._config.payload).encode("utf-8")
@@ -84,7 +89,7 @@ class LoadTester:
                 method=self._config.method,
             )
 
-            with urllib.request.urlopen(req, timeout=self._config.timeout_seconds) as response:
+            with urllib.request.urlopen(req, timeout=self._config.timeout_seconds) as response:  # nosec B310
                 result["status_code"] = response.status
                 result["success"] = 200 <= response.status < 300
 

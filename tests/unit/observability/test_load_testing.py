@@ -3,6 +3,7 @@ from __future__ import annotations
 from observability.load_testing import (
     BASELINE_THRESHOLDS,
     LoadTestConfig,
+    LoadTester,
     LoadTestResult,
     evaluate_load_test_result,
 )
@@ -107,3 +108,14 @@ def test_baseline_thresholds_exist():
     assert "max_p95_latency_ms" in BASELINE_THRESHOLDS
     assert "max_error_rate" in BASELINE_THRESHOLDS
     assert "max_mean_latency_ms" in BASELINE_THRESHOLDS
+
+
+def test_load_tester_rejects_non_http_target_url():
+    config = LoadTestConfig(target_url="file:///tmp/load-test")
+    tester = LoadTester(config)
+
+    result = tester._make_request(1)
+
+    assert result["success"] is False
+    assert result["error"] is not None
+    assert "Unsupported URL scheme" in result["error"]

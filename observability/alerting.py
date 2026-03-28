@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from logging_utils import redact_mapping
@@ -102,7 +103,15 @@ def _log_event(level: int, event: str, **fields: Any) -> None:
     LOGGER.log(level, json.dumps(payload, ensure_ascii=False))
 
 
+def _is_allowed_url(url: str) -> bool:
+    return urlparse(url).scheme.lower() in {"http", "https"}
+
+
 def send_slack_alert(config: SlackConfig, *, message: str) -> bool:
+    if not _is_allowed_url(config.webhook_url):
+        _log_event(logging.ERROR, "slack_alert_failed", error="unsupported_url_scheme")
+        return False
+
     body = json.dumps({"text": message}).encode("utf-8")
     request = Request(
         url=config.webhook_url,
@@ -111,7 +120,7 @@ def send_slack_alert(config: SlackConfig, *, message: str) -> bool:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=10) as response:  # noqa: S310
+        with urlopen(request, timeout=10) as response:  # nosec B310
             status = response.status
     except URLError as exc:
         _log_event(logging.ERROR, "slack_alert_failed", error=str(exc))
