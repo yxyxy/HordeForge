@@ -1,33 +1,56 @@
+[tool.poetry]
+name = "hordeforge"
+version = "0.1.0"
+homepage = "https://github.com/yxyxy/HordeForge"
+description = "A CI/CD pipeline management tool"
+authors = ["HordeForge Team"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+requests = "^2.28.0"
+click = "^8.1.0"
+pytest = "^7.2.0"
+coverage = "^7.0.0"
+tomli = "^2.0.1"
+
+[tool.poetry.group.dev.dependencies]
+black = "^22.0.0"
+mypy = "^0.991"
+flake8 = "^6.0.0"
+pre-commit = "^2.20.0"
+pandas = "^1.5.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
 [tool.pytest.ini_options]
-pythonpath = ["."]
+minversion = "6.0"
 testpaths = ["tests"]
-addopts = "-q -p no:cacheprovider"
-asyncio_mode = "auto"
-norecursedirs = [
-  ".git",
-  ".venv",
-  "node_modules",
-  ".pytest_tmp",
-  ".pytest_tmp_runtime",
-  "tests/_tmp_runtime",
-  "tests/_tmp_pytest",
-  "tests/_tmp_*",
-]
+addopts = "-ra -q --strict-markers --strict-config"
 markers = [
-  "slow: long-running tests",
-  "performance: performance-focused tests",
-  "benchmark: benchmark tests",
+    "unit: marks tests as unit tests",
+    "integration: marks tests as integration tests",
+    "slow: marks tests as slow running",
+]
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s [%(levelname)8s] %(name)s: %(message)s"
+
+[tool.coverage.run]
+source = ["src/"]
+omit = [
+    "*/tests/*",
+    "*/venv/*",
+    "*/__pycache__/*",
+    "setup.py",
 ]
 
-[tool.black]
-line-length = 100
-target-version = ["py310", "py311", "py312"]
-
-[tool.ruff]
-line-length = 100
-target-version = "py310"
-extend-exclude = ["pytest-cache-files-*"]
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
-ignore = ["E501"]
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
