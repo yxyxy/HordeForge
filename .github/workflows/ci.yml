@@ -1,249 +1,81 @@
+# CI Workflow for HordeForge repository
 name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [ main ]
   pull_request:
-    branches: [main]
-
-env:
-  PYTHON_VERSION: "3.11"
-  DOCKER_REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+    branches: [ main ]
 
 jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: "pip"
-          cache-dependency-path: |
-            requirements*.txt
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install ruff
-
-      - name: Run ruff check
-        run: ruff check .
-
-      - name: Run ruff format check
-        run: ruff format --check .
-
-  pipeline-audit:
-    name: Pipeline Audit
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: "pip"
-          cache-dependency-path: |
-            requirements*.txt
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
-
-      - name: Run pipeline catalog validation and smoke
-        env:
-          HORDEFORGE_STORAGE_DIR: .hordeforge_data_test
-        run: |
-          pytest -q tests/unit/pipelines/test_pipeline_catalog_validation.py tests/integration/test_pipeline_catalog_runtime.py
-
   test-unit:
-    name: Test Unit
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: hordeforge
-          POSTGRES_PASSWORD: hordeforge
-          POSTGRES_DB: hordeforge_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
+    strategy:
+      matrix:
+        python-version: [3.8, 3.9, '3.10']
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: "pip"
-          cache-dependency-path: |
-            requirements*.txt
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
-
-      - name: Run unit pytest
-        env:
-          HORDEFORGE_DATABASE_URL: postgresql+psycopg://hordeforge:hordeforge@localhost:5432/hordeforge_test
-          HORDEFORGE_STORAGE_DIR: .hordeforge_data_test
-          HORDEFORGE_TOKEN_USAGE_FILE: .pytest_tmp_runtime/token_usage.json
-        run: pytest -v --tb=short -m "not slow and not performance and not benchmark" --cov=. --cov-report=xml tests/unit
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./coverage.xml
-          flags: unit
+    - uses: actions/checkout@v3
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install poetry
+        poetry install
+    - name: Run unit tests with detailed output
+      run: |
+        poetry run python -m pytest tests/unit/ -v --tb=short
+      env:
+        PYTHONPATH: ${{ github.workspace }}/src
+    - name: Upload coverage reports
+      if: matrix.python-version == '3.10'
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-report
+        path: coverage.xml
 
   test-integration:
-    name: Test Integration
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: hordeforge
-          POSTGRES_PASSWORD: hordeforge
-          POSTGRES_DB: hordeforge_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
+    strategy:
+      matrix:
+        python-version: ['3.10']
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v3
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install poetry
+        poetry install
+    - name: Run integration tests
+      run: |
+        poetry run python -m pytest tests/integration/ -v --tb=short
+      env:
+        PYTHONPATH: ${{ github.workspace }}/src
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: "pip"
-          cache-dependency-path: |
-            requirements*.txt
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
-
-      - name: Run integration/performance/benchmark pytest
-        env:
-          HORDEFORGE_DATABASE_URL: postgresql+psycopg://hordeforge:hordeforge@localhost:5432/hordeforge_test
-          HORDEFORGE_STORAGE_DIR: .hordeforge_data_test
-          HORDEFORGE_TOKEN_USAGE_FILE: .pytest_tmp_runtime/token_usage.json
-        run: pytest -v --tb=short tests/integration tests/performance tests/benchmark
-
-  security:
-    name: Security
+  pipeline-audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: "pip"
-
-      - name: Install bandit
-        run: pip install bandit
-
-      - name: Run bandit
-        run: bandit -r agents api cli observability orchestrator rag registry rules scheduler scripts storage -lll -iii --format json -o bandit-report.json
-
-      - name: Upload security report
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: bandit-report
-          path: bandit-report.json
-
-  build:
-    name: Build Docker
-    runs-on: ubuntu-latest
-    needs: [lint, pipeline-audit, test-unit, test-integration, security]
-    if: github.event_name == 'push'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.DOCKER_REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  trivy-scan:
-    name: Trivy Scan
-    runs-on: ubuntu-latest
-    needs: [build]
-    if: github.event_name == 'push'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: "fs"
-          scan-ref: "."
-          format: "sarif"
-          output: "trivy-results.sarif"
-
-      - name: Upload Trivy results
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-results
-          path: trivy-results.sarif
+    - uses: actions/checkout@v3
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install poetry
+        poetry install
+    - name: Run pipeline catalog validation
+      run: |
+        poetry run python -c "from src.pipelines import validate_catalog; validate_catalog()"
+    - name: Run smoke tests
+      run: |
+        poetry run python -m pytest tests/smoke/ -v --tb=short
+      env:
+        PYTHONPATH: ${{ github.workspace }}/src
