@@ -21,7 +21,6 @@ class PipelineType(Enum):
     FEATURE = "feature"
     BUGFIX = "bugfix"
     CI_FIX = "ci_fix"
-    BACKLOG_ANALYSIS = "backlog_analysis"
     DEPENDENCY_CHECK = "dependency_check"
 
 
@@ -45,13 +44,8 @@ PIPELINE_METADATA: dict[PipelineType, dict[str, Any]] = {
     },
     PipelineType.CI_FIX: {
         "name": "ci_fix_pipeline",
-        "description": "CI self-healing - detect and fix failing tests",
+        "description": "CI triage handoff - analyze failed CI and create agent-ready issue",
         "required_inputs": ["repository", "ci_run"],
-    },
-    PipelineType.BACKLOG_ANALYSIS: {
-        "name": "backlog_analysis_pipeline",
-        "description": "Analyze backlog and prioritize issues",
-        "required_inputs": [],
     },
     PipelineType.DEPENDENCY_CHECK: {
         "name": "dependency_check_pipeline",
@@ -274,37 +268,22 @@ def resolve_step_dependencies(
 
     elif pipeline_type == PipelineType.FEATURE:
         step_configs = [
-            StepConfig(name="dod_extractor", agent="dod_extractor"),
+            StepConfig(name="rag_initializer", agent="rag_initializer"),
             StepConfig(
-                name="architecture_planner",
-                agent="architecture_planner",
-                depends_on=["dod_extractor"],
-            ),
-            StepConfig(
-                name="specification_writer",
-                agent="specification_writer",
-                depends_on=["architecture_planner"],
-            ),
-            StepConfig(
-                name="task_decomposer", agent="task_decomposer", depends_on=["specification_writer"]
-            ),
-            StepConfig(
-                name="bdd_generator", agent="bdd_generator", depends_on=["specification_writer"]
-            ),
-            StepConfig(
-                name="test_generator", agent="test_generator", depends_on=["task_decomposer"]
+                name="memory_retrieval", agent="memory_agent", depends_on=["rag_initializer"]
             ),
             StepConfig(
                 name="code_generator",
                 agent="code_generator",
-                depends_on=["task_decomposer", "test_generator"],
+                depends_on=["memory_retrieval"],
             ),
             StepConfig(name="test_runner", agent="test_runner", depends_on=["code_generator"]),
             StepConfig(
                 name="fix_agent", agent="fix_agent", depends_on=["test_runner"], retry_limit=5
             ),
             StepConfig(name="review_agent", agent="review_agent", depends_on=["fix_agent"]),
-            StepConfig(name="pr_merge_agent", agent="pr_merge_agent", depends_on=["review_agent"]),
+            StepConfig(name="memory_writer", agent="memory_agent", depends_on=["review_agent"]),
+            StepConfig(name="pr_merge_agent", agent="pr_merge_agent", depends_on=["memory_writer"]),
         ]
 
     elif pipeline_type == PipelineType.BUGFIX:
@@ -328,20 +307,16 @@ def resolve_step_dependencies(
         step_configs = [
             StepConfig(name="ci_failure_analyzer", agent="ci_failure_analyzer"),
             StepConfig(
-                name="fix_agent",
-                agent="fix_agent",
+                name="ci_incident_handoff",
+                agent="ci_incident_handoff",
                 depends_on=["ci_failure_analyzer"],
-                retry_limit=5,
             ),
-            StepConfig(name="test_runner", agent="test_runner", depends_on=["fix_agent"]),
-            StepConfig(name="review_agent", agent="review_agent", depends_on=["test_runner"]),
-            StepConfig(name="pr_merge_agent", agent="pr_merge_agent", depends_on=["review_agent"]),
         ]
 
     # Apply context-specific modifications
     for step in step_configs:
         # Add context-driven dependencies
-        if "rag_context" in context and step.agent in ["code_generator", "specification_writer"]:
+        if "rag_context" in context and step.agent == "code_generator":
             step.depends_on.append("rag_initializer")
 
     return step_configs
@@ -517,12 +492,15 @@ class PipelineInitializer(BaseAgent):
             "specification_writer": 120,
             "task_decomposer": 60,
             "test_generator": 180,
+            "memory_retrieval": 60,
+            "memory_writer": 30,
             "code_generator": 300,
             "test_runner": 120,
             "fix_agent": 180,
             "review_agent": 60,
             "pr_merge_agent": 30,
             "ci_failure_analyzer": 45,
+            "ci_incident_handoff": 45,
         }
 
         total_seconds = 0
@@ -552,8 +530,7 @@ class PipelineInitializer(BaseAgent):
             PipelineType.INIT: "feature_pipeline",
             PipelineType.FEATURE: "review_agent",
             PipelineType.BUGFIX: "review_agent",
-            PipelineType.CI_FIX: "ci_verification",
-            PipelineType.BACKLOG_ANALYSIS: "generate_roadmap",
+            PipelineType.CI_FIX: "issue_scanner_pipeline",
             PipelineType.DEPENDENCY_CHECK: "update_dependencies",
         }
 

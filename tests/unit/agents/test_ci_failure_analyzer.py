@@ -100,6 +100,13 @@ def test_classify_infrastructure():
     assert result == "infrastructure"
 
 
+def test_classify_registry_push_denied_as_infrastructure():
+    result = classify_failure_text(
+        "failed to push ghcr.io/org/repo:main: denied: installation not allowed to Create organization package"
+    )
+    assert result == "infrastructure"
+
+
 # ------------------------------
 # Severity Determination
 # ------------------------------

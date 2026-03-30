@@ -1,11 +1,11 @@
 # pipelines/ci_fix_pipeline.yaml
-# CI Self-Healing Pipeline for HordeForge
-# Description: Automates detection and fixing of failing tests after merge
+# CI Incident Triage + Handoff Pipeline for HordeForge
+# Description: Analyzes failing CI and creates agent-opened issue for downstream planning pipeline.
 
 pipeline_name: ci_fix_pipeline
 description: |
-  Pipeline for monitoring CI failures and automatically fixing broken tests
-  or code regressions. Integrates with GitHub and orchestrator.
+  Pipeline for monitoring CI failures, extracting diagnostics, and opening
+  a structured handoff issue for downstream implementation pipeline.
 
 triggers:
   - ci_failure_detected
@@ -22,73 +22,18 @@ steps:
     output: "{{failure_analysis}}"
     on_failure: create_issue_for_human
 
-  - name: test_fixer
-    agent: fix_agent
-    description: Generate fixes for failing tests or code regressions
+  - name: ci_incident_handoff
+    agent: ci_incident_handoff
+    description: Create triage issue and mark it agent:opened for downstream scanner/planning
+    condition: "{{ ci_run.conclusion == 'failure' or ci_run.status == 'failed' }}"
     input:
+      repository: "{{repository}}"
+      ci_run: "{{ci_run}}"
       failure_analysis: "{{failure_analysis}}"
-      repository: "{{repository}}"
-    output: "{{fixed_code_patch}}"
-    retry_limit: 5
-    on_failure: escalate_to_human
-
-  - name: test_runner
-    agent: test_runner
-    description: Run tests on fixed code patch
-    input:
-      code_patch: "{{fixed_code_patch}}"
-    output: "{{test_results}}"
-    on_failure: retry_step
-
-  - name: fix_loop
-    agent: fix_agent
-    description: Iteratively fix any remaining test failures
-    input:
-      code_patch: "{{fixed_code_patch}}"
-      test_results: "{{test_results}}"
-    output: "{{final_code_patch}}"
-    retry_limit: 5
-    loops:
-      condition: "{{test_results.failed}} > 0"
-      steps:
-        - fix_loop
-        - test_runner
+      source_pipeline: "ci_fix_pipeline"
+      github_token: "{{github_token}}"
+    output: "{{ci_issue}}"
     on_failure: create_issue_for_human
-
-  - name: review_agent
-    agent: review_agent
-    description: Review fix PR automatically
-    input:
-      final_code_patch: "{{final_code_patch}}"
-      repository: "{{repository}}"
-    output: "{{review_result}}"
-    on_failure: escalate_to_human
-
-  - name: pr_merge_agent
-    agent: pr_merge_agent
-    description: Merge fix PR if review passes
-    input:
-      review_result: "{{review_result}}"
-      repository: "{{repository}}"
-    output: "{{merge_status}}"
-    on_failure: escalate_to_human
-
-  - name: ci_verification
-    agent: test_runner
-    description: Re-run full CI suite to verify fixes
-    input:
-      repository: "{{repository}}"
-    output: "{{ci_verification_results}}"
-    on_failure: create_issue_for_human
-
-  - name: close_issue_agent
-    agent: issue_closer
-    description: Close issue if all tests pass and DoD is satisfied
-    input:
-      ci_results: "{{ci_verification_results}}"
-      issue: "{{original_issue}}"
-    output: "{{close_status}}"
-    on_failure: escalate_to_human
 
 logging:
   level: INFO
@@ -97,7 +42,6 @@ logging:
   post_to_github: true
 
 # Notes:
-# - Step-level loop on `fix_loop` handles iterative test stabilization.
-# - `ci_verification` is always executed after merge to avoid dead-loop scenarios.
-# - CI monitoring can be triggered by cron or GitHub webhook.
-# - All outputs are validated and logged.
+# - This pipeline intentionally does not modify code or merge PRs.
+# - It only performs deterministic triage and handoff to issue-solving pipeline.
+# - Downstream scanner should pick issues by `agent:opened` label.

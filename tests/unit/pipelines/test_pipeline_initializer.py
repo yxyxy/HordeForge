@@ -116,10 +116,10 @@ class TestStepDependencies:
         """Test resolving feature pipeline steps."""
         steps = resolve_step_dependencies(PipelineType.FEATURE, {})
         step_names = [s.name for s in steps]
-        assert "dod_extractor" in step_names
+        assert "rag_initializer" in step_names
         assert "code_generator" in step_names
         assert "pr_merge_agent" in step_names
-        assert len(steps) == 11
+        assert len(steps) == 8
 
     def test_resolve_bugfix_steps(self):
         """Test resolving bugfix pipeline steps."""
@@ -134,8 +134,8 @@ class TestStepDependencies:
         steps = resolve_step_dependencies(PipelineType.CI_FIX, {})
         step_names = [s.name for s in steps]
         assert "ci_failure_analyzer" in step_names
-        assert "fix_agent" in step_names
-        assert len(steps) == 5
+        assert "ci_incident_handoff" in step_names
+        assert len(steps) == 2
 
 
 class TestPipelineInitializer:
@@ -159,7 +159,7 @@ class TestPipelineInitializer:
 
         assert result["status"] == "SUCCESS"
         assert result["artifacts"][0]["content"]["pipeline_type"] == "feature"
-        assert result["artifacts"][0]["content"]["step_count"] == 11
+        assert result["artifacts"][0]["content"]["step_count"] == 8
 
     def test_run_missing_inputs(self):
         """Test handling of missing required inputs."""

@@ -177,6 +177,23 @@ def _compose_output(compose_args: list[str]) -> str:
     return completed.stdout.strip()
 
 
+def _running_compose_services() -> set[str]:
+    output = _compose_output(["ps", "--services", "--status", "running"])
+    if not output:
+        return set()
+    return {line.strip().lower() for line in output.splitlines() if line.strip()}
+
+
+def detect_runtime_mode(configured_mode: str) -> str:
+    running_services = _running_compose_services()
+    team_services = {"db", "redis", "qdrant", "qdrant-mcp"}
+    if running_services & team_services:
+        return "team"
+    if "qdrant-mcp-local" in running_services:
+        return "local"
+    return configured_mode
+
+
 def _http_health(url: str) -> bool:
     try:
         response = requests.get(url, timeout=2.5)
@@ -207,7 +224,12 @@ def _mode_set(args) -> int:
 
 def _mode_show() -> int:
     backends = resolve_runtime_backends()
-    print(f"Mode: {backends.mode}")
+    runtime_mode = detect_runtime_mode(backends.mode)
+    if runtime_mode == backends.mode:
+        print(f"Mode: {backends.mode}")
+    else:
+        print(f"Mode: {backends.mode} (configured)")
+        print(f"Runtime mode: {runtime_mode} (detected from running containers)")
     print(f"Storage backend: {backends.storage_backend}")
     print(f"Queue backend: {backends.queue_backend}")
     print(f"Vector store mode: {backends.vector_store_mode}")

@@ -97,12 +97,14 @@ def register_agents(agent_registry: AgentRegistry) -> None:
     from agents.architecture_planner import ArchitecturePlanner
     from agents.bdd_generator import BDDGenerator
     from agents.ci_failure_analyzer import CiFailureAnalyzer
+    from agents.ci_incident_handoff import CiIncidentHandoff
     from agents.ci_monitor_agent.agent import CIMonitorAgent
     from agents.code_generator import CodeGenerator
     from agents.dependency_checker_agent.agent import DependencyCheckerAgent
     from agents.dod_extractor import DodExtractor
     from agents.fix_agent import FixAgent
     from agents.issue_closer import IssueCloser
+    from agents.issue_pipeline_dispatcher import IssuePipelineDispatcher
     from agents.issue_scanner import IssueScanner
     from agents.memory_agent import MemoryAgent
     from agents.pipeline_initializer import PipelineInitializer
@@ -111,7 +113,6 @@ def register_agents(agent_registry: AgentRegistry) -> None:
     from agents.repo_connector import RepoConnector
     from agents.review_agent import ReviewAgent
     from agents.specification_writer import SpecificationWriter
-    from agents.stub_agent import StubAgent
     from agents.task_decomposer import TaskDecomposer
     from agents.test_analyzer import TestAnalyzer
     from agents.test_generator import TestGenerator
@@ -185,6 +186,13 @@ def register_agents(agent_registry: AgentRegistry) -> None:
             name="ci_failure_analyzer",
             agent_class=CiFailureAnalyzer,
             description="Анализирует ошибки CI",
+            input_contract="context.spec.v1",
+            output_contract="context.spec.v1",
+        ),
+        AgentMetadata(
+            name="ci_incident_handoff",
+            agent_class=CiIncidentHandoff,
+            description="Creates CI handoff issue with agent:ready label",
             input_contract="context.spec.v1",
             output_contract="context.spec.v1",
         ),
@@ -265,6 +273,14 @@ def register_agents(agent_registry: AgentRegistry) -> None:
             category="scanning",
         ),
         AgentMetadata(
+            name="issue_pipeline_dispatcher",
+            agent_class=IssuePipelineDispatcher,
+            description="Запускает downstream pipeline для agent:ready issues",
+            input_contract=None,
+            output_contract=None,
+            category="orchestration",
+        ),
+        AgentMetadata(
             name="ci_monitor_agent",
             agent_class=CIMonitorAgent,
             description="Мониторит CI/CD процессы и реагирует на изменения статусов",
@@ -279,14 +295,6 @@ def register_agents(agent_registry: AgentRegistry) -> None:
             input_contract=None,
             output_contract=None,
             category="security",
-        ),
-        AgentMetadata(
-            name="stub_agent",
-            agent_class=StubAgent,
-            description="Заглушка для ещё не реализованных агентов",
-            input_contract=None,
-            output_contract=None,
-            category="development",
         ),
     ]
 

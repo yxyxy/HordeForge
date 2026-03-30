@@ -383,6 +383,14 @@ def classify_failure_text(text: str) -> str:
     if "test failed" in t or "failed test" in t or "failed:" in t and "test" in t:
         return "test_failure"
 
+    if (
+        "failed to push" in t
+        or "installation not allowed" in t
+        or "denied:" in t
+        or "permission denied" in t
+    ):
+        return "infrastructure"
+
     if "timeout" in t or "network" in t or "connection timed out" in t:
         return "infrastructure"
 
@@ -517,5 +525,5 @@ class CiFailureAnalyzer(BaseAgent):
                 f"flaky_tests_count={len(flaky_tests)}",
                 f"infra_errors_count={len(infra_errors)}",
             ],
-            next_actions=["test_fixer"],
+            next_actions=["ci_incident_handoff"],
         )

@@ -210,6 +210,7 @@ class LlmCli:
             ApiProvider.FIREWORKS: "accounts/fireworks/models/llama-v3p1-70b-instruct",
             ApiProvider.TOGETHER: "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
             ApiProvider.QWEN: "qwen-max",
+            ApiProvider.QWEN_CODE: "qwen3-coder-plus",
             ApiProvider.MISTRAL: "mistral-large-latest",
             ApiProvider.HUGGINGFACE: "microsoft/DialoGPT-medium",
             ApiProvider.LITELLM: "gpt-3.5-turbo",
@@ -297,14 +298,13 @@ class LlmCli:
                     print(f"  Tokens: {chunk.input_tokens} input, {chunk.output_tokens} output")
 
             response = "".join(response_parts)
-            print(
-                f"✓ Success! Response: {response[:50]}..."
-                if response
-                else "✓ Success! (empty response)"
-            )
+            if response:
+                print(f"[OK] Success! Response: {response[:50]}...")
+            else:
+                print("[OK] Success! (empty response)")
 
         except Exception as e:
-            print(f"✗ Failed: {e}")
+            print(f"[FAIL] Failed: {e}")
 
     async def run_command(self, args):
         """Execute the specified command."""

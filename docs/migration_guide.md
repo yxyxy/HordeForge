@@ -510,10 +510,9 @@ QDRANT_PORT=6333
 HORDEFORGE_QUEUE_BACKEND=redis
 HORDEFORGE_IDEMPOTENCY_TTL_SECONDS=3600
 
-# LLM settings
-HORDEFORGE_LLM_PROVIDER=openai
-HORDEFORGE_OPENAI_API_KEY=your-openai-key
-HORDEFORGE_ANTHROPIC_API_KEY=your-anthropic-key
+# LLM profiles (recommended)
+horde llm profile add openai-main --provider openai --model gpt-4o --api-key YOUR_OPENAI_KEY --set-default
+horde llm profile add anthropic-main --provider anthropic --model claude-sonnet-4-20250514 --api-key YOUR_ANTHROPIC_KEY
 ```
 
 ## Testing the Migration

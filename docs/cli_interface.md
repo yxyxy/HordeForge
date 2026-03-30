@@ -74,7 +74,7 @@ horde health
 horde pipeline list
 
 # One-time repository profile setup
-horde repo add yxyxy/HordeForge --url https://github.com/yxyxy/HordeForge --token YOUR_GITHUB_TOKEN --set-default
+horde repo add --url https://github.com/yxyxy/HordeForge --token YOUR_GITHUB_TOKEN --set-default
 
 # Run init by repository profile id
 horde init yxyxy/HordeForge
@@ -238,11 +238,11 @@ horde llm chat --file system_prompt.txt
 
 ### Profile Management
 
-Manage repository and LLM profiles from local JSON store (`~/.hordeforge/config.json`) and secrets store (`~/.hordeforge/secrets.json`):
+Manage repository profiles locally and LLM/secrets via gateway-backed store:
 
 ```bash
 # Repository profiles
-horde repo add yxyxy/HordeForge --url https://github.com/yxyxy/HordeForge --token YOUR_GITHUB_TOKEN --set-default
+horde repo add --url https://github.com/yxyxy/HordeForge --token YOUR_GITHUB_TOKEN --set-default
 horde repo list
 horde repo use yxyxy/HordeForge
 horde repo show yxyxy/HordeForge
@@ -443,7 +443,6 @@ Both CLIs respect the following environment variables:
 - `HORDEFORGE_PIPELINES_DIR` - Pipelines directory (default: pipelines)
 - `HORDEFORGE_STORAGE_DIR` - Storage directory (default: .hordeforge_data)
 - `HORDEFORGE_QUEUE_BACKEND` - Queue backend (default: memory)
-- `HORDEFORGE_LLM_PROVIDER` - Default LLM provider (default: openai)
 - `HORDEFORGE_OPENAI_API_KEY` - OpenAI API key
 - `HORDEFORGE_ANTHROPIC_API_KEY` - Anthropic API key
 - `HORDEFORGE_GOOGLE_API_KEY` - Google API key
@@ -495,7 +494,7 @@ horde config
 ```bash
 # List and run pipelines
 horde pipeline list
-horde repo add yxyxy/HordeForge --url https://github.com/yxyxy/HordeForge --token YOUR_GITHUB_TOKEN --set-default
+horde repo add --url https://github.com/yxyxy/HordeForge --token YOUR_GITHUB_TOKEN --set-default
 horde init yxyxy/HordeForge
 
 # Run feature pipeline

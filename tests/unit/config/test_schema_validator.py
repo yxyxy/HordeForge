@@ -75,3 +75,32 @@ def test_schema_validator_returns_errors_in_non_strict_mode():
 
     assert errors
     assert any("schema_version" in error for error in errors)
+
+
+def test_schema_validator_accepts_code_patch_with_pr_metadata():
+    validator = RuntimeSchemaValidator(schema_dir="contracts/schemas", strict_mode=True)
+    payload = _valid_agent_result()
+    payload["artifacts"] = [
+        {
+            "type": "code_patch",
+            "content": {
+                "schema_version": "1.0",
+                "files": [{"path": "src/a.py", "diff": "# modify\nprint('ok')\n"}],
+                "decisions": ["deterministic_patch=true"],
+                "dry_run": False,
+                "expected_failures": 0,
+                "pr_number": 7,
+                "pr_url": "https://github.com/org/repo/pull/7",
+                "branch_name": "hordeforge/feature-7",
+                "applied_to_github": True,
+                "apply_error": "none",
+                "rollback_performed": False,
+                "llm_enhanced": False,
+                "notes": ["n1"],
+            },
+        }
+    ]
+
+    errors = validator.validate_step_output("step_code_patch_with_pr", payload)
+
+    assert errors == []

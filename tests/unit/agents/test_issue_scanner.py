@@ -364,3 +364,37 @@ class TestIssueScanner:
 
         next_actions = result["next_actions"]
         assert "trigger_bugfix_pipeline" in next_actions
+
+    def test_run_include_comments_enriches_classification(self):
+        class FakeGitHubClient:
+            def get_issue_comments(self, issue_number: int, *, page: int = 1, per_page: int = 30):
+                return [{"body": "This is urgent and critical, production outage"}]
+
+        scanner = IssueScanner()
+        issues = [
+            {
+                "id": 1,
+                "number": 101,
+                "title": "Investigate incident",
+                "body": "Need analysis",
+                "labels": [{"name": "agent:ready"}],
+                "state": "open",
+                "html_url": "url",
+            }
+        ]
+        result = scanner.run(
+            {
+                "issues": issues,
+                "github_client": FakeGitHubClient(),
+                "scan_options": {"include_comments": True},
+            }
+        )
+
+        assert result["status"] == "SUCCESS"
+        classified = result["artifacts"][0]["content"]["classified_issues"][0]
+        assert classified["priority"] == "P0"
+        assert classified["comments_count"] == 1
+        assert (
+            result["artifacts"][0]["content"]["classified_issues"][0]["key_info"]["comments_count"]
+            == 1
+        )

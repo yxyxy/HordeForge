@@ -127,6 +127,27 @@ def test_enhanced_code_generator_with_test_cases():
     assert any("test" in p.lower() for p in paths)
 
 
+def test_enhanced_code_generator_reads_rag_context_from_rag_initializer():
+    generator = EnhancedCodeGenerator()
+    context = {
+        "use_llm": False,
+        "rag_initializer": {
+            "status": "SUCCESS",
+            "artifacts": [
+                {
+                    "type": "rag_context",
+                    "content": {"sources": [{"path": "README.md"}]},
+                }
+            ],
+        },
+    }
+    result = generator.run(context)
+
+    assert result["status"] == "SUCCESS"
+    content = _get_content(result, "code_patch")
+    assert "rag_sources=1" in content["decisions"]
+
+
 def test_enhanced_spec_name():
     """Test agent name and description."""
     writer = EnhancedSpecificationWriter()
@@ -139,3 +160,147 @@ def test_enhanced_code_generator_name():
     generator = EnhancedCodeGenerator()
     assert generator.name == "code_generator"
     assert "code" in generator.description.lower()
+
+
+def test_enhanced_code_generator_includes_issue_and_memory_context_in_llm_prompt(monkeypatch):
+    captured = {"prompt": ""}
+
+    class _FakeLlm:
+        def complete(self, prompt: str) -> str:
+            captured["prompt"] = prompt
+            return '{"files":[{"path":"src/a.py","change_type":"modify","content":"print(1)"}],"decisions":[],"test_changes":[],"expected_failures":0}'
+
+        def close(self) -> None:
+            return
+
+    monkeypatch.setattr("agents.code_generator.get_llm_wrapper", lambda: _FakeLlm())
+
+    generator = EnhancedCodeGenerator()
+    context = {
+        "use_llm": True,
+        "issue": {
+            "title": "Fix docker publish permissions",
+            "body": "Build and push fails for ghcr publish",
+            "comments_context": "Comment: denied create organization package",
+        },
+        "memory_context": {
+            "query": "ghcr publish denied",
+            "matches": [{"path": ".github/workflows/ci.yml", "summary": "build and push"}],
+        },
+        "specification_writer": {
+            "status": "SUCCESS",
+            "artifacts": [{"type": "spec", "content": {"summary": "Fix CI publish flow"}}],
+        },
+    }
+
+    result = generator.run(context)
+
+    assert result["status"] == "SUCCESS"
+    assert "Fix docker publish permissions" in captured["prompt"]
+    assert "denied create organization package" in captured["prompt"]
+    assert ".github/workflows/ci.yml" in captured["prompt"]
+
+
+def test_enhanced_code_generator_creates_pr_with_token_and_repository(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeGitHubClient:
+        def __init__(self, token: str, repo: str):
+            captured["token"] = token
+            captured["repo"] = repo
+
+    class _FakeWorkflow:
+        def __init__(self, github_client):
+            captured["workflow_client"] = github_client
+
+        def apply_patch(self, *, files, pr_title, pr_body, branch_name):
+            captured["files"] = files
+            captured["pr_title"] = pr_title
+            captured["branch_name"] = branch_name
+            from types import SimpleNamespace
+
+            return SimpleNamespace(
+                success=True,
+                pr_url="https://github.com/acme/hordeforge/pull/77",
+                pr_number=77,
+                branch_name=branch_name,
+                error=None,
+                rollback_performed=False,
+            )
+
+    monkeypatch.setattr("agents.code_generator.GitHubClient", _FakeGitHubClient)
+    monkeypatch.setattr("agents.code_generator.PatchWorkflowOrchestrator", _FakeWorkflow)
+
+    generator = EnhancedCodeGenerator()
+    context = {
+        "use_llm": False,
+        "github_token": "ghs_test",
+        "repository": {"full_name": "acme/hordeforge"},
+        "issue": {"number": 3, "title": "Fix CI push"},
+        "specification_writer": {
+            "status": "SUCCESS",
+            "artifacts": [{"type": "spec", "content": {"summary": "Fix CI push issue"}}],
+        },
+    }
+
+    result = generator.run(context)
+
+    assert result["status"] == "SUCCESS"
+    content = _get_content(result, "code_patch")
+    assert content["applied_to_github"] is True
+    assert content["pr_number"] == 77
+    assert str(content["branch_name"]).startswith("horde/3-")
+    assert captured["repo"] == "acme/hordeforge"
+
+
+def test_enhanced_code_generator_builds_pr_body_with_string_requirements(monkeypatch):
+    class _FakeGitHubClient:
+        def __init__(self, token: str, repo: str):
+            self.token = token
+            self.repo = repo
+
+    class _FakeWorkflow:
+        def __init__(self, github_client):
+            self.github_client = github_client
+
+        def apply_patch(self, *, files, pr_title, pr_body, branch_name):
+            from types import SimpleNamespace
+
+            # Regression guard: PR body generation must not crash on string requirements.
+            assert "rules/coding_rules.md" in pr_body
+            return SimpleNamespace(
+                success=True,
+                pr_url="https://github.com/acme/hordeforge/pull/88",
+                pr_number=88,
+                branch_name=branch_name,
+                error=None,
+                rollback_performed=False,
+            )
+
+    monkeypatch.setattr("agents.code_generator.GitHubClient", _FakeGitHubClient)
+    monkeypatch.setattr("agents.code_generator.PatchWorkflowOrchestrator", _FakeWorkflow)
+
+    generator = EnhancedCodeGenerator()
+    context = {
+        "use_llm": False,
+        "github_token": "ghs_test",
+        "repository": {"full_name": "acme/hordeforge"},
+        "issue": {"number": 9, "title": "Handle string requirements"},
+        "specification_writer": {
+            "status": "SUCCESS",
+            "artifacts": [
+                {
+                    "type": "spec",
+                    "content": {
+                        "summary": "String requirements",
+                        "requirements": ["rules/coding_rules.md", "rules/testing_rules.md"],
+                    },
+                }
+            ],
+        },
+    }
+
+    result = generator.run(context)
+    assert result["status"] == "SUCCESS"
+    content = _get_content(result, "code_patch")
+    assert content["pr_number"] == 88

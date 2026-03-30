@@ -110,7 +110,7 @@ curl -X POST "http://localhost:8000/cron/jobs/issue_scanner/trigger" \
   -H "X-Operator-Key: <KEY>" \
   -H "X-Operator-Role: operator" \
   -H "X-Command-Source: api" \
-  -d '{"payload":{"issues":[{"id":1,"labels":[{"name":"agent:ready"}]}]}}'
+  -d '{"payload":{"issues":[{"id":1,"labels":[{"name":"agent:opened"}]}]}}'
 ```
 
 ## 4. Типовые аварии и действия

@@ -89,6 +89,35 @@ class TestCreatePatchFromCodeResult:
         files = create_patch_from_code_result({})
         assert len(files) == 0
 
+    def test_supports_diff_only_entries(self):
+        """Test parsing files that come in schema-with-diff format."""
+        code_result = {
+            "files": [
+                {"path": "a.py", "diff": "# create\nprint('a')\n"},
+                {"path": "b.py", "diff": "# modify\nprint('b')\n"},
+            ]
+        }
+        files = create_patch_from_code_result(code_result)
+        assert len(files) == 2
+        assert files[0].path == "a.py"
+        assert files[0].change_type == "create"
+        assert "# create" in files[0].content
+        assert files[1].path == "b.py"
+        assert files[1].change_type == "modify"
+
+    def test_skips_invalid_file_entries(self):
+        """Test invalid entries are ignored instead of crashing."""
+        code_result = {
+            "files": [
+                "bad-entry",
+                {"path": "", "content": "ignored"},
+                {"path": "ok.py", "content": "print('ok')", "change_type": "create"},
+            ]
+        }
+        files = create_patch_from_code_result(code_result)
+        assert len(files) == 1
+        assert files[0].path == "ok.py"
+
 
 class TestPatchWorkflowOrchestrator:
     """Tests for PatchWorkflowOrchestrator."""

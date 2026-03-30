@@ -211,6 +211,40 @@ def test_run_pipeline_async_enqueues_task_and_queue_drain_executes_it():
     assert completed_body["result"]["status"] in {"started", "duplicate"}
 
 
+def test_drain_queue_once_executes_queued_task():
+    client = TestClient(app)
+    queued = client.post(
+        "/run-pipeline",
+        json={
+            "pipeline_name": "init_pipeline",
+            "inputs": {
+                "repo_url": "https://github.com/yxyxy/hordeforge.git",
+                "github_token": "token",
+                "repository_full_name": "acme/hordeforge",
+            },
+            "source": "test",
+            "correlation_id": "corr-queue-once-1",
+            "idempotency_key": "queue-once-key-1",
+            "async_mode": True,
+            "tenant_id": "acme",
+        },
+    )
+    assert queued.status_code == 200
+    task_id = queued.json()["task_id"]
+
+    queued_task = client.get(f"/queue/tasks/{task_id}")
+    assert queued_task.status_code == 200
+    assert queued_task.json()["status"] == "QUEUED"
+
+    records = gateway._drain_queue_once(max_items=5)
+    assert len(records) == 1
+    assert records[0]["status"] == "SUCCEEDED"
+
+    completed_task = client.get(f"/queue/tasks/{task_id}")
+    assert completed_task.status_code == 200
+    assert completed_task.json()["status"] == "SUCCEEDED"
+
+
 def test_queue_drain_requires_permissions():
     client = TestClient(app)
     client.post(
@@ -268,7 +302,7 @@ def test_cron_manual_trigger_runs_issue_scanner_and_publishes_trigger():
     client = TestClient(app)
     response = client.post(
         "/cron/jobs/issue_scanner/trigger",
-        json={"payload": {"issues": [{"id": 303, "labels": [{"name": "agent:ready"}]}]}},
+        json={"payload": {"issues": [{"id": 303, "labels": [{"name": "agent:opened"}]}]}},
         headers=_operator_headers(),
     )
 
@@ -280,7 +314,7 @@ def test_cron_manual_trigger_runs_issue_scanner_and_publishes_trigger():
     assert body["record"]["result"]["published_count"] == 1
     assert (
         body["record"]["result"]["published_triggers"][0]["pipeline_name"]
-        == "backlog_analysis_pipeline"
+        == "issue_scanner_pipeline"
     )
 
 

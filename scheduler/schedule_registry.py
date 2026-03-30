@@ -57,9 +57,11 @@ def build_default_schedule_registry() -> ScheduleRegistry:
             job_name="issue_scanner",
             cron="*/15 * * * *",
             interval_seconds=900,
-            pipeline_name="backlog_analysis_pipeline",
+            pipeline_name="issue_scanner_pipeline",
             enabled=True,
-            default_inputs={"labels": ["agent:ready"]},
+            default_inputs={
+                "labels": ["agent:opened", "agent:planning", "agent:ready", "agent:fixed"]
+            },
         )
     )
     registry.register(

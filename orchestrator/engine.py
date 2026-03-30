@@ -281,6 +281,41 @@ class OrchestratorEngine:
         run_state: PipelineRunState,
         has_next_step: bool = True,
     ) -> tuple[dict[str, Any], bool]:
+        if isinstance(step.condition, str) and step.condition.strip():
+            condition_matched = self._evaluate_loop_condition(step.condition, context.state)
+            if not condition_matched:
+                finished_at = self._now_iso()
+                run_state.mark_step_status(
+                    step.name,
+                    StepStatus.SKIPPED,
+                    finished_at=finished_at,
+                    error=f"Step condition not met: {step.condition}",
+                )
+                run_state.advance_index()
+                self._log_event(
+                    logging.INFO,
+                    context.run_id,
+                    "step_skipped_by_condition",
+                    step_name=step.name,
+                    condition=step.condition,
+                    correlation_id=context.metadata.get("correlation_id"),
+                )
+                return (
+                    {
+                        "status": "SKIPPED",
+                        "artifacts": [],
+                        "decisions": [
+                            {
+                                "reason": f"Condition not met: {step.condition}",
+                                "confidence": 1.0,
+                            }
+                        ],
+                        "logs": [f"Step skipped: condition not met ({step.condition})."],
+                        "next_actions": [],
+                    },
+                    False,
+                )
+
         override_request = RUN_OVERRIDE_REGISTRY.get(context.run_id)
         if override_request is not None and override_request.action == "stop":
             run_state.set_run_status(StepStatus.BLOCKED)

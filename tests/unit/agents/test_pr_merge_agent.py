@@ -1,6 +1,7 @@
 """TDD: PR Merge Agent tests"""
 
 from agents.pr_merge_agent import (
+    PrMergeAgent,
     add_to_queue,
     handle_rebase,
     process_queue,
@@ -74,3 +75,124 @@ class TestRebaseHandling:
 
         # Assert
         assert result == "noop"
+
+
+class TestPrMergeAgentGates:
+    def test_dry_run_with_missing_pr_is_not_merged(self):
+        agent = PrMergeAgent()
+        result = agent.run(
+            {
+                "review_agent": {
+                    "status": "SUCCESS",
+                    "artifacts": [{"type": "review_result", "content": {"decision": "approve"}}],
+                },
+                "test_runner": {
+                    "status": "SUCCESS",
+                    "artifacts": [{"type": "test_results", "content": {"failed": 0}}],
+                },
+                "code_generator": {
+                    "status": "SUCCESS",
+                    "artifacts": [{"type": "code_patch", "content": {}}],
+                },
+            }
+        )
+
+        content = result["artifacts"][0]["content"]
+        assert result["status"] == "PARTIAL_SUCCESS"
+        assert content["merged"] is False
+        assert content["dry_run"] is True
+        assert "pr_missing" in content["reason"]
+
+    def test_live_merge_runs_only_when_all_gates_pass(self):
+        class FakeGitHubClient:
+            def get_mergeable_status(self, pr_number: int) -> dict:
+                return {"mergeable": True, "draft": False}
+
+            def get_pull_request(self, pr_number: int) -> dict:
+                return {"head": {"sha": "abc"}}
+
+            def get_combined_status(self, head_sha: str) -> dict:
+                return {"state": "success"}
+
+            def merge_pull_request(self, pr_number: int, merge_method: str = "squash") -> dict:
+                return {"merged": True}
+
+        agent = PrMergeAgent()
+        result = agent.run(
+            {
+                "github_client": FakeGitHubClient(),
+                "pr_number": 42,
+                "review_agent": {
+                    "status": "SUCCESS",
+                    "artifacts": [{"type": "review_result", "content": {"decision": "approve"}}],
+                },
+                "test_runner": {
+                    "status": "SUCCESS",
+                    "artifacts": [{"type": "test_results", "content": {"failed": 0}}],
+                },
+            }
+        )
+
+        content = result["artifacts"][0]["content"]
+        assert result["status"] == "SUCCESS"
+        assert content["merged"] is True
+        assert content["dry_run"] is False
+
+    def test_pr_number_falls_back_to_code_generator_patch(self):
+        agent = PrMergeAgent()
+        result = agent.run(
+            {
+                "review_agent": {
+                    "status": "SUCCESS",
+                    "artifacts": [{"type": "review_result", "content": {"decision": "approve"}}],
+                },
+                "test_runner": {
+                    "status": "SUCCESS",
+                    "artifacts": [{"type": "test_results", "content": {"failed": 0}}],
+                },
+                "fix_agent": {
+                    "status": "SUCCESS",
+                    "artifacts": [{"type": "code_patch", "content": {}}],
+                },
+                "code_generator": {
+                    "status": "SUCCESS",
+                    "artifacts": [{"type": "code_patch", "content": {"pr_number": 123}}],
+                },
+            }
+        )
+
+        content = result["artifacts"][0]["content"]
+        assert content["pr_number"] == 123
+        assert "pr_missing" not in content["reason"]
+
+    def test_pr_number_falls_back_when_top_level_code_patch_is_from_fix_agent(self):
+        agent = PrMergeAgent()
+        result = agent.run(
+            {
+                "review_agent": {
+                    "status": "SUCCESS",
+                    "artifacts": [{"type": "review_result", "content": {"decision": "approve"}}],
+                },
+                "test_runner": {
+                    "status": "SUCCESS",
+                    "artifacts": [{"type": "test_results", "content": {"failed": 0}}],
+                },
+                # Typical runtime alias that may point to the latest patch (fix_agent),
+                # which does not include PR metadata.
+                "code_patch": {"schema_version": "1.0", "files": [], "fix_iteration": 1},
+                "fix_agent": {
+                    "status": "SUCCESS",
+                    "artifacts": [
+                        {"type": "code_patch", "content": {"schema_version": "1.0", "files": []}}
+                    ],
+                },
+                "code_generator": {
+                    "status": "SUCCESS",
+                    "artifacts": [{"type": "code_patch", "content": {"pr_number": 321}}],
+                },
+            }
+        )
+
+        content = result["artifacts"][0]["content"]
+        assert content["pr_number"] == 321
+        assert "pr_missing" not in content["reason"]

@@ -14,6 +14,7 @@ services:
       HORDEFORGE_QUEUE_BACKEND: "${HORDEFORGE_QUEUE_BACKEND:-memory}"
       HORDEFORGE_VECTOR_STORE_MODE: "${HORDEFORGE_VECTOR_STORE_MODE:-auto}"
       HORDEFORGE_STORAGE_DIR: "${HORDEFORGE_STORAGE_DIR:-/app/.hordeforge_data}"
+      HORDEFORGE_HOME: "${HORDEFORGE_HOME:-/app/.hordeforge_data/home}"
 
       # Optional external services (used in team mode, ignored/fallback in local mode)
       HORDEFORGE_DATABASE_URL: "${HORDEFORGE_DATABASE_URL:-}"
@@ -28,6 +29,7 @@ services:
       HORDEFORGE_CONTEXT_COMPRESSION_ENABLED: "${HORDEFORGE_CONTEXT_COMPRESSION_ENABLED:-true}"
       HORDEFORGE_CONTEXT_DEDUPLICATION_ENABLED: "${HORDEFORGE_CONTEXT_DEDUPLICATION_ENABLED:-true}"
       HORDEFORGE_CONTEXT_MAX_TOKENS: "${HORDEFORGE_CONTEXT_MAX_TOKENS:-4000}"
+      HORDEFORGE_EMBEDDING_CACHE_DIR: "${HORDEFORGE_EMBEDDING_CACHE_DIR:-/app/rag/models}"
     depends_on: []
     command: uvicorn scheduler.gateway:app --host 0.0.0.0 --port 8000
     ports:
@@ -113,7 +115,11 @@ services:
     environment:
       QDRANT__STORAGE__WAL__FSYNC: "false"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:6333/healthz || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "bash -lc \"exec 3<>/dev/tcp/127.0.0.1/6333; printf 'GET /healthz HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n' >&3; grep -q '200' <&3\""
+        ]
       interval: 15s
       timeout: 5s
       retries: 10

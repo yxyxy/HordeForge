@@ -83,6 +83,14 @@ def test_pipeline_run_accepts_repo_target_positional():
     assert args.pipeline_target == "yxyxy/HordeForge"
 
 
+def test_pipeline_run_accepts_no_llm_flag():
+    parser = horde_cli.build_main_parser()
+    args = parser.parse_args(["pipeline", "run", "feature_pipeline", "--no-llm"])
+    assert args.command == "pipeline"
+    assert args.pipeline_command == "run"
+    assert args.no_llm is True
+
+
 def test_llm_profile_add_command_registered():
     parser = horde_cli.build_main_parser()
     args = parser.parse_args(
@@ -362,3 +370,49 @@ def test_mode_show_reports_mcp_when_container_is_running(monkeypatch, capsys):
 
     assert exit_code == horde_cli.EXIT_OK
     assert "MCP endpoint: http://localhost:8001" in output
+
+
+def test_detect_runtime_mode_team_when_team_services_running(monkeypatch):
+    from cli import infra
+
+    monkeypatch.setattr(
+        infra,
+        "_compose_output",
+        lambda args: "db\nqdrant\n" if args == ["ps", "--services", "--status", "running"] else "",
+    )
+
+    assert infra.detect_runtime_mode("local") == "team"
+
+
+def test_mode_show_reports_runtime_mode_mismatch(monkeypatch, capsys):
+    from cli import infra
+
+    monkeypatch.setattr(
+        infra,
+        "resolve_runtime_backends",
+        lambda: infra.RuntimeBackends(
+            mode="local",
+            storage_backend="json",
+            queue_backend="memory",
+            vector_store_mode="auto",
+            gateway_url="http://localhost:8000",
+            database_url="",
+            redis_url="",
+            qdrant_host="qdrant",
+            qdrant_port=6333,
+            mcp_endpoint="",
+        ),
+    )
+    monkeypatch.setattr(
+        infra,
+        "_compose_output",
+        lambda args: "db\nqdrant\n" if args == ["ps", "--services", "--status", "running"] else "",
+    )
+    monkeypatch.setattr(infra, "_http_health", lambda url: False)
+
+    exit_code = infra.handle_mode_command(Namespace(mode_command="show"))
+    output = capsys.readouterr().out
+
+    assert exit_code == horde_cli.EXIT_OK
+    assert "Mode: local (configured)" in output
+    assert "Runtime mode: team (detected from running containers)" in output

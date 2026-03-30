@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import os
+import re
 from enum import Enum
 from typing import Any
 
 from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
 from storage.backends import StorageBackend, get_storage_backend
+
+try:
+    from rag.vector_store import QdrantStore
+except Exception:  # noqa: BLE001
+    QdrantStore = None
+
+_QDRANT_STORE_CACHE: Any | None = None
 
 
 class MemoryType(Enum):
@@ -45,7 +53,38 @@ class MemoryAgent(BaseAgent):
             or {}
         )
 
+        raw_query = context.get("query")
+        query = self._resolve_query(raw_query, context)
+        if isinstance(query, str) and query.strip():
+            memory_context = self._build_memory_context(query.strip(), rag_index)
+            return build_agent_result(
+                status="SUCCESS",
+                artifact_type="memory_context",
+                artifact_content=memory_context,
+                reason="Memory context retrieved from indexed documents.",
+                confidence=0.84 if memory_context.get("matches") else 0.72,
+                logs=[
+                    f"Memory retrieval query received: {query.strip()[:120]}",
+                    f"Memory retrieval matches: {len(memory_context.get('matches', []))}.",
+                ],
+                next_actions=["code_generator", "architecture_planner"],
+            )
+
+        repository_input = context.get("repository")
+        has_repository_input = isinstance(repository_input, dict) and bool(
+            str(repository_input.get("full_name") or "").strip()
+        )
+
         has_repo = bool(repository_metadata)
+        if not has_repo and has_repository_input:
+            full_name = str(repository_input.get("full_name")).strip()
+            owner, _, repo_name = full_name.partition("/")
+            repository_metadata = {
+                "owner": owner or "unknown",
+                "repo_name": repo_name or "unknown",
+                "full_name": full_name,
+            }
+            has_repo = True
         has_rag = bool(rag_index)
         status = "SUCCESS" if has_repo and has_rag else "PARTIAL_SUCCESS"
         memory_state = {
@@ -81,6 +120,170 @@ class MemoryAgent(BaseAgent):
             ],
             next_actions=["architecture_evaluator", "test_analyzer"],
         )
+
+    def _resolve_query(self, raw_query: Any, context: dict[str, Any]) -> str:
+        if isinstance(raw_query, str):
+            query = raw_query.strip()
+            if query and "{{" not in query and "}}" not in query:
+                return query
+
+        issue = context.get("issue")
+        if not isinstance(issue, dict):
+            return ""
+
+        parts: list[str] = []
+        title = issue.get("title")
+        body = issue.get("body")
+        comments_context = issue.get("comments_context")
+        comments = issue.get("comments")
+
+        if isinstance(title, str) and title.strip():
+            parts.append(title.strip())
+        if isinstance(body, str) and body.strip():
+            parts.append(body.strip())
+        if isinstance(comments_context, str) and comments_context.strip():
+            parts.append(comments_context.strip())
+        if isinstance(comments, list):
+            comment_bodies: list[str] = []
+            for item in comments:
+                if not isinstance(item, dict):
+                    continue
+                body_value = item.get("body")
+                if isinstance(body_value, str) and body_value.strip():
+                    comment_bodies.append(body_value.strip())
+            if comment_bodies:
+                parts.append("\n".join(comment_bodies[:10]))
+
+        return "\n".join(part for part in parts if part)
+
+    def _build_memory_context(self, query: str, rag_index: dict[str, Any]) -> dict[str, Any]:
+        semantic_matches = self._semantic_search(query=query, rag_index=rag_index, limit=8)
+
+        documents = rag_index.get("documents")
+        if not isinstance(documents, list):
+            documents = []
+
+        query_tokens = self._tokenize(query)
+        lexical_matches: list[dict[str, Any]] = []
+
+        for item in documents:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path", "")).strip()
+            summary = str(item.get("summary", "")).strip()
+            content = str(item.get("content", "")).strip()
+            searchable = f"{path} {summary} {content}".strip()
+            score = self._overlap_score(query_tokens, self._tokenize(searchable))
+            if score <= 0:
+                continue
+            lexical_matches.append(
+                {
+                    "path": path or "unknown",
+                    "summary": summary or content[:200],
+                    "score": float(score),
+                    "source": "lexical",
+                }
+            )
+
+        lexical_matches.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
+
+        merged: dict[str, dict[str, Any]] = {}
+        for item in semantic_matches + lexical_matches:
+            key = f"{item.get('path')}|{item.get('summary')}"
+            existing = merged.get(key)
+            if existing is None or float(item.get("score", 0.0)) > float(
+                existing.get("score", 0.0)
+            ):
+                merged[key] = item
+
+        ranked_matches = sorted(
+            merged.values(),
+            key=lambda item: float(item.get("score", 0.0)),
+            reverse=True,
+        )
+
+        return {
+            "query": query,
+            "matches": ranked_matches[:5],
+            "documents_count": int(rag_index.get("documents_count", len(documents)) or 0),
+            "collection_name": str(rag_index.get("collection_name") or "repo_chunks"),
+        }
+
+    def _semantic_search(
+        self, *, query: str, rag_index: dict[str, Any], limit: int
+    ) -> list[dict[str, Any]]:
+        if QdrantStore is None:
+            return []
+
+        collection_name = str(rag_index.get("collection_name") or "repo_chunks").strip()
+        if not collection_name:
+            collection_name = "repo_chunks"
+
+        try:
+            store = self._get_semantic_store()
+            if store is None:
+                return []
+            query_vectors = store.embed_text([query])
+            if not query_vectors:
+                return []
+            results = store.search(
+                collection_name=collection_name,
+                query_vector=query_vectors[0],
+                limit=max(1, int(limit)),
+            )
+        except Exception:
+            return []
+
+        matches: list[dict[str, Any]] = []
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            payload = result.get("payload", {})
+            if not isinstance(payload, dict):
+                payload = {}
+            text = str(payload.get("text", "")).strip()
+            path = str(payload.get("file_path", "")).strip() or "unknown"
+            symbol_name = str(payload.get("symbol_name", "")).strip()
+            summary = text[:220] if text else symbol_name or "semantic_match"
+            score = float(result.get("score", 0.0) or 0.0)
+            if score <= 0:
+                continue
+            matches.append(
+                {
+                    "path": path,
+                    "summary": summary,
+                    "score": score,
+                    "source": "semantic",
+                }
+            )
+        return matches
+
+    def _get_semantic_store(self) -> Any | None:
+        global _QDRANT_STORE_CACHE
+        if _QDRANT_STORE_CACHE is not None:
+            return _QDRANT_STORE_CACHE
+        if QdrantStore is None:
+            return None
+        try:
+            _QDRANT_STORE_CACHE = QdrantStore(check_compatibility=False, mode="host")
+            return _QDRANT_STORE_CACHE
+        except Exception:
+            return None
+
+    @staticmethod
+    def _tokenize(text: str) -> set[str]:
+        if not text:
+            return set()
+        return {token for token in re.findall(r"[a-zA-Z0-9_]+", text.lower()) if len(token) > 2}
+
+    @staticmethod
+    def _overlap_score(query_tokens: set[str], target_tokens: set[str]) -> float:
+        if not query_tokens or not target_tokens:
+            return 0.0
+        overlap = query_tokens.intersection(target_tokens)
+        if not overlap:
+            return 0.0
+        return len(overlap) / len(query_tokens)
 
 
 def setup_memory(config: dict[str, Any]) -> dict[str, Any]:

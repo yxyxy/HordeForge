@@ -558,6 +558,36 @@ class GitHubClient:
         )
         return result.get("issues", [])
 
+    def get_issue_comments(
+        self,
+        issue_number: int,
+        *,
+        page: int = 1,
+        per_page: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Get comments for an issue.
+
+        Args:
+            issue_number: Issue number
+            page: Page number
+            per_page: Items per page (max 100)
+
+        Returns:
+            List of issue comments
+        """
+        if per_page > 100:
+            raise GitHubValidationError(
+                "per_page cannot exceed 100",
+                method="GET",
+                url=f"{self.api_url}/issues/{issue_number}/comments",
+            )
+        result = self._request(
+            "GET",
+            f"/issues/{issue_number}/comments",
+            params={"page": page, "per_page": per_page},
+        )
+        return result if isinstance(result, list) else []
+
     # =========================================================================
     # Commit Operations with Pagination (HF-P6-001-ST03)
     # =========================================================================
@@ -851,6 +881,20 @@ class GitHubClient:
     def comment_issue(self, issue_number: int, comment: str) -> dict[str, Any]:
         payload = {"body": comment}
         return self._request("POST", f"/issues/{issue_number}/comments", payload=payload)
+
+    def update_issue_comment(self, comment_id: int, comment: str) -> dict[str, Any]:
+        payload = {"body": comment}
+        return self._request("PATCH", f"/issues/comments/{comment_id}", payload=payload)
+
+    def update_issue_labels(self, issue_number: int, labels: list[str]) -> dict[str, Any]:
+        payload = {"labels": labels}
+        return self._request("PATCH", f"/issues/{issue_number}", payload=payload)
+
+    def update_issue(self, issue_number: int, fields: dict[str, Any]) -> dict[str, Any]:
+        return self._request("PATCH", f"/issues/{issue_number}", payload=fields)
+
+    def close_issue(self, issue_number: int) -> dict[str, Any]:
+        return self.update_issue(issue_number, {"state": "closed"})
 
     def create_branch(self, branch_name: str, from_branch: str = "main") -> dict[str, Any]:
         payload = {

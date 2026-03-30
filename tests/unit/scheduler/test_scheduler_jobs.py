@@ -5,12 +5,15 @@ from scheduler.jobs.dependency_checker import DependencyCheckerJob
 from scheduler.jobs.issue_scanner import IssueScannerJob
 
 
-def test_issue_scanner_triggers_only_agent_ready_and_prevents_duplicates():
+def test_issue_scanner_triggers_all_agent_stages_and_prevents_duplicates():
     job = IssueScannerJob()
     payload = {
-        "labels": ["agent:ready"],
+        "labels": ["agent:opened", "agent:planning", "agent:ready", "agent:fixed"],
         "issues": [
-            {"id": 1, "labels": [{"name": "agent:ready"}]},
+            {"id": 1, "labels": [{"name": "agent:opened"}]},
+            {"id": 4, "labels": [{"name": "agent:planning"}]},
+            {"id": 3, "labels": [{"name": "agent:ready"}]},
+            {"id": 5, "labels": [{"name": "agent:fixed"}]},
             {"id": 2, "labels": [{"name": "bug"}]},
         ],
     }
@@ -18,8 +21,8 @@ def test_issue_scanner_triggers_only_agent_ready_and_prevents_duplicates():
     first = job.run(payload)
     second = job.run(payload)
 
-    assert first["trigger_count"] == 1
-    assert first["triggers"][0]["pipeline_name"] == "backlog_analysis_pipeline"
+    assert first["trigger_count"] == 4
+    assert first["triggers"][0]["pipeline_name"] == "issue_scanner_pipeline"
     assert second["trigger_count"] == 0
 
 

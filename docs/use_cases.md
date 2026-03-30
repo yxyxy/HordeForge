@@ -67,7 +67,7 @@
 - Если спецификация нечеткая -> `BLOCKED` с человеческим вмешательством
 - Если fix loop не достигает успеха -> `FAILED/BLOCKED` с issue-трекингом
 
-## UC-03: CI self-healing
+## UC-03: CI triage and handoff
 
 - Actor: Scheduler / QA
 - Trigger: сбой CI
@@ -77,15 +77,13 @@
 ### Основной сценарий (успешный путь)
 
 1. `ci_failure_analyzer` анализирует причину сбоя.
-2. `fix_agent` генерирует исправления.
-3. `test_runner` запускает тесты.
-4. При необходимости создается/обновляется PR.
-5. `ci_verification` проверяет результаты CI suite.
-6. `issue_closer` закрывает issue после успешного исправления.
+2. `ci_incident_handoff` создает (или переиспользует) issue с полной диагностикой.
+3. На issue ставятся лейблы `agent:opened`, `source:ci_fix_pipeline`, `kind:ci-incident`.
+4. Дальнейшее исправление выполняется staged scanner pipeline (`opened -> planning -> ready -> fixed/close`).
 
 ### Артефакты
 
-- `pipelines/ci_fix_pipeline.yaml` — pipeline из 8 шагов + loops
+- `pipelines/ci_fix_pipeline.yaml` — deterministic triage/handoff pipeline (2 шага)
 - Интеграция с GitHub Actions для real-time тестирования
 - Convergence detection для определения завершения fix loop
 - Cron job `ci_monitor` для периодического мониторинга
@@ -146,7 +144,7 @@
 
 | Job | Interval | Purpose |
 |-----|----------|---------|
-| issue_scanner | configurable | Scan for ready issues |
+| issue_scanner | configurable | Scan staged issues (`opened/planning/ready/fixed`) |
 | ci_monitor | configurable | Monitor CI failures |
 | dependency_checker | configurable | Check for outdated dependencies |
 

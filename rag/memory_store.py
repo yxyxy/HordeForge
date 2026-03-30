@@ -5,7 +5,7 @@ import uuid
 from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
 
-from rag.config import get_embedding_model
+from rag.config import get_embedding_cache_dir, get_embedding_model
 
 
 class MemoryStore:
@@ -15,7 +15,10 @@ class MemoryStore:
 
     def __init__(self, host: str = "localhost", port: int = 6333):
         self.client = QdrantClient(host=host, port=port)
-        self.embedder = TextEmbedding(model_name=get_embedding_model())
+        self.embedder = TextEmbedding(
+            model_name=get_embedding_model(),
+            cache_dir=get_embedding_cache_dir(),
+        )
 
     def add_memory(self, text: str, payload: dict) -> str:
         """

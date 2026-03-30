@@ -253,20 +253,20 @@ def test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests():
     assert 0 <= failed <= total
 
 
-def test_engine_ci_fix_pipeline_runs_to_close_issue_on_mock_data():
+def test_engine_ci_fix_pipeline_runs_to_incident_handoff_on_mock_data():
     engine = OrchestratorEngine(pipelines_dir="pipelines")
     result = engine.run(
         "ci_fix_pipeline",
         {
+            "mock_mode": True,
             "repository": {"full_name": "acme/hordeforge"},
             "ci_run": {"status": "failed", "failed_jobs": [{"name": "unit-tests"}]},
-            "original_issue": {"id": 42, "title": "CI red"},
         },
         run_id="run-ci-fix",
     )
 
     assert result["status"] in {"SUCCESS", "PARTIAL_SUCCESS"}
-    assert result["steps"]["close_issue_agent"]["status"] in {"SUCCESS", "PARTIAL_SUCCESS"}
+    assert result["steps"]["ci_incident_handoff"]["status"] in {"SUCCESS", "PARTIAL_SUCCESS"}
 
 
 def test_engine_blocks_when_retry_policy_exhausted():

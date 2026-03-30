@@ -1,1 +1,250 @@
-[]
+[
+  {
+    "run_id": "default:40e7cec3-3e3c-4f24-b8ca-60ea53564fd1",
+    "pipeline_name": "init_pipeline",
+    "status": "FAILED",
+    "source": "test",
+    "correlation_id": "corr-override-audit-1",
+    "started_at": "2026-03-30T00:29:42.852804+00:00",
+    "tenant_id": "default",
+    "repository_full_name": "yxyxy/hordeforge",
+    "finished_at": "2026-03-30T00:29:43.271038+00:00",
+    "result": {
+      "run_id": "default:40e7cec3-3e3c-4f24-b8ca-60ea53564fd1",
+      "pipeline_name": "init_pipeline",
+      "status": "FAILED",
+      "steps": {
+        "repo_connector": {
+          "decisions": [
+            {
+              "reason": "Repository operation failed: Authentication failed",
+              "confidence": 0.5
+            }
+          ],
+          "next_actions": [
+            "retry_repository_operation",
+            "check_credentials"
+          ],
+          "artifacts": [
+            {
+              "type": "repository_operation",
+              "content": {}
+            }
+          ],
+          "status": "FAILED",
+          "logs": [
+            "Repository operation failed: Authentication failed"
+          ]
+        }
+      },
+      "summary": {
+        "run_id": "default:40e7cec3-3e3c-4f24-b8ca-60ea53564fd1",
+        "pipeline_name": "init_pipeline",
+        "correlation_id": "corr-override-audit-1",
+        "trace_id": "625886d6827b1bd9b65127ce3099ec7f",
+        "run_status": "FAILED",
+        "step_count": 6,
+        "status_counts": {
+          "FAILED": 1,
+          "PENDING": 5
+        },
+        "total_retries": 0,
+        "errors": [],
+        "step_results_count": 1,
+        "step_retries": {
+          "repo_connector": 0,
+          "rag_initializer": 0,
+          "memory_agent": 0,
+          "architecture_evaluator": 0,
+          "test_analyzer": 0,
+          "pipeline_initializer": 0
+        },
+        "step_durations_seconds": {
+          "repo_connector": 0.411754,
+          "rag_initializer": 0.0,
+          "memory_agent": 0.0,
+          "architecture_evaluator": 0.0,
+          "test_analyzer": 0.0,
+          "pipeline_initializer": 0.0
+        }
+      },
+      "run_state": {
+        "run_id": "default:40e7cec3-3e3c-4f24-b8ca-60ea53564fd1",
+        "pipeline_name": "init_pipeline",
+        "correlation_id": "corr-override-audit-1",
+        "trace_id": "625886d6827b1bd9b65127ce3099ec7f",
+        "steps": [
+          {
+            "name": "repo_connector",
+            "agent": "repo_connector",
+            "status": "FAILED",
+            "attempts": 1,
+            "correlation_id": "corr-override-audit-1",
+            "trace_id": "625886d6827b1bd9b65127ce3099ec7f",
+            "span_id": "1ec7824e14404deb",
+            "parent_span_id": "d5caae6513f14ce3",
+            "started_at": "2026-03-30T00:29:42.857023+00:00",
+            "finished_at": "2026-03-30T00:29:43.268777+00:00",
+            "error": null,
+            "output": {
+              "decisions": [
+                {
+                  "reason": "Repository operation failed: Authentication failed",
+                  "confidence": 0.5
+                }
+              ],
+              "next_actions": [
+                "retry_repository_operation",
+                "check_credentials"
+              ],
+              "artifacts": [
+                {
+                  "type": "repository_operation",
+                  "content": {}
+                }
+              ],
+              "status": "FAILED",
+              "logs": [
+                "Repository operation failed: Authentication failed"
+              ]
+            }
+          },
+          {
+            "name": "rag_initializer",
+            "agent": "rag_initializer",
+            "status": "PENDING",
+            "attempts": 0,
+            "correlation_id": null,
+            "trace_id": null,
+            "span_id": null,
+            "parent_span_id": null,
+            "started_at": null,
+            "finished_at": null,
+            "error": null,
+            "output": null
+          },
+          {
+            "name": "memory_agent",
+            "agent": "memory_agent",
+            "status": "PENDING",
+            "attempts": 0,
+            "correlation_id": null,
+            "trace_id": null,
+            "span_id": null,
+            "parent_span_id": null,
+            "started_at": null,
+            "finished_at": null,
+            "error": null,
+            "output": null
+          },
+          {
+            "name": "architecture_evaluator",
+            "agent": "architecture_evaluator",
+            "status": "PENDING",
+            "attempts": 0,
+            "correlation_id": null,
+            "trace_id": null,
+            "span_id": null,
+            "parent_span_id": null,
+            "started_at": null,
+            "finished_at": null,
+            "error": null,
+            "output": null
+          },
+          {
+            "name": "test_analyzer",
+            "agent": "test_analyzer",
+            "status": "PENDING",
+            "attempts": 0,
+            "correlation_id": null,
+            "trace_id": null,
+            "span_id": null,
+            "parent_span_id": null,
+            "started_at": null,
+            "finished_at": null,
+            "error": null,
+            "output": null
+          },
+          {
+            "name": "pipeline_initializer",
+            "agent": "pipeline_initializer",
+            "status": "PENDING",
+            "attempts": 0,
+            "correlation_id": null,
+            "trace_id": null,
+            "span_id": null,
+            "parent_span_id": null,
+            "started_at": null,
+            "finished_at": null,
+            "error": null,
+            "output": null
+          }
+        ],
+        "current_step_index": 0,
+        "run_status": "FAILED"
+      },
+      "trace": {
+        "correlation_id": "corr-override-audit-1",
+        "trace_id": "625886d6827b1bd9b65127ce3099ec7f",
+        "root_span_id": "d5caae6513f14ce3",
+        "steps": [
+          {
+            "step": "repo_connector",
+            "trace_id": "625886d6827b1bd9b65127ce3099ec7f",
+            "span_id": "1ec7824e14404deb",
+            "parent_span_id": "d5caae6513f14ce3",
+            "started_at": "2026-03-30T00:29:42.857023+00:00",
+            "finished_at": "2026-03-30T00:29:43.268777+00:00"
+          },
+          {
+            "step": "rag_initializer",
+            "trace_id": null,
+            "span_id": null,
+            "parent_span_id": null,
+            "started_at": null,
+            "finished_at": null
+          },
+          {
+            "step": "memory_agent",
+            "trace_id": null,
+            "span_id": null,
+            "parent_span_id": null,
+            "started_at": null,
+            "finished_at": null
+          },
+          {
+            "step": "architecture_evaluator",
+            "trace_id": null,
+            "span_id": null,
+            "parent_span_id": null,
+            "started_at": null,
+            "finished_at": null
+          },
+          {
+            "step": "test_analyzer",
+            "trace_id": null,
+            "span_id": null,
+            "parent_span_id": null,
+            "started_at": null,
+            "finished_at": null
+          },
+          {
+            "step": "pipeline_initializer",
+            "trace_id": null,
+            "span_id": null,
+            "parent_span_id": null,
+            "started_at": null,
+            "finished_at": null
+          }
+        ]
+      }
+    },
+    "error": null,
+    "inputs": {
+      "repo_url": "https://github.com/yxyxy/hordeforge.git",
+      "github_token": "[REDACTED]"
+    },
+    "idempotency_key": "override-audit-key-1",
+    "override_state": null
+  }
+]

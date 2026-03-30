@@ -190,14 +190,12 @@ HordeForge/
     +-- validation.py
     L-- pipeline_validator.py
 +-- pipelines/
-    +-- all_issues_no_filter_pipeline.yaml
-    +-- all_issues_scanner_pipeline.yaml
-    +-- backlog_analysis_pipeline.yaml
     +-- ci_fix_pipeline.yaml
     +-- ci_monitoring_pipeline.yaml
     +-- code_generation.yaml
     +-- dependency_check_pipeline.yaml
     +-- feature_pipeline.yaml
+    +-- issue_scanner_pipeline.yaml
     L-- init_pipeline.yaml
 +-- rag/
     +-- __init__.py

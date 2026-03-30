@@ -270,6 +270,26 @@ class StepExecutor:
                 except (TypeError, ValueError):
                     continue
 
+        # Preserve GitHub patch workflow metadata so downstream agents (e.g. pr_merge_agent)
+        # can consume PR details from code_patch artifacts.
+        pr_number = content_dict.get("pr_number")
+        if isinstance(pr_number, int):
+            normalized_content["pr_number"] = pr_number
+
+        for key in ("pr_url", "branch_name", "apply_error"):
+            value = content_dict.get(key)
+            if isinstance(value, str) and value.strip():
+                normalized_content[key] = value
+
+        for key in ("applied_to_github", "rollback_performed", "llm_enhanced"):
+            value = content_dict.get(key)
+            if isinstance(value, bool):
+                normalized_content[key] = value
+
+        notes = content_dict.get("notes")
+        if isinstance(notes, list):
+            normalized_content["notes"] = [str(item) for item in notes]
+
         return normalized_content
 
     @staticmethod

@@ -14,6 +14,13 @@ def test_default_schedule_registry_contains_foundation_jobs():
     assert "issue_scanner" in names
     assert "ci_monitor" in names
     assert "dependency_checker" in names
+    issue_scanner = registry.get("issue_scanner")
+    assert issue_scanner.default_inputs["labels"] == [
+        "agent:opened",
+        "agent:planning",
+        "agent:ready",
+        "agent:fixed",
+    ]
 
 
 def test_schedule_registry_supports_enable_disable_flags():

@@ -120,24 +120,12 @@ Unified runtime configuration is loaded from environment variables via `RunConfi
 
 ## LLM Configuration
 
-Configure your LLM provider in `.env` (see `.env.example` for all options):
+Configure default LLM via profile-store (recommended):
 
 ```bash
-# OpenAI (default provider)
-HORDEFORGE_LLM_PROVIDER=openai
-HORDEFORGE_OPENAI_API_KEY=your-openai-key
-
-# Anthropic
-HORDEFORGE_LLM_PROVIDER=anthropic
-HORDEFORGE_ANTHROPIC_API_KEY=your-anthropic-key
-
-# Google
-HORDEFORGE_LLM_PROVIDER=google
-HORDEFORGE_GOOGLE_API_KEY=your-google-key
-
-# Ollama (local models)
-HORDEFORGE_LLM_PROVIDER=ollama
-HORDEFORGE_OLLAMA_BASE_URL=http://localhost:11434
+horde llm profile add openai-main --provider openai --model gpt-4o --api-key YOUR_OPENAI_KEY --set-default
+horde llm profile list
+horde llm --profile openai-main test
 ```
 
 ## CLI Interface
@@ -170,8 +158,8 @@ hordeforge llm budget
 
 ### Interactive CLI (`horde`)
 ```bash
-# One-time repo profile setup (stores URL + token reference locally)
-horde repo add yxyxy/HordeForge --url https://github.com/yxyxy/HordeForge --token YOUR_GITHUB_TOKEN --set-default
+# One-time repo profile setup (repo id is inferred from URL)
+horde repo add --url https://github.com/yxyxy/HordeForge --token YOUR_GITHUB_TOKEN --set-default
 
 # Optional secret management
 horde secret set github.main YOUR_GITHUB_TOKEN
@@ -303,32 +291,48 @@ horde llm budget
 ## Pipelines
 
 ### Feature Pipeline
-Complete feature implementation from GitHub issue to merged PR:
+Execution pipeline for prepared issues:
 ```
-dod_extractor → architecture_planner → specification_writer → task_decomposer → 
-bdd_generator → test_generator → code_generator → test_runner → 
-fix_agent (loop) → review_agent → pr_merge_agent → ci_monitor
+rag_initializer -> memory_retrieval -> code_generator -> test_runner ->
+fix_agent (loop) -> review_agent -> memory_writer -> pr_merge_agent
 ```
 
+Safety gates in `pr_merge_agent`:
+- review decision must be `approve`
+- tests must pass
+- PR must exist
+- in dry-run/no-live mode `merged=false`
+
 ### CI Fix Pipeline
-Automatic CI failure detection and resolution:
+CI failure triage and handoff:
 ```
-ci_failure_analyzer → fix_agent → test_runner → review_agent → pr_merge
+ci_failure_analyzer -> ci_incident_handoff
 ```
+Result: creates/updates incident issue with labels `agent:opened`, `source:ci_fix_pipeline`, `kind:ci-incident`.
+
+### Issue Scanner Pipeline
+Scans staged issues (`agent:opened`, `agent:planning`, `agent:ready`, `agent:fixed`) and dispatches implementation:
+```
+repo_connector -> issue_scanner -> issue_pipeline_dispatcher -> feature_pipeline
+```
+`issue_pipeline_dispatcher` behavior by label:
+- `agent:opened` -> set `agent:planning`, run planning (DoD/BDD/TDD + planning comment), dispatch to `feature_pipeline`, set `agent:ready`.
+- `agent:planning` -> run planning again, then dispatch to `feature_pipeline`.
+- `agent:ready` -> dispatch to `feature_pipeline` without planning.
+- `agent:fixed` -> validate related merged PR and close issue when linkage is valid.
 
 ### Init Pipeline
 Repository initialization and setup:
 ```
-repo_connector → rag_initializer → memory_agent → architecture_evaluator → 
-test_analyzer → pipeline_initializer
+repo_connector -> rag_initializer -> memory_agent -> architecture_evaluator ->
+test_analyzer -> pipeline_initializer
 ```
 
 ### Code Generation Pipeline
 Pipeline for code generation:
 ```
-code_generator → test_runner → fix_agent → review_agent
+code_generator -> test_runner -> fix_agent -> review_agent
 ```
-
 ## Development
 
 ### Requirements
@@ -401,3 +405,4 @@ See [Contributing Guide](docs/contributing.md) for contribution guidelines and [
 ## License
 
 MIT License
+

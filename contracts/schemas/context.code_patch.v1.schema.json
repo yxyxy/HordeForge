@@ -55,6 +55,36 @@
     "remaining_failures": {
       "type": "integer",
       "minimum": 0
+    },
+    "pr_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pr_url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "branch_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "applied_to_github": {
+      "type": "boolean"
+    },
+    "apply_error": {
+      "type": "string"
+    },
+    "rollback_performed": {
+      "type": "boolean"
+    },
+    "llm_enhanced": {
+      "type": "boolean"
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   }
 }

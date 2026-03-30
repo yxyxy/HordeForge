@@ -152,7 +152,7 @@ def test_cron_jobs_e2e_cover_registered_jobs_and_idempotency():
     assert "issue_scanner" in names
     assert "ci_monitor" in names
 
-    issue_payload = {"issues": [{"id": 9001, "labels": [{"name": "agent:ready"}]}]}
+    issue_payload = {"issues": [{"id": 9001, "labels": [{"name": "agent:opened"}]}]}
     ci_payload = {
         "workflow_runs": [{"id": 9002, "status": "completed", "conclusion": "failure"}],
         "repository": {"full_name": "acme/hordeforge"},
@@ -194,7 +194,7 @@ def test_cron_jobs_e2e_cover_registered_jobs_and_idempotency():
     assert first_ci_result["published_count"] == 1
     assert second_ci_result["published_count"] == 0
 
-    backlog_runs = gateway.RUN_REPOSITORY.list(pipeline_name="backlog_analysis_pipeline", limit=20)
+    scanner_runs = gateway.RUN_REPOSITORY.list(pipeline_name="issue_scanner_pipeline", limit=20)
     ci_fix_runs = gateway.RUN_REPOSITORY.list(pipeline_name="ci_fix_pipeline", limit=20)
-    assert len(backlog_runs) == 1
+    assert len(scanner_runs) == 1
     assert len(ci_fix_runs) == 1

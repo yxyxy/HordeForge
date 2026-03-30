@@ -1,5 +1,8 @@
 """TDD: Test-Driven Development для Code Generator Agent"""
 
+import json
+
+import agents.code_generator as code_generator_module
 from agents.code_generator import CodeGenerator
 
 
@@ -111,3 +114,122 @@ class TestCodeGeneratorAgent:
 
         # Assert
         assert CodeGenerator == AliasCodeGenerator
+
+    def test_default_branch_name_format(self):
+        """Default branch name follows horde/<issue-number>-<slug>."""
+        generator = CodeGenerator()
+        branch = generator._default_branch_name(  # noqa: SLF001
+            {"issue": {"number": 42, "title": "Fix Bandit B608 and B310 now"}}
+        )
+
+        assert branch == "horde/42-fix-bandit-b608-and-b310-now"
+
+    def test_detects_ci_incident_ghcr_permission_pattern(self):
+        generator = CodeGenerator()
+        issue_context = (
+            "ERROR: failed to push ghcr.io/org/repo:main: denied: installation not allowed "
+            "to Create organization package"
+        )
+
+        assert generator._should_apply_ghcr_permissions_fix(issue_context) is True  # noqa: SLF001
+
+    def test_detects_ci_incident_ghcr_permission_pattern_when_message_truncated(self):
+        generator = CodeGenerator()
+        issue_context = "failed to push ghcr.io/x/y:main: denied: installation not allowed to Creat"
+
+        assert generator._should_apply_ghcr_permissions_fix(issue_context) is True  # noqa: SLF001
+
+    def test_builds_ci_patch_from_workflow_for_ghcr_permission_issue(self):
+        generator = CodeGenerator()
+        issue_context = "failed to push ghcr.io/x/y:main: denied: installation not allowed to Create organization package"
+        workflow = (
+            "name: CI\n\non:\n  push:\n    branches: [main]\n\nenv:\n  DOCKER_REGISTRY: ghcr.io\n"
+        )
+
+        patch = generator._build_ci_permissions_patch_from_workflow(  # noqa: SLF001
+            issue_context, workflow
+        )
+
+        assert patch is not None
+        assert patch["files"][0]["path"] == ".github/workflows/ci.yml"
+        content = patch["files"][0]["content"]
+        assert "permissions:" in content
+        assert "packages: write" in content
+
+    def test_normalize_llm_error_for_json_decode(self):
+        generator = CodeGenerator()
+        exc = json.JSONDecodeError("Expecting value", "", 0)
+
+        normalized = generator._normalize_llm_error(exc)  # noqa: SLF001
+
+        assert "invalid JSON payload" in normalized
+        assert "credentials/profile" in normalized
+
+    def test_marks_issue_as_fixed_when_pr_created(self, monkeypatch):
+        updated_labels: list[tuple[int, list[str]]] = []
+
+        class _FakeGitHubClient:
+            def update_issue_labels(self, issue_number: int, labels: list[str]):
+                updated_labels.append((issue_number, labels))
+                return {"number": issue_number, "labels": labels}
+
+        class _FakePatchResult:
+            success = True
+            pr_url = "https://github.com/acme/hordeforge/pull/1"
+            pr_number = 1
+            branch_name = "horde/3-fix"
+            error = None
+            rollback_performed = False
+
+        class _FakePatchWorkflow:
+            def __init__(self, github_client):
+                self.github_client = github_client
+
+            def apply_patch(self, files, pr_title, pr_body, branch_name):
+                return _FakePatchResult()
+
+        generator = CodeGenerator()
+        fake_client = _FakeGitHubClient()
+        monkeypatch.setattr(
+            generator,
+            "_resolve_github_client",
+            lambda context: (fake_client, "provided_in_context"),
+        )
+        monkeypatch.setattr(
+            code_generator_module,
+            "PatchWorkflowOrchestrator",
+            _FakePatchWorkflow,
+        )
+
+        context = {
+            "use_llm": False,
+            "github_token": "ghs_test",
+            "repository": {"full_name": "acme/hordeforge"},
+            "issue": {
+                "number": 3,
+                "title": "Fix CI",
+                "labels": [{"name": "agent:planning"}, {"name": "kind:ci-incident"}],
+            },
+            "specification_writer": {
+                "artifacts": [
+                    {
+                        "type": "spec",
+                        "content": {
+                            "summary": "Fix CI",
+                            "file_changes": [{"path": "src/feature_impl.py"}],
+                        },
+                    }
+                ]
+            },
+        }
+
+        result = generator.run(context)
+
+        assert result["status"] == "SUCCESS"
+        artifact = result["artifacts"][0]["content"]
+        assert artifact["applied_to_github"] is True
+        assert artifact["pr_number"] == 1
+        assert updated_labels
+        assert updated_labels[0][0] == 3
+        assert "agent:fixed" in updated_labels[0][1]
+        assert "agent:planning" not in updated_labels[0][1]

@@ -377,6 +377,24 @@ def extract_key_info(issue: dict[str, Any]) -> dict[str, Any]:
     return key_info
 
 
+def build_comments_context(comments: list[dict[str, Any]]) -> str:
+    """Build a compact textual context from issue comments."""
+    comment_lines: list[str] = []
+    for item in comments:
+        if not isinstance(item, dict):
+            continue
+        body = item.get("body")
+        if not isinstance(body, str) or not body.strip():
+            continue
+        author = item.get("user", {})
+        author_login = ""
+        if isinstance(author, dict):
+            author_login = str(author.get("login", "")).strip()
+        prefix = f"{author_login}: " if author_login else ""
+        comment_lines.append(f"{prefix}{body.strip()}")
+    return "\n".join(comment_lines)
+
+
 def check_duplicate(
     issue: dict[str, Any], processed_issues: list[dict[str, Any]]
 ) -> tuple[bool, str | None]:
@@ -501,6 +519,7 @@ class IssueScanner(BaseAgent):
         github_client = context.get("github_client")
         repo = context.get("repo", "")
         options = context.get("scan_options", {})
+        include_comments = bool(options.get("include_comments", False))
 
         # Get scan parameters
         state = options.get("state", "open")
@@ -612,13 +631,37 @@ class IssueScanner(BaseAgent):
             # Classify issue
             title = issue.get("title", "")
             body = issue.get("body", "") or issue.get("description", "")
+            comments: list[dict[str, Any]] = []
+            comments_context = ""
+            issue_number = issue.get("number")
+            if (
+                include_comments
+                and github_client
+                and isinstance(issue_number, int)
+                and issue_number > 0
+            ):
+                try:
+                    comments = github_client.get_issue_comments(issue_number, per_page=50)
+                    comments_context = build_comments_context(comments)
+                except Exception as exc:
+                    logger.warning("Failed to fetch comments for issue #%s: %s", issue_number, exc)
 
-            issue_type = classify_issue_type(title, body, labels)
-            priority = determine_priority(title, body, labels)
-            complexity = estimate_complexity(title, body)
+            analysis_body = (
+                f"{body}\n\n## Comments Context\n{comments_context}" if comments_context else body
+            )
+
+            issue_type = classify_issue_type(title, analysis_body, labels)
+            priority = determine_priority(title, analysis_body, labels)
+            complexity = estimate_complexity(title, analysis_body)
 
             # Extract key information
-            key_info = extract_key_info(issue)
+            issue_for_key_info = dict(issue)
+            issue_for_key_info["body"] = analysis_body
+            key_info = extract_key_info(issue_for_key_info)
+            if include_comments:
+                key_info["comments_count"] = len(comments)
+                if comments_context:
+                    key_info["comments_context"] = comments_context[:3000]
 
             # Check for acceptance criteria
             has_ac = bool(key_info.get("acceptance_criteria"))
@@ -657,6 +700,9 @@ class IssueScanner(BaseAgent):
                     ),
                     "created_at": issue.get("created_at"),
                     "updated_at": issue.get("updated_at"),
+                    "comments_count": len(comments)
+                    if include_comments
+                    else issue.get("comments", 0),
                 }
             )
 

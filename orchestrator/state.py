@@ -118,6 +118,7 @@ class PipelineRunState:
                 self.run_status = StepStatus.RUNNING.value
             if next_status in {
                 StepStatus.SUCCESS,
+                StepStatus.PARTIAL_SUCCESS,
                 StepStatus.FAILED,
                 StepStatus.BLOCKED,
                 StepStatus.SKIPPED,

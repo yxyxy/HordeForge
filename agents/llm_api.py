@@ -21,6 +21,7 @@ from .llm_providers import (
     MoonshotHandler,
     OllamaHandler,
     OpenRouterHandler,
+    QwenCodeHandler,
     QwenHandler,
     TogetherHandler,
     VertexHandler,
@@ -71,6 +72,7 @@ class ApiProvider(Enum):
     FIREWORKS = "fireworks"
     TOGETHER = "together"
     QWEN = "qwen"
+    QWEN_CODE = "qwen-code"
     MISTRAL = "mistral"
     HUGGINGFACE = "huggingface"
     LITELLM = "litellm"
@@ -200,6 +202,11 @@ class LlmApi:
         elif self.config.provider == ApiProvider.QWEN:
             return QwenHandler(
                 qwen_api_key=self.config.api_key,
+                qwen_model_id=self.config.model,
+            )
+        elif self.config.provider == ApiProvider.QWEN_CODE:
+            return QwenCodeHandler(
+                qwen_oauth_credentials_json=self.config.api_key,
                 qwen_model_id=self.config.model,
             )
         elif self.config.provider == ApiProvider.MISTRAL:

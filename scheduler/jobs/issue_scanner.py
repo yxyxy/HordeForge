@@ -8,7 +8,12 @@ class IssueScannerJob:
         self._processed_issue_ids: set[int] = set()
 
     def run(self, payload: dict[str, Any]) -> dict[str, Any]:
-        labels_filter = set(payload.get("labels", ["agent:ready"]))
+        labels_filter = set(
+            payload.get(
+                "labels",
+                ["agent:opened", "agent:planning", "agent:ready", "agent:fixed"],
+            )
+        )
         issues = payload.get("issues", [])
         if not isinstance(issues, list):
             issues = []
@@ -32,7 +37,7 @@ class IssueScannerJob:
             self._processed_issue_ids.add(issue_id)
             triggers.append(
                 {
-                    "pipeline_name": "backlog_analysis_pipeline",
+                    "pipeline_name": "issue_scanner_pipeline",
                     "inputs": {"issue": issue},
                     "idempotency_key": f"issue_scanner:{issue_id}",
                 }

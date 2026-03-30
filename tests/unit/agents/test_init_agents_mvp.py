@@ -98,6 +98,29 @@ def test_rag_initializer_builds_minimal_docs_index():
             assert documents[1]["path"].endswith("b.md")
 
 
+def test_rag_initializer_reuses_existing_index_without_reindex(monkeypatch):
+    def _fail_if_reindex_called(*args, **kwargs):
+        raise AssertionError("reindex should not be triggered when existing index is reusable")
+
+    monkeypatch.setattr("agents.rag_initializer._get_existing_collection_points", lambda _: 42)
+    monkeypatch.setattr(
+        "agents.rag_initializer.extract_and_index_repository", _fail_if_reindex_called
+    )
+
+    agent = RagInitializer()
+    result = agent.run(
+        {
+            "repository": {"full_name": "acme/hordeforge"},
+            "reuse_existing_rag_index": True,
+        }
+    )
+
+    assert result["status"] == "SUCCESS"
+    rag_index = _artifact_content(result, "rag_index")
+    assert rag_index["reused_existing_index"] is True
+    assert rag_index["existing_points_count"] == 42
+
+
 def test_memory_agent_returns_downstream_ready_memory_state():
     agent = MemoryAgent()
     context = {
@@ -120,6 +143,150 @@ def test_memory_agent_returns_downstream_ready_memory_state():
     assert memory_state["repository"]["repo_name"] == "hordeforge"
     assert memory_state["knowledge"]["documents_count"] == 3
     assert isinstance(memory_state["events"], list)
+
+
+def test_memory_agent_retrieves_memory_context_for_query():
+    agent = MemoryAgent()
+    context = {
+        "query": "docker push denied",
+        "rag_initializer": _step_result(
+            "SUCCESS",
+            "rag_index",
+            {
+                "documents_count": 2,
+                "documents": [
+                    {
+                        "path": "docs/ci.md",
+                        "summary": "GHCR push denied due to missing package permissions",
+                    },
+                    {
+                        "path": "docs/other.md",
+                        "summary": "Unrelated docs section",
+                    },
+                ],
+            },
+        ),
+    }
+
+    result = agent.run(context)
+
+    assert result["status"] in {"SUCCESS", "PARTIAL_SUCCESS"}
+    memory_context = _artifact_content(result, "memory_context")
+    assert memory_context["query"] == "docker push denied"
+    assert isinstance(memory_context["matches"], list)
+    assert len(memory_context["matches"]) >= 1
+    assert memory_context["matches"][0]["path"] == "docs/ci.md"
+
+
+def test_memory_agent_uses_semantic_rag_search_when_documents_missing(monkeypatch):
+    class _FakeQdrantStore:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def embed_text(self, texts):
+            assert texts
+            return [[0.1, 0.2, 0.3]]
+
+        def search(self, collection_name, query_vector, limit=10, filters=None):
+            assert collection_name == "repo_chunks"
+            assert query_vector
+            assert limit >= 1
+            return [
+                {
+                    "id": "chunk-1",
+                    "score": 0.91,
+                    "payload": {
+                        "text": "build failed to push image to ghcr due to permissions",
+                        "file_path": ".github/workflows/ci.yml",
+                        "symbol_name": "Build and push",
+                    },
+                }
+            ]
+
+    monkeypatch.setattr("agents.memory_agent.QdrantStore", _FakeQdrantStore)
+    monkeypatch.setattr("agents.memory_agent._QDRANT_STORE_CACHE", None)
+
+    agent = MemoryAgent()
+    context = {
+        "query": "ghcr push permissions denied",
+        "rag_initializer": _step_result(
+            "SUCCESS",
+            "rag_index",
+            {
+                "collection_name": "repo_chunks",
+                "documents_count": 0,
+                "reused_existing_index": True,
+            },
+        ),
+    }
+
+    result = agent.run(context)
+
+    assert result["status"] == "SUCCESS"
+    memory_context = _artifact_content(result, "memory_context")
+    assert memory_context["query"] == "ghcr push permissions denied"
+    assert len(memory_context["matches"]) == 1
+    assert memory_context["matches"][0]["path"] == ".github/workflows/ci.yml"
+    assert memory_context["matches"][0]["source"] == "semantic"
+
+
+def test_memory_agent_resolves_template_query_from_issue_context():
+    agent = MemoryAgent()
+    context = {
+        "query": "{{issue.title}} {{issue.body}}",
+        "issue": {
+            "title": "Fix GHCR push permissions",
+            "body": "Build and push fails with denied create organization package",
+            "comments": [
+                {"body": "Observed in Build Docker job"},
+                {"body": "Likely token permissions issue"},
+            ],
+        },
+        "rag_initializer": _step_result(
+            "SUCCESS",
+            "rag_index",
+            {
+                "documents_count": 1,
+                "documents": [
+                    {
+                        "path": ".github/workflows/ci.yml",
+                        "summary": "Build Docker job uses ghcr push",
+                        "content": "denied create organization package",
+                    }
+                ],
+            },
+        ),
+    }
+
+    result = agent.run(context)
+
+    assert result["status"] == "SUCCESS"
+    memory_context = _artifact_content(result, "memory_context")
+    assert "Fix GHCR push permissions" in memory_context["query"]
+    assert "denied create organization package" in memory_context["query"]
+    assert "Observed in Build Docker job" in memory_context["query"]
+
+
+def test_memory_agent_writer_uses_repository_input_when_repo_connector_absent():
+    agent = MemoryAgent()
+    context = {
+        "repository": {"full_name": "acme/hordeforge"},
+        "rag_initializer": _step_result(
+            "SUCCESS",
+            "rag_index",
+            {
+                "documents_count": 10,
+                "index_id": "repo_index_x",
+            },
+        ),
+    }
+
+    result = agent.run(context)
+
+    assert result["status"] == "SUCCESS"
+    memory_state = _artifact_content(result, "memory_state")
+    assert memory_state["repository"]["full_name"] == "acme/hordeforge"
+    assert memory_state["repository"]["owner"] == "acme"
 
 
 def test_architecture_evaluator_returns_report_and_partial_when_context_missing():

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass, field
@@ -11,6 +12,7 @@ from typing import Any
 
 import anthropic
 import google.genai as genai
+import requests
 from openai import OpenAI
 from tenacity import (
     retry,
@@ -268,19 +270,24 @@ class OpenAIWrapper(LLMWrapper, ApiHandler):
         model: str = "gpt-4o",
         timeout: int = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        base_url: str | None = None,
+        env_var_name: str = "HORDEFORGE_OPENAI_API_KEY",
     ):
+        self._env_var_name = env_var_name
         super().__init__(api_key, model, timeout, max_retries)
         self._client = None
         self._current_stream = None
+        self._base_url = base_url
 
     def _get_api_key_from_env(self) -> str:
-        return os.getenv("HORDEFORGE_OPENAI_API_KEY", "")
+        return os.getenv(self._env_var_name, "")
 
     def _get_client(self):
         if self._client is None and self._api_key:
             try:
                 self._client = OpenAI(
                     api_key=self._api_key,
+                    base_url=self._base_url,
                     timeout=self._timeout,
                     max_retries=0,  # We handle retries ourselves
                 )
@@ -742,21 +749,238 @@ class GoogleGenAIWrapper(LLMWrapper, ApiHandler):
         self._client = None
 
 
+class QwenCodeWrapper(LLMWrapper):
+    """Qwen Code wrapper backed by OAuth credentials JSON from profile store."""
+
+    _TOKEN_ENDPOINT = "https://chat.qwen.ai/api/v1/oauth2/token"
+    _CLIENT_ID = "f0304373b74a44d2b584a3fb70ca9e56"
+
+    def __init__(
+        self,
+        oauth_credentials_json: str,
+        model: str = "qwen3-coder-plus",
+        timeout: int = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+    ):
+        super().__init__(
+            api_key=oauth_credentials_json, model=model, timeout=timeout, max_retries=max_retries
+        )
+        self._credentials = self._parse_credentials(oauth_credentials_json)
+
+    def _get_api_key_from_env(self) -> str:
+        return ""
+
+    @staticmethod
+    def _parse_credentials(raw_json: str) -> dict[str, Any]:
+        try:
+            credentials = json.loads(raw_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Invalid Qwen Code OAuth credentials JSON") from exc
+
+        if not isinstance(credentials, dict):
+            raise ValueError("Invalid Qwen Code OAuth credentials payload")
+        if not isinstance(credentials.get("refresh_token"), str) or not credentials.get(
+            "refresh_token"
+        ):
+            raise ValueError("Qwen Code OAuth refresh_token is missing")
+        if "access_token" not in credentials:
+            credentials["access_token"] = ""
+        return credentials
+
+    @staticmethod
+    def _is_token_valid(credentials: dict[str, Any]) -> bool:
+        access_token = credentials.get("access_token")
+        expiry = credentials.get("expiry_date")
+        if not isinstance(access_token, str) or not access_token:
+            return False
+        if not isinstance(expiry, int):
+            return False
+        return int(time.time() * 1000) < (expiry - 30_000)
+
+    def _refresh_access_token(self) -> None:
+        refresh_token = self._credentials.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token:
+            raise RuntimeError("Qwen OAuth refresh_token is missing")
+
+        response = requests.post(
+            self._TOKEN_ENDPOINT,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": self._CLIENT_ID,
+            },
+            timeout=20,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"Qwen OAuth refresh failed: {response.status_code} {response.text}")
+        token_data = response.json()
+        if isinstance(token_data, dict) and token_data.get("error"):
+            raise RuntimeError(
+                f"Qwen OAuth refresh failed: {token_data.get('error')} "
+                f"{token_data.get('error_description', '')}".strip()
+            )
+
+        access_token = token_data.get("access_token")
+        expires_in = token_data.get("expires_in")
+        if not isinstance(access_token, str) or not access_token:
+            raise RuntimeError("Qwen OAuth refresh did not return access_token")
+        if not isinstance(expires_in, int):
+            raise RuntimeError("Qwen OAuth refresh did not return expires_in")
+
+        self._credentials["access_token"] = access_token
+        self._credentials["refresh_token"] = token_data.get(
+            "refresh_token", self._credentials.get("refresh_token")
+        )
+        self._credentials["token_type"] = token_data.get(
+            "token_type", self._credentials.get("token_type", "Bearer")
+        )
+        self._credentials["expiry_date"] = int(time.time() * 1000) + expires_in * 1000
+
+    def _resolve_base_url(self) -> str:
+        base_url = self._credentials.get(
+            "resource_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        )
+        if not isinstance(base_url, str) or not base_url:
+            base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        if not base_url.startswith("http://") and not base_url.startswith("https://"):
+            base_url = f"https://{base_url}"
+        if not base_url.endswith("/v1"):
+            base_url = f"{base_url.rstrip('/')}/v1"
+        return base_url
+
+    def _client(self) -> OpenAI:
+        if not self._is_token_valid(self._credentials):
+            self._refresh_access_token()
+        access_token = self._credentials.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise RuntimeError("Qwen OAuth access_token is missing")
+        return OpenAI(
+            api_key=access_token,
+            base_url=self._resolve_base_url(),
+            timeout=self._timeout,
+            max_retries=0,
+        )
+
+    def complete(self, prompt: str, **kwargs) -> str:
+        client = self._client()
+        model = kwargs.get("model", self._model)
+        max_tokens = kwargs.get("max_tokens", 4000)
+        try:
+            response = self._apply_retry(
+                client.chat.completions.create,
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=kwargs.get("temperature", 0.7),
+                max_tokens=max_tokens,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Qwen Code API call failed: {e}") from e
+
+        if not response.choices or not response.choices[0].message.content:
+            raise RuntimeError("Empty response from Qwen Code API")
+        return response.choices[0].message.content
+
+    def complete_stream(self, prompt: str, **kwargs) -> Generator[str, None, None]:
+        client = self._client()
+        model = kwargs.get("model", self._model)
+        max_tokens = kwargs.get("max_tokens", 4000)
+        try:
+            stream = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=kwargs.get("temperature", 0.7),
+                max_tokens=max_tokens,
+                stream=True,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Qwen Code API stream failed: {e}") from e
+
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    def close(self) -> None:
+        return None
+
+
+def _load_profile_defaults(profile_name: str | None = None) -> dict[str, Any] | None:
+    """Load LLM profile and secret from local profile store."""
+    try:
+        from cli.repo_store import get_llm_profile, get_secret_value
+    except Exception:
+        return None
+
+    profile = get_llm_profile(profile_name)
+    if not profile:
+        return None
+
+    provider = str(profile.get("provider", "")).strip().lower()
+    model = str(profile.get("model", "")).strip()
+    base_url = profile.get("base_url")
+    api_key = None
+    api_key_ref = profile.get("api_key_ref")
+    if isinstance(api_key_ref, str) and api_key_ref.strip():
+        api_key = get_secret_value(api_key_ref.strip())
+
+    if not provider:
+        return None
+    return {
+        "provider": provider,
+        "model": model or None,
+        "api_key": api_key,
+        "base_url": base_url if isinstance(base_url, str) and base_url.strip() else None,
+    }
+
+
 def get_llm_wrapper(
     provider: str | None = None,
     **kwargs,
 ) -> LLMWrapper | None:
     """Factory to get LLM wrapper."""
-    provider = provider or os.getenv("HORDEFORGE_LLM_PROVIDER", "").lower()
+    resolved_provider = provider.strip().lower() if isinstance(provider, str) else ""
 
-    if provider == "openai":
+    if not resolved_provider:
+        profile_name = os.getenv("HORDEFORGE_LLM_PROFILE", "").strip() or None
+        profile_defaults = _load_profile_defaults(profile_name)
+        if profile_defaults:
+            resolved_provider = profile_defaults["provider"]
+            if profile_defaults.get("model") and not kwargs.get("model"):
+                kwargs["model"] = profile_defaults["model"]
+            if profile_defaults.get("api_key") and not kwargs.get("api_key"):
+                kwargs["api_key"] = profile_defaults["api_key"]
+            if profile_defaults.get("base_url") and not kwargs.get("base_url"):
+                kwargs["base_url"] = profile_defaults["base_url"]
+
+    if not resolved_provider:
+        return None
+
+    if resolved_provider == "openai":
         return OpenAIWrapper(**kwargs)
-    elif provider == "anthropic":
+    elif resolved_provider == "anthropic":
         return AnthropicWrapper(**kwargs)
-    elif provider == "google":
+    elif resolved_provider == "google":
         return GoogleGenAIWrapper(**kwargs)
-    elif provider:
-        raise ValueError(f"Unknown LLM provider: {provider}")
+    elif resolved_provider == "qwen":
+        qwen_base_url = (
+            kwargs.pop("base_url", None) or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        )
+        return OpenAIWrapper(
+            base_url=qwen_base_url,
+            env_var_name="QWEN_API_KEY",
+            **kwargs,
+        )
+    elif resolved_provider == "qwen-code":
+        oauth_json = kwargs.get("api_key")
+        if not isinstance(oauth_json, str) or not oauth_json.strip():
+            raise RuntimeError("Qwen Code profile is missing OAuth credentials in secret store.")
+        qwen_model = kwargs.get("model", "qwen3-coder-plus")
+        return QwenCodeWrapper(oauth_credentials_json=oauth_json, model=qwen_model)
+    elif resolved_provider:
+        raise ValueError(f"Unknown LLM provider: {resolved_provider}")
     return None
 
 

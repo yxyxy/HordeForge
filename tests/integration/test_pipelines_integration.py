@@ -28,21 +28,6 @@ class InvalidSchemaAgent:
         return {"status": "SUCCESS"}
 
 
-class AlwaysRedTestRunner:
-    def run(self, _context: dict[str, Any]) -> dict[str, Any]:
-        test_results = {"total": 5, "passed": 3, "failed": 2, "mode": "forced-red"}
-        return {
-            "status": "PARTIAL_SUCCESS",
-            "artifacts": [{"type": "test_results", "content": test_results}],
-            "decisions": [
-                {"reason": "Forced CI red path for integration branch coverage.", "confidence": 1.0}
-            ],
-            "logs": ["Forced-red test runner output."],
-            "next_actions": ["fix_agent"],
-            "test_results": test_results,
-        }
-
-
 def test_init_pipeline_integration_runs_all_steps_and_returns_summary():
     engine = OrchestratorEngine(pipelines_dir="pipelines")
     result = engine.run(
@@ -80,16 +65,15 @@ def test_feature_pipeline_integration_happy_path_runs_fix_loop_to_green():
     )
 
     assert result["status"] in {"SUCCESS", "PARTIAL_SUCCESS"}
-    assert result["steps"]["dod_extractor"]["status"] == "SUCCESS"
-    assert result["steps"]["fix_agent"]["status"] == "SUCCESS"
-    assert result["steps"]["test_runner"]["test_results"]["failed"] == 0
-    assert result["steps"]["pr_merge_agent"]["status"] == "SUCCESS"
+    assert result["steps"]["code_generator"]["status"] == "SUCCESS"
+    assert result["steps"]["test_runner"]["status"] == "SUCCESS"
+    assert result["steps"]["fix_agent"]["status"] in {"SUCCESS", "SKIPPED"}
+    assert result["steps"]["pr_merge_agent"]["status"] in {"PARTIAL_SUCCESS", "SUCCESS"}
 
 
 def test_feature_pipeline_integration_validation_failure_stops_execution():
     runtime_registry = _runtime_registry()
 
-    # Создаём обёртку, которая подменяет только specification_writer
     class PartialOverrideRegistry:
         def __init__(self, base_registry: RuntimeRegistryAdapter):
             self._base = base_registry
@@ -98,7 +82,7 @@ def test_feature_pipeline_integration_validation_failure_stops_execution():
             return self._base.has(agent_name)
 
         def create(self, agent_name: str) -> Any:
-            if agent_name == "specification_writer":
+            if agent_name == "code_generator":
                 return InvalidSchemaAgent()
             return self._base.create(agent_name)
 
@@ -118,10 +102,10 @@ def test_feature_pipeline_integration_validation_failure_stops_execution():
         run_id="it-feature-validation-failure",
     )
 
-    assert result["status"] == "FAILED"
-    assert result["steps"]["specification_writer"]["status"] == "FAILED"
-    assert "schema" in result["steps"]["specification_writer"]["logs"][0].lower()
-    assert "task_decomposer" not in result["steps"]
+    assert result["status"] in {"FAILED", "BLOCKED"}
+    assert result["steps"]["code_generator"]["status"] == "FAILED"
+    assert "schema" in result["steps"]["code_generator"]["logs"][0].lower()
+    assert "test_runner" not in result["steps"]
 
 
 def test_ci_fix_pipeline_integration_full_flow_from_ci_failure_event():
@@ -129,17 +113,17 @@ def test_ci_fix_pipeline_integration_full_flow_from_ci_failure_event():
     result = engine.run(
         "ci_fix_pipeline",
         {
+            "mock_mode": True,
             "repository": {"full_name": "acme/hordeforge"},
             "ci_run": {
                 "status": "failed",
                 "failed_jobs": [{"name": "unit-tests", "reason": "assertion failure"}],
             },
-            "original_issue": {"id": 15, "title": "CI failure"},
         },
         run_id="it-ci-fix-happy",
     )
 
-    assert result["status"] in {"SUCCESS", "PARTIAL_SUCCESS"}
+    assert result["status"] == "SUCCESS"
     analysis = _artifact_content(result["steps"]["ci_failure_analyzer"], "failure_analysis")
     assert analysis["failed_jobs_count"] == 1
     assert analysis["classification"] in {
@@ -148,14 +132,15 @@ def test_ci_fix_pipeline_integration_full_flow_from_ci_failure_event():
         "infrastructure",
         "unknown",
     }
-    close_status = _artifact_content(result["steps"]["close_issue_agent"], "close_status")
-    assert close_status["close_issue"] is True
+    ci_issue = _artifact_content(result["steps"]["ci_incident_handoff"], "ci_issue")
+    assert ci_issue["created"] is True
+    assert ci_issue["mock"] is True
+    assert "agent:opened" in ci_issue["labels"]
 
 
-def test_ci_fix_pipeline_integration_close_status_branch_when_ci_stays_red():
+def test_ci_fix_pipeline_integration_skips_handoff_when_ci_not_failed():
     runtime_registry = _runtime_registry()
 
-    # Создаём обёртку, которая подменяет только test_runner
     class PartialOverrideRegistry:
         def __init__(self, base_registry: RuntimeRegistryAdapter):
             self._base = base_registry
@@ -164,8 +149,8 @@ def test_ci_fix_pipeline_integration_close_status_branch_when_ci_stays_red():
             return self._base.has(agent_name)
 
         def create(self, agent_name: str) -> Any:
-            if agent_name == "test_runner":
-                return AlwaysRedTestRunner()
+            if agent_name == "ci_incident_handoff":
+                raise AssertionError("ci_incident_handoff must be skipped by condition")
             return self._base.create(agent_name)
 
         def get(self, agent_name: str):
@@ -178,14 +163,12 @@ def test_ci_fix_pipeline_integration_close_status_branch_when_ci_stays_red():
     result = engine.run(
         "ci_fix_pipeline",
         {
+            "mock_mode": True,
             "repository": {"full_name": "acme/hordeforge"},
-            "ci_run": {"status": "failed", "failed_jobs": [{"name": "unit-tests"}]},
-            "original_issue": {"id": 16, "title": "CI still red"},
+            "ci_run": {"status": "completed", "conclusion": "success"},
         },
-        run_id="it-ci-fix-close-branch",
+        run_id="it-ci-fix-skip-handoff",
     )
 
-    assert result["status"] == "PARTIAL_SUCCESS"
-    close_status = _artifact_content(result["steps"]["close_issue_agent"], "close_status")
-    assert close_status["close_issue"] is False
-    assert close_status["reason"] == "ci_still_failing"
+    assert result["status"] == "SUCCESS"
+    assert result["steps"]["ci_incident_handoff"]["status"] == "SKIPPED"

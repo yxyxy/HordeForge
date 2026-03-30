@@ -1,19 +1,18 @@
 # pipelines/feature_pipeline.yaml
 # Feature Pipeline for HordeForge
-# Description: Full autonomous pipeline from issue to merged PR
+# Description: Production execution pipeline from prepared plan to PR/merge
 
 pipeline_name: feature_pipeline
 description: |
-  Pipeline for handling GitHub issues autonomously.
+  Production-safe execution pipeline for implementing a prepared issue plan.
   Steps include:
-    - DoD extraction
-    - Specification generation
-    - BDD/TDD creation
-    - Code implementation
-    - Test execution
-    - Fix loop
-    - Review
-    - Merge
+    - Code implementation on branch `horde/<issue-number>-<slug>`
+    - Test execution + optional fix loop
+    - LLM/static review
+    - Merge decision with hard gates:
+      * review approved
+      * tests passed
+      * PR exists
 
 triggers:
   - issue_created
@@ -21,22 +20,13 @@ triggers:
   - scheduled_trigger
 
 steps:
-
-  - name: dod_extractor
-    agent: dod_extractor
-    description: Extract Definition of Done from GitHub issue
-    input:
-      issue: "{{issue}}"
-    output: "{{dod}}"
-    on_failure: stop_pipeline
-
   - name: rag_initializer
     agent: rag_initializer
     description: Initialize RAG with repository data
     input:
       repository: "{{repository}}"
     output: "{{rag_context}}"
-    on_failure: stop_pipeline
+    on_failure: continue
 
   - name: memory_retrieval
     agent: memory_agent
@@ -46,57 +36,11 @@ steps:
     output: "{{memory_context}}"
     on_failure: continue
 
-  - name: architecture_planner
-    agent: architecture_planner
-    description: Create technical specification and plan tasks
-    input:
-      dod: "{{dod}}"
-      repository: "{{repository}}"
-      rag_context: "{{rag_context}}"
-      memory_context: "{{memory_context}}"
-    output: "{{specification}}"
-    on_failure: stop_pipeline
-
-  - name: specification_writer
-    agent: specification_writer
-    description: Generate detailed specifications, user stories, and acceptance criteria
-    input:
-      specification: "{{specification}}"
-      rules: "{{rules}}"
-    output: "{{feature_spec}}"
-    on_failure: stop_pipeline
-
-  - name: task_decomposer
-    agent: task_decomposer
-    description: Decompose specification into subtasks for agents
-    input:
-      feature_spec: "{{feature_spec}}"
-    output: "{{subtasks}}"
-    on_failure: stop_pipeline
-
-  - name: bdd_generator
-    agent: bdd_generator
-    description: Generate BDD scenarios based on specification
-    input:
-      feature_spec: "{{feature_spec}}"
-    output: "{{bdd_scenarios}}"
-    on_failure: skip_step
-
-  - name: test_generator
-    agent: test_generator
-    description: Generate TDD tests (unit and integration) for each subtask
-    input:
-      subtasks: "{{subtasks}}"
-      rules: "{{rules}}"
-    output: "{{tests}}"
-    on_failure: stop_pipeline
-
   - name: code_generator
     agent: code_generator
-    description: Implement code to satisfy tests
+    description: Implement code according to prepared issue plan from pipeline inputs
     input:
-      subtasks: "{{subtasks}}"
-      tests: "{{tests}}"
+      issue: "{{issue}}"
       repository: "{{repository}}"
       memory_context: "{{memory_context}}"
     output: "{{code_patch}}"
@@ -114,6 +58,7 @@ steps:
   - name: fix_agent
     agent: fix_agent
     description: Iteratively fix failing tests until all pass
+    condition: "{{ test_runner.test_results.failed > 0 }}"
     input:
       code_patch: "{{code_patch}}"
       test_results: "{{test_results}}"
@@ -143,22 +88,14 @@ steps:
 
   - name: pr_merge_agent
     agent: pr_merge_agent
-    description: Merge PR to main branch if review passes
+    description: Merge PR only when safety gates pass (review/tests/PR)
     input:
       review_result: "{{review_result}}"
+      test_results: "{{test_results}}"
+      code_patch: "{{fixed_code_patch}}"
       repository: "{{repository}}"
     output: "{{merge_status}}"
     on_failure: create_issue_for_human
-
-  - name: ci_monitor_agent
-    agent: ci_failure_analyzer
-    description: Monitor CI after merge, create issue if tests fail
-    input:
-      repository: "{{repository}}"
-    output: "{{ci_issue}}"
-    on_failure: escalate_to_human
-
-# Conditional loops
 
 loops:
   - condition: "{{test_runner.test_results.failed}} > 0"
@@ -178,5 +115,5 @@ logging:
 
 # - Each step follows AGENT_SPEC.md contract
 # - All outputs must be validated JSON
-# - Loops ensure all DoD is satisfied before merge
-# - CI monitoring ensures post-merge self-healing
+# - Planning artifacts (DoD/BDD/TDD/spec/subtasks/tests) are expected to be prepared upstream.
+# - Merge is guarded by test/review/PR gates in pr_merge_agent.

@@ -25,7 +25,7 @@ def test_pipeline_runner_executes_feature_pipeline_smoke():
     result = runner.run("feature_pipeline", {"issue": {"body": "test issue"}})
     # Допускаем FAILED статус из-за проблем с RAG-инициализацией, как показано в ошибках тестов
     assert result["status"] in {"SUCCESS", "PARTIAL_SUCCESS", "FAILED"}
-    assert "dod_extractor" in result["steps"]
+    assert "code_generator" in result["steps"]
 
 
 def test_pipeline_runner_feature_pipeline_missing_agent_fails_fast(monkeypatch):
@@ -33,8 +33,8 @@ def test_pipeline_runner_feature_pipeline_missing_agent_fails_fast(monkeypatch):
     original_import_agent = runner._import_agent
 
     def _import_agent_with_failure(agent_name: str):
-        if agent_name == "architecture_planner":
-            raise ImportError("Module not found: agents.architecture_planner")
+        if agent_name == "code_generator":
+            raise ImportError("Module not found: agents.code_generator")
         return original_import_agent(agent_name)
 
     monkeypatch.setattr(runner, "_import_agent", _import_agent_with_failure)
@@ -42,11 +42,11 @@ def test_pipeline_runner_feature_pipeline_missing_agent_fails_fast(monkeypatch):
     result = runner.run("feature_pipeline", {"issue": {"body": "test issue"}})
 
     assert result["status"] == "FAILED"
-    assert "architecture_planner" in result["steps"]
-    failed_step = result["steps"]["architecture_planner"]
+    assert "code_generator" in result["steps"]
+    failed_step = result["steps"]["code_generator"]
     assert failed_step["status"] == "FAILED"
     assert failed_step["logs"]
-    assert "Agent 'architecture_planner' failed" in failed_step["logs"][0]
+    assert "Agent 'code_generator' failed" in failed_step["logs"][0]
 
 
 def test_pipeline_runner_logs_json_with_run_id_correlation_and_step(caplog):

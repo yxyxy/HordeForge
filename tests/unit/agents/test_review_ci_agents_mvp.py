@@ -54,10 +54,10 @@ def test_pr_merge_agent_returns_merge_decision_in_dry_run():
 
     result = agent.run(context)
 
-    assert result["status"] == "SUCCESS"
+    assert result["status"] == "PARTIAL_SUCCESS"
     merge_status = _artifact_content(result, "merge_status")
     assert merge_status["dry_run"] is True
-    assert merge_status["merged"] is True
+    assert merge_status["merged"] is False
 
 
 def test_ci_failure_analyzer_parses_mock_ci_input_and_classifies_failure():

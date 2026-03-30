@@ -1,15 +1,27 @@
 import json
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from cli.repo_store import (
+    add_or_update_llm_profile,
+    get_llm_profile,
+    get_secret_value,
+    list_llm_profiles,
+    list_secret_keys,
+    remove_llm_profile,
+    remove_secret_value,
+    set_default_llm_profile,
+    set_secret_value,
+)
 from hordeforge_config import RunConfig
 from logging_utils import redact_mapping, redact_sensitive_data
 from observability.alerts import AlertDispatcher
@@ -96,6 +108,8 @@ CRON_DISPATCHER: CronDispatcher | None = None
 QUEUE_BACKEND_REQUESTED = config.queue_backend
 QUEUE_BACKEND_ACTIVE: str | None = None
 QUEUE_BACKEND_ERROR: str | None = None
+QUEUE_AUTODRAIN_THREAD: threading.Thread | None = None
+QUEUE_AUTODRAIN_STOP = threading.Event()
 
 
 def _init_task_queue():
@@ -191,6 +205,20 @@ class CronManualTriggerRequest(BaseModel):
 
 class QueueDrainRequest(BaseModel):
     max_items: int = Field(default=10, ge=1, le=200)
+
+
+class LlmProfileUpsertRequest(BaseModel):
+    profile_name: str = Field(..., min_length=1)
+    provider: str = Field(..., min_length=1)
+    model: str = Field(..., min_length=1)
+    base_url: str | None = None
+    api_key_ref: str | None = None
+    set_default: bool = False
+
+
+class SecretUpsertRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    value: str = Field(..., min_length=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,13 +444,174 @@ def _decode_json_response(response: JSONResponse) -> dict[str, Any]:
         body = response.body.decode("utf-8")
     except UnicodeDecodeError:
         return {}
-    if not body:
-        return {}
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _queue_autodrain_enabled() -> bool:
+    value = str(os.getenv("HORDEFORGE_QUEUE_AUTODRAIN_ENABLED", "true")).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _queue_autodrain_interval_seconds() -> float:
+    raw_value = os.getenv("HORDEFORGE_QUEUE_AUTODRAIN_INTERVAL_SECONDS", "1.0")
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError):
+        parsed = 1.0
+    return max(0.1, parsed)
+
+
+def _queue_autodrain_batch_size() -> int:
+    raw_value = os.getenv("HORDEFORGE_QUEUE_AUTODRAIN_BATCH_SIZE", "10")
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        parsed = 10
+    return max(1, min(200, parsed))
+
+
+def _drain_queue_once(*, max_items: int) -> list[dict[str, Any]]:
+    claimed = TASK_QUEUE.claim_next(max_items=max_items)
+    records: list[dict[str, Any]] = []
+    for task in claimed:
+        try:
+            response = run_pipeline(
+                PipelineRequest(
+                    pipeline_name=task.pipeline_name,
+                    inputs=task.inputs,
+                    source=task.source,
+                    correlation_id=task.correlation_id,
+                    idempotency_key=task.idempotency_key,
+                    tenant_id=task.tenant_id,
+                    repository_full_name=task.repository_full_name,
+                    async_mode=False,
+                )
+            )
+            if isinstance(response, JSONResponse):
+                payload = _decode_json_response(response)
+                message = str(payload.get("error", {}).get("message", "Queue task failed"))
+                completed = TASK_QUEUE.mark_failed(task.task_id, message)
+            else:
+                completed = TASK_QUEUE.mark_succeeded(task.task_id, response)
+        except Exception as exc:  # noqa: BLE001
+            completed = TASK_QUEUE.mark_failed(task.task_id, str(exc))
+        records.append(completed.to_dict())
+    return records
+
+
+def _queue_autodrain_worker() -> None:
+    interval = _queue_autodrain_interval_seconds()
+    batch_size = _queue_autodrain_batch_size()
+    logger.info(
+        "Queue autodrain worker started interval_seconds=%s batch_size=%s",
+        interval,
+        batch_size,
+    )
+    while not QUEUE_AUTODRAIN_STOP.is_set():
+        try:
+            records = _drain_queue_once(max_items=batch_size)
+            if records:
+                logger.info("Queue autodrain processed %s task(s).", len(records))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Queue autodrain worker error: %s", str(exc)[:300])
+        QUEUE_AUTODRAIN_STOP.wait(interval)
+    logger.info("Queue autodrain worker stopped.")
+
+
+@app.on_event("startup")
+def startup_queue_autodrain_worker() -> None:
+    global QUEUE_AUTODRAIN_THREAD
+    if not _queue_autodrain_enabled():
+        logger.info("Queue autodrain worker disabled by HORDEFORGE_QUEUE_AUTODRAIN_ENABLED.")
+        return
+    if QUEUE_AUTODRAIN_THREAD is not None and QUEUE_AUTODRAIN_THREAD.is_alive():
+        return
+    QUEUE_AUTODRAIN_STOP.clear()
+    QUEUE_AUTODRAIN_THREAD = threading.Thread(
+        target=_queue_autodrain_worker,
+        name="hordeforge-queue-autodrain",
+        daemon=True,
+    )
+    QUEUE_AUTODRAIN_THREAD.start()
+
+
+@app.on_event("shutdown")
+def shutdown_queue_autodrain_worker() -> None:
+    global QUEUE_AUTODRAIN_THREAD
+    if QUEUE_AUTODRAIN_THREAD is None:
+        return
+    QUEUE_AUTODRAIN_STOP.set()
+    QUEUE_AUTODRAIN_THREAD.join(timeout=3.0)
+    QUEUE_AUTODRAIN_THREAD = None
+
+
+@app.post("/llm/profiles")
+def upsert_llm_profile(request: LlmProfileUpsertRequest) -> dict[str, Any]:
+    add_or_update_llm_profile(
+        profile_name=request.profile_name,
+        provider=request.provider,
+        model=request.model,
+        base_url=request.base_url,
+        api_key_ref=request.api_key_ref,
+        set_default=request.set_default,
+    )
+    profile = get_llm_profile(request.profile_name)
+    return {"status": "ok", "profile": profile}
+
+
+@app.get("/llm/profiles")
+def get_llm_profiles(profile_name: str | None = None) -> dict[str, Any]:
+    if isinstance(profile_name, str) and profile_name.strip():
+        profile = get_llm_profile(profile_name.strip())
+        if profile is None:
+            raise HTTPException(status_code=404, detail="LLM profile not found")
+        return {"profile": profile}
+    return {"profiles": list_llm_profiles()}
+
+
+@app.post("/llm/profiles/{profile_name}/default")
+def set_default_profile(profile_name: str) -> dict[str, Any]:
+    if not set_default_llm_profile(profile_name):
+        raise HTTPException(status_code=404, detail="LLM profile not found")
+    return {"status": "ok", "default_profile": profile_name}
+
+
+@app.delete("/llm/profiles/{profile_name}")
+def delete_llm_profile(profile_name: str, delete_secret: bool = False) -> dict[str, Any]:
+    api_key_ref = remove_llm_profile(profile_name)
+    if api_key_ref is None:
+        raise HTTPException(status_code=404, detail="LLM profile not found")
+    if delete_secret and api_key_ref:
+        remove_secret_value(api_key_ref)
+    return {"status": "ok", "profile_name": profile_name, "api_key_ref": api_key_ref}
+
+
+@app.post("/secrets")
+def upsert_secret(request: SecretUpsertRequest) -> dict[str, Any]:
+    set_secret_value(request.name, request.value)
+    return {"status": "ok", "name": request.name}
+
+
+@app.get("/secrets")
+def get_secrets(name: str | None = None) -> dict[str, Any]:
+    if isinstance(name, str) and name.strip():
+        value = get_secret_value(name.strip())
+        if value is None:
+            raise HTTPException(status_code=404, detail="Secret not found")
+        return {"name": name.strip(), "value": value}
+    return {"keys": list_secret_keys()}
+
+
+@app.delete("/secrets/{name}")
+def delete_secret(name: str) -> dict[str, Any]:
+    removed = remove_secret_value(name)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Secret not found")
+    return {"status": "ok", "name": name}
 
 
 def _trigger_pipeline_from_cron(
@@ -957,31 +1146,7 @@ def drain_queue(
         )
         return _error_response(403, "FORBIDDEN", "Operator permission denied")
 
-    claimed = TASK_QUEUE.claim_next(max_items=request.max_items)
-    records: list[dict[str, Any]] = []
-    for task in claimed:
-        try:
-            response = run_pipeline(
-                PipelineRequest(
-                    pipeline_name=task.pipeline_name,
-                    inputs=task.inputs,
-                    source=task.source,
-                    correlation_id=task.correlation_id,
-                    idempotency_key=task.idempotency_key,
-                    tenant_id=task.tenant_id,
-                    repository_full_name=task.repository_full_name,
-                    async_mode=False,
-                )
-            )
-            if isinstance(response, JSONResponse):
-                payload = _decode_json_response(response)
-                message = str(payload.get("error", {}).get("message", "Queue task failed"))
-                completed = TASK_QUEUE.mark_failed(task.task_id, message)
-            else:
-                completed = TASK_QUEUE.mark_succeeded(task.task_id, response)
-        except Exception as exc:  # noqa: BLE001
-            completed = TASK_QUEUE.mark_failed(task.task_id, str(exc))
-        records.append(completed.to_dict())
+    records = _drain_queue_once(max_items=request.max_items)
 
     _audit_manual_command(
         run_id="system",

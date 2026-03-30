@@ -4,9 +4,10 @@
 
 pipeline_name: issue_scanner_pipeline
 description: |
-  Pipeline to scan GitHub issues and return eligible issues for processing.
-  Fetches open issues from GitHub repository and identifies agent-ready issues
-  that can be processed with backlog analysis pipeline.
+  Pipeline to scan GitHub issues and dispatch eligible issues for processing.
+  Fetches open issues from GitHub repository, identifies agent-opened/planning/ready/fixed issues,
+  prepares DoD/BDD/TDD planning artifacts, posts planning comment,
+  and dispatches feature_pipeline asynchronously.
   Uses repository settings from initialization context.
 
 triggers:
@@ -21,7 +22,7 @@ steps:
       github_token: "{{github_token}}"
       operation: "fetch_issues"
       state: "open"
-      labels: ["agent:ready"]
+      labels: ["agent:opened", "agent:planning", "agent:ready", "agent:fixed"]
     output: "{{issues_result}}"
     on_failure: stop_pipeline
 
@@ -30,10 +31,19 @@ steps:
     description: Process and classify fetched issues
     input:
       scan_options:
-        labels: ["agent:ready"]
+        labels: ["agent:opened", "agent:planning", "agent:ready", "agent:fixed"]
         state: "open"
         max_issues: 50
+        include_comments: true
     output: "{{processed_issues}}"
+    on_failure: continue
+
+  - name: issue_dispatch
+    agent: issue_pipeline_dispatcher
+    description: Handle staged labels (opened/planning/ready/fixed), plan when needed, dispatch or close
+    input:
+      target_pipeline: "feature_pipeline"
+    output: "{{dispatch_report}}"
     on_failure: continue
 
 logging:
@@ -45,5 +55,5 @@ logging:
 # Notes:
 # - Uses repository settings from initialization context (repo_url, github_token)
 # - Falls back to explicit inputs if context is not available
-# - Processes issues with "agent:ready" label
-# - Returns classified issues that can be processed individually with backlog_analysis_pipeline
+# - Processes issues with "agent:opened", "agent:planning", "agent:ready", "agent:fixed" labels
+# - Dispatches prepared issues to feature_pipeline in queued/async mode

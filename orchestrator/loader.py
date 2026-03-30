@@ -20,6 +20,7 @@ class StepDefinition:
     output_mapping: Any = None
     retry_limit: int | None = None
     timeout_seconds: float | None = None
+    condition: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -225,6 +226,11 @@ class PipelineLoader:
                 raise ValueError(f"Invalid pipeline format in {path}: step '{name}' missing agent")
             timeout = step.get("timeout_seconds")
             timeout_value = float(timeout) if timeout is not None else None
+            condition = step.get("condition")
+            if condition is not None and not isinstance(condition, str):
+                raise ValueError(
+                    f"Invalid pipeline format in {path}: step '{name}' condition must be a string"
+                )
             depends_on_explicit = "depends_on" in step
             depends_on_raw = step.get("depends_on")
             depends_on = PipelineLoader._ensure_list_of_strings(
@@ -257,6 +263,9 @@ class PipelineLoader:
                     output_mapping=step.get("output"),
                     retry_limit=step.get("retry_limit"),
                     timeout_seconds=timeout_value,
+                    condition=condition.strip()
+                    if isinstance(condition, str) and condition.strip()
+                    else None,
                 )
             )
 

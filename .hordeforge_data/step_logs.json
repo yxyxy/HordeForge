@@ -1,1 +1,12 @@
-[]
+[
+  {
+    "run_id": "default:40e7cec3-3e3c-4f24-b8ca-60ea53564fd1",
+    "step_name": "repo_connector",
+    "status": "FAILED",
+    "tenant_id": "default",
+    "started_at": "2026-03-30T00:29:42.857023+00:00",
+    "finished_at": "2026-03-30T00:29:43.268777+00:00",
+    "error": "Repository operation failed: Authentication failed",
+    "retry_count": 0
+  }
+]

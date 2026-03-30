@@ -224,14 +224,41 @@ def create_patch_from_code_result(code_result: dict[str, Any]) -> list[FileChang
     Returns:
         List of FileChange objects
     """
-    files = []
+    files: list[FileChange] = []
 
-    for file_data in code_result.get("files", []):
-        fc = FileChange(
-            path=file_data.get("path", ""),
-            content=file_data.get("content", ""),
-            change_type=file_data.get("change_type", "create"),
-        )
+    raw_files = code_result.get("files", [])
+    if not isinstance(raw_files, list):
+        return files
+
+    for file_data in raw_files:
+        if not isinstance(file_data, dict):
+            continue
+
+        path_raw = file_data.get("path")
+        path = str(path_raw).strip() if isinstance(path_raw, str) else ""
+        if not path:
+            continue
+
+        change_type_raw = file_data.get("change_type")
+        change_type = str(change_type_raw).strip().lower() if change_type_raw else ""
+
+        content = file_data.get("content")
+        if not isinstance(content, str):
+            diff = file_data.get("diff")
+            content = str(diff) if isinstance(diff, str) else ""
+
+        if change_type not in {"create", "modify", "delete"}:
+            diff_text = file_data.get("diff")
+            if isinstance(diff_text, str):
+                first_line = diff_text.strip().splitlines()[0] if diff_text.strip() else ""
+                if first_line.startswith("# "):
+                    candidate = first_line.removeprefix("# ").strip().lower()
+                    if candidate in {"create", "modify", "delete"}:
+                        change_type = candidate
+            if change_type not in {"create", "modify", "delete"}:
+                change_type = "create"
+
+        fc = FileChange(path=path, content=content, change_type=change_type)
         files.append(fc)
 
     return files

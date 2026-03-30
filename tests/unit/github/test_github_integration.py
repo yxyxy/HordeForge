@@ -248,6 +248,7 @@ class TestGitHubIntegration:
             "github_client": mock_client,
             "pr_number": 123,
             "review_result": {"decision": "approve"},
+            "test_results": {"failed": 0},
         }
 
         result = agent.run(context)

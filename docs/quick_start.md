@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide provides a quick introduction to getting started with HordeForge, an autonomous AI software development orchestrator. The system automates the full development lifecycle from GitHub issues to merged pull requests using AI agents, memory systems, and context optimization.
+This guide provides a quick introduction to getting started with HordeForge, an autonomous AI software development orchestrator. The system automates the software lifecycle via agent pipelines, including CI triage/handoff (`ci_fix_pipeline`) that creates `agent:opened` issues for downstream staged processing.
 
 ## Requirements
 
@@ -67,7 +67,7 @@ cp .env.example .env
 | `HORDEFORGE_STORAGE_DIR` | .hordeforge_data | Data directory |
 | `HORDEFORGE_OPERATOR_API_KEY` | local-operator-key | Key for manual control |
 | `HORDEFORGE_PIPELINES_DIR` | pipelines | Pipelines directory |
-| `HORDEFORGE_LLM_PROVIDER` | openai | Default LLM provider |
+| `~/.hordeforge/config.json` | n/a | Default LLM profile source (`horde llm profile ... --set-default`) |
 
 #### Optional Environment Variables
 
@@ -127,8 +127,8 @@ hordeforge status
 ### Using Interactive CLI (`horde`) - Recommended
 
 ```bash
-# One-time setup: save repository profile and token
-horde repo add yxyxy/HordeForge --url https://github.com/yxyxy/HordeForge --token YOUR_TOKEN --set-default
+# One-time setup: save repository profile and token (repo id inferred from URL)
+horde repo add --url https://github.com/yxyxy/HordeForge --token YOUR_TOKEN --set-default
 
 # Run init pipeline by repository profile id
 horde init yxyxy/HordeForge
@@ -136,6 +136,9 @@ horde pipeline run init yxyxy/HordeForge
 
 # Run feature pipeline
 horde pipeline run feature --inputs '{"prompt": "Add user authentication"}'
+
+# Run CI triage pipeline (defaults repo/branch/sha from profile + local git)
+horde pipeline run ci_fix_pipeline
 
 # Run development task
 horde task "Implement user authentication system"

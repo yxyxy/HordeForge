@@ -15,7 +15,7 @@ from qdrant_client import models
 
 from logging_config import get_logger
 from rag.chunking import ChunkGenerator
-from rag.config import get_embedding_model
+from rag.config import get_embedding_cache_dir, get_embedding_model
 from rag.models import Chunk, Symbol
 from rag.symbol_extractor_tree_sitter import TreeSitterSymbolExtractor
 from rag.tree_sitter_parser import get_language_for_file, parse_file
@@ -326,7 +326,10 @@ class EmbeddingStage:
     def __init__(self, batch_size: int = 512, embedding_model: str = None):
         self.batch_size = batch_size
         self.embedding_model = embedding_model or get_embedding_model()
-        self.embedder = TextEmbedding(model_name=self.embedding_model)
+        self.embedder = TextEmbedding(
+            model_name=self.embedding_model,
+            cache_dir=get_embedding_cache_dir(),
+        )
 
     async def run(self, chunks: list[Chunk]) -> list[Chunk]:
         """Compute embeddings for the text chunks."""

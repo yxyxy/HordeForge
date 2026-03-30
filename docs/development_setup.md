@@ -107,23 +107,12 @@ horde history
 
 ## LLM Configuration
 
-To use LLM features, configure your API keys in `.env`:
+To use LLM features, create a default LLM profile:
 
 ```bash
-# OpenAI
-HORDEFORGE_LLM_PROVIDER=openai
-HORDEFORGE_OPENAI_API_KEY=your-openai-key
-
-# Anthropic
-HORDEFORGE_LLM_PROVIDER=anthropic
-HORDEFORGE_ANTHROPIC_API_KEY=your-anthropic-key
-
-# Google
-HORDEFORGE_LLM_PROVIDER=google
-HORDEFORGE_GOOGLE_API_KEY=your-google-key
-
-# Or use local models with Ollama
-HORDEFORGE_LLM_PROVIDER=ollama
+horde llm profile add openai-main --provider openai --model gpt-4o --api-key YOUR_OPENAI_KEY --set-default
+horde llm profile list
+horde llm --profile openai-main test
 ```
 
 ## RAG Configuration

@@ -186,3 +186,28 @@ def test_step_executor_logs_json_with_run_id_correlation_and_step(caplog):
     assert all(item["run_id"] == "run-log-1" for item in payloads)
     assert all(item["correlation_id"] == "corr-log-1" for item in payloads)
     assert any(item["step"] == "repo_connector" for item in payloads)
+
+
+def test_coerce_code_patch_preserves_pr_metadata_fields():
+    content = {
+        "files": [{"path": "src/a.py", "diff": "# modify\nprint('ok')\n"}],
+        "pr_number": 123,
+        "pr_url": "https://github.com/org/repo/pull/123",
+        "branch_name": "hordeforge/feature-123",
+        "applied_to_github": True,
+        "apply_error": "none",
+        "rollback_performed": False,
+        "llm_enhanced": True,
+        "notes": ["n1", "n2"],
+    }
+
+    normalized = StepExecutor._coerce_code_patch_content_for_validation(content)
+
+    assert normalized["pr_number"] == 123
+    assert normalized["pr_url"] == "https://github.com/org/repo/pull/123"
+    assert normalized["branch_name"] == "hordeforge/feature-123"
+    assert normalized["applied_to_github"] is True
+    assert normalized["apply_error"] == "none"
+    assert normalized["rollback_performed"] is False
+    assert normalized["llm_enhanced"] is True
+    assert normalized["notes"] == ["n1", "n2"]

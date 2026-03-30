@@ -15,7 +15,7 @@ def test_default_cron_runtime_registers_enabled_jobs_only():
     assert "dependency_checker" not in dispatcher.jobs
 
 
-def test_issue_scanner_job_publishes_backlog_trigger_via_runtime_wrapper():
+def test_issue_scanner_job_publishes_issue_scanner_trigger_via_runtime_wrapper():
     published_calls: list[dict[str, Any]] = []
 
     def _trigger_pipeline(
@@ -32,18 +32,18 @@ def test_issue_scanner_job_publishes_backlog_trigger_via_runtime_wrapper():
                 "idempotency_key": idempotency_key,
             }
         )
-        return {"status": "started", "run_id": "run-backlog-1"}
+        return {"status": "started", "run_id": "run-scan-1"}
 
     dispatcher = build_default_cron_dispatcher(_trigger_pipeline)
     result = dispatcher.trigger_job(
         "issue_scanner",
-        payload={"issues": [{"id": 101, "labels": [{"name": "agent:ready"}]}]},
+        payload={"issues": [{"id": 101, "labels": [{"name": "agent:opened"}]}]},
     )
 
     assert result["status"] == "SUCCESS"
     assert result["result"]["trigger_count"] == 1
     assert result["result"]["published_count"] == 1
-    assert published_calls[0]["pipeline_name"] == "backlog_analysis_pipeline"
+    assert published_calls[0]["pipeline_name"] == "issue_scanner_pipeline"
     assert published_calls[0]["source"] == "cron:issue_scanner"
     assert published_calls[0]["idempotency_key"] == "issue_scanner:101"
 

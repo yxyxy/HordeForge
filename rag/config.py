@@ -8,6 +8,7 @@ import os
 
 # Default embedding model
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+DEFAULT_EMBEDDING_CACHE_DIR = "rag/models"
 
 
 def get_embedding_model() -> str:
@@ -20,6 +21,19 @@ def get_embedding_model() -> str:
         str: Model name for TextEmbedding
     """
     return os.getenv("HORDEFORGE_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
+
+
+def get_embedding_cache_dir() -> str:
+    """
+    Get the local cache directory for embedding models.
+
+    Can be configured via HORDEFORGE_EMBEDDING_CACHE_DIR environment variable.
+    By default models are cached under project-local path `rag/models`.
+
+    Returns:
+        str: Local directory path for embedding model cache
+    """
+    return os.getenv("HORDEFORGE_EMBEDDING_CACHE_DIR", DEFAULT_EMBEDDING_CACHE_DIR)
 
 
 def get_vector_store_mode() -> str:

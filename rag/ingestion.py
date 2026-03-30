@@ -21,7 +21,7 @@ from fastembed import TextEmbedding
 from qdrant_client import AsyncQdrantClient, models
 
 from rag.batch_processing import BatchEmbedder, TextBuffer
-from rag.config import get_embedding_model
+from rag.config import get_embedding_cache_dir, get_embedding_model
 
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -48,7 +48,10 @@ class IngestionPipeline:
         buffer_batch_size: int = 128,  # New parameter for internal buffer batch size
     ):
         self.client = client
-        self.embedder = embedder or TextEmbedding(model_name=get_embedding_model())
+        self.embedder = embedder or TextEmbedding(
+            model_name=get_embedding_model(),
+            cache_dir=get_embedding_cache_dir(),
+        )
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)

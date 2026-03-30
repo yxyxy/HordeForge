@@ -77,9 +77,8 @@ Scheduler слой отвечает за запуск pipeline и маршрут
 | issue_created(feature) | feature_pipeline | P0 |
 | ci_failure_detected | ci_fix_pipeline | P1 |
 | manual init | init_pipeline | P0 |
-| hourly backlog scan | backlog_analysis_pipeline | P2 |
+| hourly issue scan | issue_scanner_pipeline | P2 |
 | dependency_vulnerability_found | dependency_check_pipeline | P1 |
-| all_issues_scan | all_issues_scanner_pipeline | P2 |
 
 ## 4. Контракт входного запроса
 
@@ -117,7 +116,7 @@ Scheduler слой отвечает за запуск pipeline и маршрут
 ## 6. Минимальные требования к scheduler для MVP
 
 1. Gateway с валидацией и run-id.
-2. Один cron dispatcher (для `init`/`backlog` достаточно mocked schedule).
+2. Один cron dispatcher (для `init`/`issue_scanner` достаточно mocked schedule).
 3. Базовый retry для transient ошибок.
 4. Защита от повторного запуска одинакового события.
 5. Multi-tenant поддержка.

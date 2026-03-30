@@ -4,7 +4,13 @@ import time
 from fastembed import TextEmbedding
 from qdrant_client import QdrantClient, models
 
-from rag.config import get_embedding_model, get_qdrant_host, get_qdrant_port, get_vector_store_mode
+from rag.config import (
+    get_embedding_cache_dir,
+    get_embedding_model,
+    get_qdrant_host,
+    get_qdrant_port,
+    get_vector_store_mode,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +104,10 @@ class QdrantStore:
                 logger.info(f"Auto mode: Host Qdrant unavailable: {e}. Using local mode.")
                 self._switch_to_local_mode(check_compatibility)
 
-        self.embedder = TextEmbedding(model_name=get_embedding_model())
+        self.embedder = TextEmbedding(
+            model_name=get_embedding_model(),
+            cache_dir=get_embedding_cache_dir(),
+        )
         self._buffer: list[dict] = []
         self._buffer_limit = buffer_limit
         self._total_indexed = 0

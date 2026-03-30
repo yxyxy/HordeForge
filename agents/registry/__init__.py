@@ -42,12 +42,14 @@ def register_default_agents(registry: AgentRegistry | None = None) -> AgentRegis
     from agents.architecture_planner import ArchitecturePlanner
     from agents.bdd_generator import BDDGenerator
     from agents.ci_failure_analyzer import CiFailureAnalyzer
+    from agents.ci_incident_handoff import CiIncidentHandoff
     from agents.ci_monitor_agent.agent import CIMonitorAgent
     from agents.code_generator import CodeGenerator
     from agents.dependency_checker_agent.agent import DependencyCheckerAgent
     from agents.dod_extractor import DodExtractor
     from agents.fix_agent import FixAgent
     from agents.issue_closer import IssueCloser
+    from agents.issue_pipeline_dispatcher import IssuePipelineDispatcher
     from agents.issue_scanner import IssueScanner
     from agents.memory_agent import MemoryAgent
     from agents.pipeline_initializer import PipelineInitializer
@@ -56,7 +58,6 @@ def register_default_agents(registry: AgentRegistry | None = None) -> AgentRegis
     from agents.repo_connector import RepoConnector
     from agents.review_agent import ReviewAgent
     from agents.specification_writer import SpecificationWriter
-    from agents.stub_agent import StubAgent
     from agents.task_decomposer import TaskDecomposer
     from agents.test_analyzer import TestAnalyzer
     from agents.test_generator import TestGenerator
@@ -67,10 +68,12 @@ def register_default_agents(registry: AgentRegistry | None = None) -> AgentRegis
         "architecture_planner": ArchitecturePlanner,
         "bdd_generator": BDDGenerator,
         "ci_failure_analyzer": CiFailureAnalyzer,
+        "ci_incident_handoff": CiIncidentHandoff,
         "code_generator": CodeGenerator,
         "dod_extractor": DodExtractor,
         "fix_agent": FixAgent,
         "issue_closer": IssueCloser,
+        "issue_pipeline_dispatcher": IssuePipelineDispatcher,
         "issue_scanner": IssueScanner,
         "memory_agent": MemoryAgent,
         "pipeline_initializer": PipelineInitializer,
@@ -79,7 +82,6 @@ def register_default_agents(registry: AgentRegistry | None = None) -> AgentRegis
         "repo_connector": RepoConnector,
         "review_agent": ReviewAgent,
         "specification_writer": SpecificationWriter,
-        "stub_agent": StubAgent,
         "ci_monitor_agent": CIMonitorAgent,
         "dependency_checker_agent": DependencyCheckerAgent,
         "task_decomposer": TaskDecomposer,
@@ -148,7 +150,7 @@ def register_default_pipelines(registry: PipelineRegistry | None = None) -> Pipe
         "init_pipeline",
         "feature_pipeline",
         "ci_fix_pipeline",
-        "backlog_analysis_pipeline",
+        "issue_scanner_pipeline",
         "ci_monitoring_pipeline",
         "dependency_check_pipeline",
     ]

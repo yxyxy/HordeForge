@@ -17,7 +17,7 @@ COMMON_INPUTS = {
         "number": 101,
         "title": "Pipeline smoke issue",
         "body": "Implement endpoint and tests",
-        "labels": [{"name": "agent:ready"}],
+        "labels": [{"name": "agent:opened"}],
         "state": "open",
     },
     "ci_run": {
@@ -38,11 +38,11 @@ COMMON_INPUTS = {
 
 PIPELINE_CASES = [
     pytest.param("init_pipeline", {}, {"repo_connector", "pipeline_initializer"}, id="init"),
-    pytest.param("feature_pipeline", {}, {"dod_extractor", "pr_merge_agent"}, id="feature"),
+    pytest.param("feature_pipeline", {}, {"code_generator", "pr_merge_agent"}, id="feature"),
     pytest.param(
         "ci_fix_pipeline",
         {},
-        {"ci_failure_analyzer", "ci_verification", "close_issue_agent"},
+        {"ci_failure_analyzer", "ci_incident_handoff"},
         id="ci_fix",
     ),
     pytest.param(
@@ -51,26 +51,8 @@ PIPELINE_CASES = [
     pytest.param(
         "issue_scanner_pipeline",
         {},
-        {"repo_connector", "issue_classification"},
+        {"repo_connector", "issue_classification", "issue_dispatch"},
         id="issue_scanner",
-    ),
-    pytest.param(
-        "all_issues_scanner_pipeline",
-        {},
-        {"repo_connector", "issue_classification"},
-        id="all_issues_scanner",
-    ),
-    pytest.param(
-        "all_issues_no_filter_pipeline",
-        {},
-        {"repo_connector", "issue_classification"},
-        id="all_issues_no_filter",
-    ),
-    pytest.param(
-        "backlog_analysis_pipeline",
-        {},
-        {"dod_extractor", "task_decomposer"},
-        id="backlog_analysis",
     ),
     pytest.param(
         "ci_monitoring_pipeline",

@@ -14,8 +14,9 @@ from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
 
 try:
-    from qdrant_client import models
+    from qdrant_client import QdrantClient, models
 except ImportError:
+    QdrantClient = None
     models = None
 
 from rag.config import get_qdrant_host, get_qdrant_port
@@ -418,6 +419,24 @@ def extract_and_index_repository(
     )
 
 
+def _get_existing_collection_points(collection_name: str) -> int | None:
+    if QdrantClient is None:
+        return None
+    try:
+        client = QdrantClient(
+            host=get_qdrant_host(),
+            port=get_qdrant_port(),
+            check_compatibility=False,
+        )
+        info = client.get_collection(collection_name)
+        points_count = getattr(info, "points_count", None)
+        if points_count is None:
+            return None
+        return int(points_count)
+    except Exception:
+        return None
+
+
 class RagInitializer(BaseAgent):
     name = "rag_initializer"
     description = "Builds RAG index from repository using Qdrant + keyword index."
@@ -464,6 +483,42 @@ class RagInitializer(BaseAgent):
 
         # Use structured indexing by default for better performance
         # Extract configuration parameters from context if available
+        collection_name = (
+            str(context.get("collection_name") or "repo_chunks").strip() or "repo_chunks"
+        )
+        reuse_existing = bool(context.get("reuse_existing_rag_index", True))
+        force_reindex = bool(context.get("force_rag_reindex", False))
+
+        if reuse_existing and not force_reindex:
+            existing_points = _get_existing_collection_points(collection_name)
+            if isinstance(existing_points, int) and existing_points > 0:
+                rag_index = {
+                    "index_id": f"repo_index_{hash(str(repo_path))}",
+                    "indexed_files_count": 0,
+                    "total_symbols_count": 0,
+                    "existing_points_count": existing_points,
+                    "source_repo": repository_metadata.get("full_name", str(repo_path)),
+                    "vector_store_status": True,
+                    "keyword_index_status": True,
+                    "collection_name": collection_name,
+                    "rag_working": True,
+                    "reused_existing_index": True,
+                }
+                return build_agent_result(
+                    status="SUCCESS",
+                    artifact_type="rag_index",
+                    artifact_content=rag_index,
+                    reason="Reused existing RAG index from Qdrant collection.",
+                    confidence=0.95,
+                    logs=[
+                        f"Repo path: {repo_path}",
+                        f"Collection: {collection_name}",
+                        f"Existing points: {existing_points}",
+                        "Skipped re-indexing because existing index is available.",
+                    ],
+                    next_actions=["memory_agent"],
+                )
+
         chunk_size = context.get("chunk_size", 512)
         overlap_size = context.get("overlap_size", 50)
         embedding_batch_size = context.get("embedding_batch_size", 512)
@@ -471,6 +526,7 @@ class RagInitializer(BaseAgent):
 
         index_result = extract_and_index_repository(
             repo_path,
+            collection_name=collection_name,
             use_structured_indexing=use_structured_indexing,
             chunk_size=chunk_size,
             overlap_size=overlap_size,
@@ -504,8 +560,9 @@ class RagInitializer(BaseAgent):
             "source_repo": repository_metadata.get("full_name", str(repo_path)),
             "vector_store_status": vector_ready,
             "keyword_index_status": keyword_ready,
-            "collection_name": index_result.get("collection_name"),
+            "collection_name": index_result.get("collection_name") or collection_name,
             "rag_working": rag_working,
+            "reused_existing_index": False,
         }
 
         return build_agent_result(
