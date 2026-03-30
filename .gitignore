@@ -19,14 +19,18 @@ Thumbs.db
 
 # Coverage
 .coverage
+coverage.xml
 htmlcov/
 
 # Local logs/artifacts
 logs/
 artifacts/
+bandit-*.json
+.hordeforge_data/
 temp_cline/
 temp_openclaw/
 Local RAG/
+.tmp_issue_scanner_inputs.json
 
 # Test temporary directories
 tests/_tmp_*/

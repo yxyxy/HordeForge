@@ -230,6 +230,58 @@ def test_memory_agent_uses_semantic_rag_search_when_documents_missing(monkeypatc
     assert memory_context["matches"][0]["source"] == "semantic"
 
 
+def test_memory_agent_uses_collection_points_count_when_documents_not_embedded(monkeypatch):
+    class _FakeQdrantStore:
+        def __init__(self, *args, **kwargs):
+            return
+
+        def embed_text(self, texts):
+            assert texts
+            return [[0.1, 0.2, 0.3]]
+
+        def search(self, collection_name, query_vector, limit=10, filters=None):
+            assert collection_name == "repo_chunks"
+            assert query_vector
+            return [
+                {
+                    "id": "chunk-1",
+                    "score": 0.81,
+                    "payload": {
+                        "text": "ci docker build and push to ghcr",
+                        "file_path": ".github/workflows/ci.yml",
+                    },
+                }
+            ]
+
+        def get_collection_points_count(self, collection_name):
+            assert collection_name == "repo_chunks"
+            return 103166
+
+    monkeypatch.setattr("agents.memory_agent.QdrantStore", _FakeQdrantStore)
+    monkeypatch.setattr("agents.memory_agent._QDRANT_STORE_CACHE", None)
+
+    agent = MemoryAgent()
+    context = {
+        "query": "ghcr push denied",
+        "rag_initializer": _step_result(
+            "SUCCESS",
+            "rag_index",
+            {
+                "collection_name": "repo_chunks",
+                "documents_count": 0,
+                "reused_existing_index": True,
+            },
+        ),
+    }
+
+    result = agent.run(context)
+
+    assert result["status"] == "SUCCESS"
+    memory_context = _artifact_content(result, "memory_context")
+    assert len(memory_context["matches"]) == 1
+    assert memory_context["documents_count"] == 103166
+
+
 def test_memory_agent_resolves_template_query_from_issue_context():
     agent = MemoryAgent()
     context = {

@@ -145,6 +145,44 @@ class TestRepoConnectorIntegration:
                 # Our implementation filters out PRs, so we need to account for that
                 assert len(result["issues"]) >= 0  # May be 0 if all items are PRs
 
+    async def test_fetch_issues_filters_by_any_label(self):
+        """Multiple labels should work as OR, not strict AND."""
+        async with RepoConnector() as connector:
+            config = RepoConnector.Config(
+                repo_url="https://github.com/example/repo", token="valid_token", provider="github"
+            )
+
+            mock_issues = [
+                {
+                    "number": 1,
+                    "title": "Bug issue",
+                    "state": "open",
+                    "labels": [{"name": "bug"}],
+                    "body": "Bug details",
+                    "created_at": "2026-03-10T00:00Z",
+                },
+                {
+                    "number": 2,
+                    "title": "Enhancement issue",
+                    "state": "open",
+                    "labels": [{"name": "enhancement"}],
+                    "body": "Feature details",
+                    "created_at": "2026-03-10T00:01Z",
+                },
+            ]
+
+            with patch.object(connector.session, "get") as mock_get:
+                mock_response = AsyncMock()
+                mock_response.status = 200
+                mock_response.json.return_value = mock_issues
+                mock_get.return_value.__aenter__.return_value = mock_response
+
+                result = await connector.fetch_issues(config, labels=["bug", "agent:ready"])
+
+                assert result["status"] == "success"
+                assert result["count"] == 1
+                assert result["issues"][0]["number"] == 1
+
     async def test_fetch_prs_success(self):
         """Test successful PR fetching"""
         async with RepoConnector() as connector:
@@ -376,3 +414,22 @@ class TestRepoConnectorIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+@pytest.mark.asyncio
+async def test_run_async_derives_repo_url_from_repository_full_name():
+    connector = RepoConnector()
+
+    result = await connector._run_async(
+        {
+            "repository_full_name": "owner/repo",
+            "operation": "connect",
+            "mock_mode": True,
+        }
+    )
+
+    assert result["status"] == "SUCCESS"
+    artifacts = result.get("artifacts", [])
+    assert artifacts
+    metadata = artifacts[0].get("content", {})
+    assert metadata.get("repo_url") == "https://github.com/owner/repo"

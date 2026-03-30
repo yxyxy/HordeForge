@@ -505,6 +505,25 @@ class TestRunner(BaseAgent):
 
             # Enhance test results with LLM analysis
             test_results = self._analyze_test_results_with_llm(test_results, context)
+            require_llm = bool(context.get("require_llm", False))
+            if require_llm and isinstance(test_results.get("llm_error"), str):
+                llm_error = str(test_results.get("llm_error"))
+                result = build_agent_result(
+                    status="FAILED",
+                    artifact_type="test_results",
+                    artifact_content=test_results,
+                    reason=f"LLM required but unavailable: {llm_error[:160]}",
+                    confidence=0.95,
+                    logs=[
+                        "LLM strict mode enabled (require_llm=true).",
+                        f"LLM error: {llm_error[:200]}",
+                    ],
+                    next_actions=["fix_llm_connectivity"],
+                )
+                result["artifact_type"] = "test_results"
+                result["artifact_content"] = test_results
+                result["test_results"] = test_results
+                return result
 
             # Определяем статус на основе результатов тестов
             status = "SUCCESS" if test_results["exit_code"] == 0 else "FAILURE"

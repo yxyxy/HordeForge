@@ -27,6 +27,47 @@ def _extract_repository_full_name(context: dict[str, Any]) -> str | None:
     return None
 
 
+def _resolve_github_token(context: dict[str, Any], repository_full_name: str) -> str | None:
+    raw_token = context.get("github_token") or context.get("token")
+    if isinstance(raw_token, str) and raw_token.strip():
+        return raw_token.strip()
+
+    repository = context.get("repository")
+    if isinstance(repository, dict):
+        repo_token = repository.get("github_token") or repository.get("token")
+        if isinstance(repo_token, str) and repo_token.strip():
+            return repo_token.strip()
+
+    try:
+        from cli.repo_store import build_repo_token_ref, get_secret_value, list_secret_keys
+    except Exception:
+        return None
+
+    exact_ref = build_repo_token_ref(repository_full_name)
+    exact_value = get_secret_value(exact_ref)
+    if isinstance(exact_value, str) and exact_value.strip():
+        return exact_value.strip()
+
+    expected_tail = ".github_token"
+    normalized_repo = repository_full_name.strip().replace("/", "_").lower()
+    for key in list_secret_keys():
+        if not isinstance(key, str):
+            continue
+        key_stripped = key.strip()
+        if not key_stripped.lower().endswith(expected_tail):
+            continue
+        if not key_stripped.lower().startswith("repo."):
+            continue
+        middle = key_stripped[5 : -len(expected_tail)]
+        if middle.lower() != normalized_repo:
+            continue
+        value = get_secret_value(key_stripped)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    return None
+
+
 class IssuePipelineDispatcher(BaseAgent):
     name = "issue_pipeline_dispatcher"
     description = "Prepares plan artifacts for each scanned issue and dispatches feature pipeline."
@@ -63,9 +104,12 @@ class IssuePipelineDispatcher(BaseAgent):
             raw_issues = []
 
         repository_full_name = _extract_repository_full_name(context)
-        token = context.get("github_token") or context.get("token")
+        token = (
+            _resolve_github_token(context, repository_full_name) if repository_full_name else None
+        )
         target_pipeline = str(context.get("target_pipeline") or "feature_pipeline").strip()
         use_llm = bool(context.get("use_llm", True))
+        require_llm = bool(context.get("require_llm", True))
         mock_mode = bool(context.get("mock_mode"))
 
         if not repository_full_name:
@@ -100,6 +144,7 @@ class IssuePipelineDispatcher(BaseAgent):
                 logs=["Missing github_token/token in context."],
                 next_actions=["configure_github_token"],
             )
+        token = token.strip()
 
         issue_by_number: dict[int, dict[str, Any]] = {}
         for issue in raw_issues:
@@ -132,17 +177,21 @@ class IssuePipelineDispatcher(BaseAgent):
             if self.FIXED_LABEL in set(labels_before):
                 fixed_result = self._process_fixed_issue(
                     repository_full_name=repository_full_name,
-                    token=token.strip(),
+                    token=token,
                     issue_payload=issue_payload,
                 )
                 fixed_processed.append(fixed_result)
                 if not fixed_result.get("closed", False):
+                    non_error_reasons = {"related_merged_pr_not_found", "already_closed"}
+                    reason = str(fixed_result.get("reason") or "").strip()
+                    if reason in non_error_reasons:
+                        continue
                     failed.append(
                         {
                             "issue_number": issue_number,
                             "pipeline": target_pipeline,
                             "stage": "fixed_validation",
-                            "error": fixed_result.get("reason", "fixed_issue_not_closed"),
+                            "error": reason or "fixed_issue_not_closed",
                         }
                     )
                 continue
@@ -150,7 +199,7 @@ class IssuePipelineDispatcher(BaseAgent):
             issue_payload = self._enrich_issue_payload_with_comments(
                 issue_payload=issue_payload,
                 repository_full_name=repository_full_name,
-                token=token.strip(),
+                token=token,
             )
             moved_to_planning = False
             plan_bundle: dict[str, Any] = {
@@ -165,7 +214,7 @@ class IssuePipelineDispatcher(BaseAgent):
             if not started_from_ready:
                 moved_to_planning = self._update_issue_stage_label(
                     repository_full_name=repository_full_name,
-                    token=token.strip(),
+                    token=token,
                     issue_number=issue_number,
                     labels_before=labels_before,
                     target_label=self.PLANNING_LABEL,
@@ -174,8 +223,9 @@ class IssuePipelineDispatcher(BaseAgent):
                 plan_bundle = self._build_issue_plan(
                     issue=issue_payload,
                     repository_full_name=repository_full_name,
-                    token=token.strip(),
+                    token=token,
                     use_llm=use_llm,
+                    require_llm=require_llm,
                     mock_mode=mock_mode,
                     rules=context.get("rules") if isinstance(context.get("rules"), dict) else None,
                 )
@@ -193,9 +243,10 @@ class IssuePipelineDispatcher(BaseAgent):
             dispatch_inputs = {
                 "issue": issue_payload,
                 "repository": {"full_name": repository_full_name},
-                "github_token": token.strip(),
+                "github_token": token,
                 "mock_mode": mock_mode,
                 "use_llm": use_llm,
+                "require_llm": require_llm,
                 "dod": plan_bundle.get("dod"),
                 "bdd_specification": plan_bundle.get("bdd_specification"),
                 "spec": plan_bundle.get("spec"),
@@ -224,7 +275,7 @@ class IssuePipelineDispatcher(BaseAgent):
             if status in {"started", "success", "queued"} or isinstance(run_id, str):
                 self._update_issue_stage_label(
                     repository_full_name=repository_full_name,
-                    token=token.strip(),
+                    token=token,
                     issue_number=issue_number,
                     labels_before=labels_before,
                     target_label=self.READY_LABEL,
@@ -246,7 +297,7 @@ class IssuePipelineDispatcher(BaseAgent):
                 fallback_label = self.READY_LABEL if started_from_ready else self.OPENED_LABEL
                 self._update_issue_stage_label(
                     repository_full_name=repository_full_name,
-                    token=token.strip(),
+                    token=token,
                     issue_number=issue_number,
                     labels_before=labels_before,
                     target_label=fallback_label,
@@ -469,6 +520,7 @@ class IssuePipelineDispatcher(BaseAgent):
         repository_full_name: str,
         token: str,
         use_llm: bool,
+        require_llm: bool,
         mock_mode: bool,
         rules: dict[str, Any] | None,
     ) -> dict[str, Any]:
@@ -483,12 +535,15 @@ class IssuePipelineDispatcher(BaseAgent):
             "repository": {"full_name": repository_full_name},
             "github_token": token,
             "use_llm": use_llm,
+            "require_llm": require_llm,
             "mock_mode": mock_mode,
         }
         if rules:
             planning_context["rules"] = rules
 
         dod_result = DodExtractor().run(planning_context)
+        if str(dod_result.get("status", "")).upper() not in {"SUCCESS", "PARTIAL_SUCCESS"}:
+            return {"status": "failed", "error": "dod_step_failed"}
         dod = get_artifact_from_result(dod_result, "dod")
         if not isinstance(dod, dict):
             return {"status": "failed", "error": "dod_generation_failed"}
@@ -496,6 +551,8 @@ class IssuePipelineDispatcher(BaseAgent):
         planning_context["dod"] = dod
 
         spec_result = SpecificationWriter().run(planning_context)
+        if str(spec_result.get("status", "")).upper() != "SUCCESS":
+            return {"status": "failed", "error": "spec_step_failed"}
         spec = get_artifact_from_result(spec_result, "spec")
         if not isinstance(spec, dict):
             return {"status": "failed", "error": "spec_generation_failed"}
@@ -503,6 +560,8 @@ class IssuePipelineDispatcher(BaseAgent):
         planning_context["spec"] = spec
 
         subtask_result = TaskDecomposer().run(planning_context)
+        if str(subtask_result.get("status", "")).upper() not in {"SUCCESS", "PARTIAL_SUCCESS"}:
+            return {"status": "failed", "error": "subtask_step_failed"}
         subtasks = get_artifact_from_result(subtask_result, "subtasks") or get_artifact_from_result(
             subtask_result, "task_decomposition"
         )
@@ -512,13 +571,22 @@ class IssuePipelineDispatcher(BaseAgent):
         planning_context["subtasks"] = subtasks
 
         bdd_result = BDDGenerator().run(planning_context)
+        if str(bdd_result.get("status", "")).upper() not in {"SUCCESS", "PARTIAL_SUCCESS"}:
+            return {"status": "failed", "error": "bdd_step_failed"}
         bdd_specification = get_artifact_from_result(bdd_result, "bdd_specification")
         if not isinstance(bdd_specification, dict):
             bdd_specification = {}
         planning_context["bdd_generator"] = bdd_result
         planning_context["bdd_specification"] = bdd_specification
 
-        tests_result = TestGenerator().run(planning_context)
+        # Planning stage does not have generated code yet, so TestGenerator may
+        # fall back to deterministic test planning. Keep strict-LLM checks for
+        # other planning agents but disable them for this step.
+        tests_context = dict(planning_context)
+        tests_context["require_llm"] = False
+        tests_result = TestGenerator().run(tests_context)
+        if str(tests_result.get("status", "")).upper() != "SUCCESS":
+            return {"status": "failed", "error": "tests_step_failed"}
         tests = get_artifact_from_result(tests_result, "tests")
         if not isinstance(tests, dict):
             return {"status": "failed", "error": "test_generation_failed"}

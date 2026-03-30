@@ -167,11 +167,16 @@ class TestCodeGeneratorAgent:
 
     def test_marks_issue_as_fixed_when_pr_created(self, monkeypatch):
         updated_labels: list[tuple[int, list[str]]] = []
+        issue_comments: list[tuple[int, str]] = []
 
         class _FakeGitHubClient:
             def update_issue_labels(self, issue_number: int, labels: list[str]):
                 updated_labels.append((issue_number, labels))
                 return {"number": issue_number, "labels": labels}
+
+            def comment_issue(self, issue_number: int, comment: str):
+                issue_comments.append((issue_number, comment))
+                return {"issue_number": issue_number, "body": comment}
 
         class _FakePatchResult:
             success = True
@@ -233,3 +238,34 @@ class TestCodeGeneratorAgent:
         assert updated_labels[0][0] == 3
         assert "agent:fixed" in updated_labels[0][1]
         assert "agent:planning" not in updated_labels[0][1]
+        assert issue_comments
+        assert issue_comments[0][0] == 3
+        assert "https://github.com/acme/hordeforge/pull/1" in issue_comments[0][1]
+
+    def test_fails_when_llm_required_and_llm_unavailable(self, monkeypatch):
+        class _FailingWrapper:
+            def complete(self, prompt: str):
+                raise RuntimeError("llm unavailable")
+
+            def close(self):
+                return None
+
+        monkeypatch.setattr(
+            code_generator_module, "get_llm_wrapper", lambda *args, **kwargs: _FailingWrapper()
+        )
+
+        context = {
+            "use_llm": True,
+            "require_llm": True,
+            "issue": {"number": 7, "title": "Critical fix"},
+            "specification_writer": {
+                "artifacts": [
+                    {"type": "spec", "content": {"summary": "Critical fix", "file_changes": []}}
+                ]
+            },
+        }
+
+        result = CodeGenerator().run(context)
+
+        assert result["status"] == "FAILED"
+        assert result["artifacts"][0]["type"] == "code_patch"

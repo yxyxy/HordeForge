@@ -183,6 +183,38 @@ class FixAgent(BaseAgent):
                 pass
         return 1
 
+    @staticmethod
+    def _synthesize_failure_info(test_results: dict[str, Any]) -> list[dict[str, Any]]:
+        """Build minimal failure context when structured failures are unavailable."""
+        if not isinstance(test_results, dict):
+            return []
+
+        stdout = str(test_results.get("stdout") or "").strip()
+        stderr = str(test_results.get("stderr") or "").strip()
+        framework = str(test_results.get("framework") or "unknown").strip()
+        failed_raw = test_results.get("failed")
+        try:
+            failed_count = int(failed_raw) if failed_raw is not None else 0
+        except (TypeError, ValueError):
+            failed_count = 0
+
+        message_parts: list[str] = []
+        if stderr:
+            message_parts.append(f"stderr:\n{stderr[:3000]}")
+        if stdout:
+            message_parts.append(f"stdout:\n{stdout[:3000]}")
+        if not message_parts:
+            return []
+
+        return [
+            {
+                "name": f"{framework}_failure",
+                "type": "test_failure",
+                "failed_count": max(0, failed_count),
+                "message": "\n\n".join(message_parts),
+            }
+        ]
+
     def run(self, context: dict[str, Any]) -> dict:
         failed = self._extract_failed_tests(context)
         iteration = self._resolve_iteration(context)
@@ -190,10 +222,12 @@ class FixAgent(BaseAgent):
 
         # Try to use LLM for enhanced fix generation
         use_llm = context.get("use_llm", True)
+        require_llm = bool(context.get("require_llm", False))
         llm_fix_result = None
         llm_error = None
 
         if use_llm:
+            llm = None
             try:
                 # Try to use the new LLM wrapper first, fall back to legacy if needed
                 llm = get_llm_wrapper()
@@ -203,19 +237,30 @@ class FixAgent(BaseAgent):
 
                 if llm is not None:
                     # Get test results and failure information
+                    test_runner_result = context.get("test_runner")
+                    if isinstance(test_runner_result, dict):
+                        direct_payload = test_runner_result.get("test_results")
+                    else:
+                        direct_payload = None
                     test_results = (
-                        get_artifact_from_context(
-                            context,
-                            "test_results",
-                            preferred_steps=["test_runner"],
+                        direct_payload
+                        if isinstance(direct_payload, dict)
+                        else (
+                            get_artifact_from_context(
+                                context,
+                                "test_results",
+                                preferred_steps=["test_runner"],
+                            )
+                            or {}
                         )
-                        or {}
                     )
 
                     failure_info = test_results.get("failures", [])
                     if not failure_info:
                         # Try to get failure info from context
                         failure_info = context.get("failures", [])
+                    if not failure_info:
+                        failure_info = self._synthesize_failure_info(test_results)
 
                     if failure_info:
                         # Build prompt for LLM to generate fix
@@ -235,7 +280,6 @@ class FixAgent(BaseAgent):
                             )
 
                         response = llm.complete(prompt)
-                        llm.close()
 
                         # Parse response to extract fix
                         import json
@@ -255,6 +299,35 @@ class FixAgent(BaseAgent):
                             }
             except Exception as e:
                 llm_error = str(e)
+            finally:
+                if llm is not None:
+                    try:
+                        llm.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+
+        if use_llm and require_llm and not (llm_fix_result and isinstance(llm_fix_result, dict)):
+            return build_agent_result(
+                status="FAILED",
+                artifact_type="code_patch",
+                artifact_content={
+                    "schema_version": "1.0",
+                    "files": [],
+                    "llm_required": True,
+                    "llm_error": llm_error,
+                },
+                reason=(
+                    f"LLM required but unavailable: {llm_error[:160]}"
+                    if isinstance(llm_error, str) and llm_error
+                    else "LLM required but no valid fix patch was generated."
+                ),
+                confidence=0.95,
+                logs=[
+                    "LLM strict mode enabled (require_llm=true).",
+                    f"LLM error: {(llm_error or 'missing/invalid llm output')[:200]}",
+                ],
+                next_actions=["fix_llm_connectivity"],
+            )
 
         if llm_fix_result and isinstance(llm_fix_result, dict):
             # Use LLM-generated fix

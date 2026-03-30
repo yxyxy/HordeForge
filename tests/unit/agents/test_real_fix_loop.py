@@ -1,5 +1,8 @@
 """Unit tests for real fix loop execution (HF-P5-005)."""
 
+from unittest.mock import Mock
+
+import agents.fix_agent as fix_agent_module
 from agents.fix_agent import FixAgent
 from agents.test_executor import (
     ConvergenceDetector,
@@ -305,6 +308,38 @@ class TestFixAgent:
 
         assert detector.has_converged() is True
         assert detector.should_stop(2) is True
+
+    def test_run_with_require_llm_and_synthesized_failure_info(self, monkeypatch):
+        """Require-LLM mode should still work when test_results has no failures[] list."""
+        mock_llm = Mock()
+        mock_llm.complete.return_value = (
+            '{"files":[{"path":"src/feature_impl.py","change_type":"modify","content":"# fix"}]}'
+        )
+        monkeypatch.setattr(fix_agent_module, "get_llm_wrapper", lambda *args, **kwargs: mock_llm)
+        monkeypatch.setattr(
+            fix_agent_module, "get_legacy_llm_wrapper", lambda *args, **kwargs: None
+        )
+
+        agent = FixAgent()
+        context = {
+            "test_runner": {
+                "test_results": {
+                    "framework": "mock",
+                    "failed": 1,
+                    "stdout": "AssertionError: expected 1 got 2",
+                    "stderr": "",
+                }
+            },
+            "use_llm": True,
+            "require_llm": True,
+        }
+
+        result = agent.run(context)
+
+        assert result["status"] == "SUCCESS"
+        content = result["artifacts"][0]["content"]
+        assert content["files"]
+        mock_llm.complete.assert_called_once()
 
 
 class TestTestExecutionResult:

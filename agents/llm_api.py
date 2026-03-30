@@ -89,6 +89,7 @@ class ApiConfiguration:
     provider: ApiProvider
     model: str
     api_key: str | None = None
+    api_key_ref: str | None = None
 
     # Provider-specific settings
     base_url: str | None = None
@@ -208,6 +209,7 @@ class LlmApi:
             return QwenCodeHandler(
                 qwen_oauth_credentials_json=self.config.api_key,
                 qwen_model_id=self.config.model,
+                qwen_oauth_secret_ref=self.config.api_key_ref,
             )
         elif self.config.provider == ApiProvider.MISTRAL:
             return MistralHandler(
@@ -250,6 +252,7 @@ class LlmApi:
             return get_llm_wrapper(
                 provider=self.config.provider.value,
                 api_key=self.config.api_key,
+                api_key_ref=self.config.api_key_ref,
                 model=self.config.model,
                 timeout=30,
                 max_retries=3,

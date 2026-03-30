@@ -252,17 +252,55 @@ Respond with valid JSON only.
 
 def parse_review_output(output: str) -> dict[str, Any]:
     """Parse and validate LLM code review output."""
-    # Try to extract JSON from output
-    json_match = re.search(r"\{[\s\S]*\}", output)
-    if not json_match:
-        raise ValueError("No JSON found in LLM output")
+    if isinstance(output, dict):
+        cleaned = json.dumps(output, ensure_ascii=False)
+    elif isinstance(output, list):
+        cleaned = json.dumps(output, ensure_ascii=False)
+    else:
+        cleaned = str(output or "").strip()
+    if not cleaned:
+        raise ValueError("Empty LLM output")
 
-    json_str = json_match.group(0)
+    # Remove markdown code fences when present.
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
 
-    try:
-        result = json.loads(json_str)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in LLM output: {e}") from e
+    parse_errors: list[str] = []
+
+    def _try_parse(candidate: str) -> dict[str, Any] | None:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError as error:
+            parse_errors.append(str(error))
+        return None
+
+    # 1) Direct parse
+    result = _try_parse(cleaned)
+
+    # 2) Try balanced JSON objects from free-form text
+    if result is None:
+        start_positions = [idx for idx, char in enumerate(cleaned) if char == "{"]
+        for start in start_positions:
+            depth = 0
+            for idx in range(start, len(cleaned)):
+                char = cleaned[idx]
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = cleaned[start : idx + 1]
+                        result = _try_parse(candidate)
+                        if result is not None:
+                            break
+            if result is not None:
+                break
+
+    if result is None:
+        detail = parse_errors[-1] if parse_errors else "No JSON object found"
+        raise ValueError(f"Invalid JSON in LLM output: {detail}")
 
     # Validate required fields
     required_fields = [
@@ -322,6 +360,7 @@ class ReviewAgent(BaseAgent):
         llm_review_result = None
         llm_error = None
         use_llm = context.get("use_llm", True)
+        require_llm = bool(context.get("require_llm", False))
 
         if use_llm and files:
             try:
@@ -363,6 +402,30 @@ class ReviewAgent(BaseAgent):
                         llm_review_result = legacy_parse_review_output(parsed_response)
             except Exception as e:
                 llm_error = str(e)
+
+        if use_llm and require_llm and files and not isinstance(llm_review_result, dict):
+            return build_agent_result(
+                status="FAILED",
+                artifact_type="review_result",
+                artifact_content={
+                    "decision": "error",
+                    "summary": "LLM required but review LLM is unavailable.",
+                    "llm_required": True,
+                    "llm_error": llm_error,
+                    "findings": [],
+                },
+                reason=(
+                    f"LLM required but unavailable: {llm_error[:160]}"
+                    if isinstance(llm_error, str) and llm_error
+                    else "LLM required but no valid review output was produced."
+                ),
+                confidence=0.95,
+                logs=[
+                    "LLM strict mode enabled (require_llm=true).",
+                    f"LLM error: {(llm_error or 'missing/invalid llm output')[:200]}",
+                ],
+                next_actions=["fix_llm_connectivity"],
+            )
 
         # Live GitHub review (HF-P5-006)
         live_review = False

@@ -43,6 +43,7 @@ steps:
       issue: "{{issue}}"
       repository: "{{repository}}"
       memory_context: "{{memory_context}}"
+      require_llm: true
     output: "{{code_patch}}"
     on_failure: retry_step
 
@@ -52,6 +53,7 @@ steps:
     input:
       code_patch: "{{code_patch}}"
       tests: "{{tests}}"
+      require_llm: true
     output: "{{test_results}}"
     on_failure: trigger_fix_loop
 
@@ -62,6 +64,7 @@ steps:
     input:
       code_patch: "{{code_patch}}"
       test_results: "{{test_results}}"
+      require_llm: true
     output: "{{fixed_code_patch}}"
     retry_limit: 5
     on_failure: create_issue_for_human
@@ -73,6 +76,7 @@ steps:
       fixed_code_patch: "{{fixed_code_patch}}"
       repository: "{{repository}}"
       memory_context: "{{memory_context}}"
+      require_llm: true
     output: "{{review_result}}"
     on_failure: create_issue_for_human
 

@@ -425,6 +425,7 @@ class SpecificationWriter(BaseAgent):
 
         # Try to use LLM for enhanced specification generation
         use_llm = context.get("use_llm", True)
+        require_llm = bool(context.get("require_llm", False))
         llm_spec = None
         llm_error = None
 
@@ -463,6 +464,28 @@ class SpecificationWriter(BaseAgent):
 
             except Exception as exc:
                 llm_error = str(exc)
+
+        if use_llm and require_llm and not llm_spec:
+            return build_agent_result(
+                status="FAILED",
+                artifact_type="spec",
+                artifact_content={
+                    "schema_version": "1.0",
+                    "llm_required": True,
+                    "llm_error": llm_error,
+                },
+                reason=(
+                    f"LLM required but unavailable: {llm_error[:160]}"
+                    if isinstance(llm_error, str) and llm_error
+                    else "LLM required but no valid specification was produced."
+                ),
+                confidence=0.95,
+                logs=[
+                    "LLM strict mode enabled (require_llm=true).",
+                    f"LLM error: {(llm_error or 'missing/invalid llm output')[:200]}",
+                ],
+                next_actions=["fix_llm_connectivity"],
+            )
 
         if llm_spec:
             # Use LLM-generated specification

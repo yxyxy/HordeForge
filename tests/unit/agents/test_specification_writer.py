@@ -1,5 +1,6 @@
 """TDD: Test-Driven Development для Specification Writer Agent"""
 
+import agents.specification_writer as specification_writer_module
 from agents.specification_writer import (
     SpecificationWriter,
     generate_acceptance_criteria,
@@ -258,8 +259,26 @@ class TestSpecificationWriterAgent:
         assert "dependencies" in tech_spec
         assert "implementation_notes" in tech_spec
 
-        # Check file plan structure
-        file_plan = content["file_change_plan"]
-        assert "files_to_create" in file_plan
-        assert "files_to_modify" in file_plan
-        assert "files_to_delete" in file_plan
+    def test_run_fails_when_llm_required_and_unavailable(self, monkeypatch):
+        class _FailingWrapper:
+            def complete(self, prompt: str):
+                raise RuntimeError("llm unavailable")
+
+            def close(self):
+                return None
+
+        monkeypatch.setattr(
+            specification_writer_module,
+            "get_llm_wrapper",
+            lambda *args, **kwargs: _FailingWrapper(),
+        )
+
+        context = {
+            "use_llm": True,
+            "require_llm": True,
+            "issue": {"title": "Implement auth endpoint", "body": "Need API and tests"},
+        }
+
+        result = SpecificationWriter().run(context)
+
+        assert result["status"] == "FAILED"

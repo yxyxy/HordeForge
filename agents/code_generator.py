@@ -97,6 +97,7 @@ class EnhancedCodeGenerator(BaseAgent):
         llm_response_parsed = False
 
         use_llm: bool = bool(context.get("use_llm", True))
+        require_llm: bool = bool(context.get("require_llm", False))
 
         github_client, github_client_reason = self._resolve_github_client(context)
 
@@ -258,6 +259,33 @@ class EnhancedCodeGenerator(BaseAgent):
                     except Exception:  # noqa: BLE001
                         pass
 
+        if use_llm and require_llm and not llm_patch:
+            failure_reason = (
+                f"LLM required but unavailable: {llm_error[:160]}"
+                if isinstance(llm_error, str) and llm_error
+                else "LLM required but no valid structured output was produced."
+            )
+            return build_agent_result(
+                status="FAILED",
+                artifact_type="code_patch",
+                artifact_content={
+                    "schema_version": "1.0",
+                    "files": [],
+                    "llm_required": True,
+                    "llm_error": llm_error,
+                    "llm_response_parsed": llm_response_parsed,
+                },
+                reason=failure_reason,
+                confidence=0.95,
+                logs=[
+                    "LLM strict mode enabled (require_llm=true).",
+                    f"LLM enabled: {use_llm}",
+                    f"LLM parsed response: {llm_response_parsed}",
+                    f"LLM error: {(llm_error or 'missing/invalid llm output')[:200]}",
+                ],
+                next_actions=["fix_llm_connectivity"],
+            )
+
         if llm_patch:
             patch: dict[str, Any] = {
                 "schema_version": "2.0",
@@ -345,7 +373,12 @@ class EnhancedCodeGenerator(BaseAgent):
                     patch["pr_number"] = pr_number
                     patch["branch_name"] = result.branch_name
                     patch["applied_to_github"] = True
-                    self._mark_issue_as_fixed(context=context, github_client=github_client)
+                    self._mark_issue_as_fixed(
+                        context=context,
+                        github_client=github_client,
+                        pr_url=pr_url,
+                        pr_number=pr_number,
+                    )
                 else:
                     patch["apply_error"] = result.error
                     patch["rollback_performed"] = result.rollback_performed
@@ -399,7 +432,14 @@ class EnhancedCodeGenerator(BaseAgent):
             next_actions=["test_runner", "fix_agent"],
         )
 
-    def _mark_issue_as_fixed(self, *, context: dict[str, Any], github_client: Any) -> None:
+    def _mark_issue_as_fixed(
+        self,
+        *,
+        context: dict[str, Any],
+        github_client: Any,
+        pr_url: str | None = None,
+        pr_number: int | None = None,
+    ) -> None:
         issue = context.get("issue")
         if not isinstance(issue, dict):
             return
@@ -426,6 +466,30 @@ class EnhancedCodeGenerator(BaseAgent):
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "code_generator_issue_label_update_failed issue=%s reason=%s",
+                issue_number,
+                str(exc)[:300],
+            )
+
+        if not pr_url or not hasattr(github_client, "comment_issue"):
+            return
+
+        pr_ref = f"#{pr_number}" if isinstance(pr_number, int) and pr_number > 0 else pr_url
+        comment = (
+            "## Service update\n\n"
+            f"PR {pr_ref} created for this issue.\n"
+            f"Link: {pr_url}\n\n"
+            f"Label `{self.FIXED_LABEL}` applied automatically."
+        )
+        try:
+            github_client.comment_issue(issue_number, comment=comment)
+            logger.info(
+                "code_generator_issue_fixed_comment_posted issue=%s pr_url=%s",
+                issue_number,
+                pr_url,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "code_generator_issue_fixed_comment_failed issue=%s reason=%s",
                 issue_number,
                 str(exc)[:300],
             )

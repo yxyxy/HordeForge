@@ -4,10 +4,8 @@ import asyncio
 import json
 import logging
 import os
-import time
 from typing import Any
 
-import requests
 from openai import OpenAI
 
 from .llm_wrapper import (
@@ -1186,118 +1184,22 @@ class QwenHandler(ApiHandler):
 class QwenCodeHandler(ApiHandler):
     """Qwen Code handler using OAuth credentials JSON."""
 
-    _TOKEN_ENDPOINT = "https://chat.qwen.ai/api/v1/oauth2/token"
-    _CLIENT_ID = "f0304373b74a44d2b584a3fb70ca9e56"
-
     def __init__(
         self,
         qwen_oauth_credentials_json: str | None = None,
         qwen_model_id: str = "qwen3-coder-plus",
+        qwen_oauth_secret_ref: str | None = None,
+        qwen_oauth_storage_dir: str | None = None,
     ):
         if not qwen_oauth_credentials_json:
             raise ValueError("Qwen Code OAuth credentials JSON must be set")
         self.qwen_model_id = qwen_model_id
-        self._credentials = self._parse_credentials(qwen_oauth_credentials_json)
+        from .qwen_oauth_token_manager import QwenOAuthTokenManager
 
-    @staticmethod
-    def _parse_credentials(raw_json: str) -> dict[str, Any]:
-        try:
-            creds = json.loads(raw_json)
-        except json.JSONDecodeError as exc:
-            raise ValueError("Invalid Qwen OAuth credentials JSON") from exc
-
-        if not isinstance(creds, dict):
-            raise ValueError("Invalid Qwen OAuth credentials JSON payload")
-        if not isinstance(creds.get("refresh_token"), str) or not creds.get("refresh_token"):
-            raise ValueError("Qwen OAuth refresh_token is missing")
-        if not isinstance(creds.get("access_token"), str):
-            raise ValueError("Qwen OAuth access_token is missing")
-        return creds
-
-    @staticmethod
-    def _is_token_valid(credentials: dict[str, Any]) -> bool:
-        expiry = credentials.get("expiry_date")
-        access_token = credentials.get("access_token")
-        if not isinstance(access_token, str) or not access_token:
-            return False
-        # Some stored credentials do not include expiry_date.
-        # In this case, use the token as-is and let the API validate it.
-        if not isinstance(expiry, int):
-            return True
-        # 30s safety window before expiry
-        return int(time.time() * 1000) < (expiry - 30_000)
-
-    def _refresh_access_token(self) -> None:
-        refresh_token = self._credentials.get("refresh_token")
-        if not isinstance(refresh_token, str) or not refresh_token:
-            raise RuntimeError("Qwen OAuth refresh_token is missing")
-
-        masked_refresh = self._mask_secret(refresh_token)
-        logger.info(
-            "qwen_oauth_refresh_request endpoint=%s client_id=%s refresh_token=%s",
-            self._TOKEN_ENDPOINT,
-            self._CLIENT_ID,
-            masked_refresh,
-        )
-        response = requests.post(
-            self._TOKEN_ENDPOINT,
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
-            },
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": self._CLIENT_ID,
-            },
-            timeout=20,
-        )
-        response_text = response.text or ""
-        logger.info(
-            "qwen_oauth_refresh_response status=%s content_type=%s body=%s",
-            response.status_code,
-            response.headers.get("Content-Type", ""),
-            self._truncate_for_log(response_text),
-        )
-        if response.status_code != 200:
-            raise RuntimeError(
-                "Qwen OAuth refresh failed: "
-                f"status={response.status_code} body={self._truncate_for_log(response_text)}"
-            )
-        try:
-            token_data = response.json()
-        except requests.exceptions.JSONDecodeError as exc:
-            raise RuntimeError(
-                "Qwen OAuth refresh returned non-JSON response: "
-                f"status={response.status_code} "
-                f"content_type={response.headers.get('Content-Type', '')} "
-                f"body={self._truncate_for_log(response_text)}"
-            ) from exc
-        if isinstance(token_data, dict) and token_data.get("error"):
-            raise RuntimeError(
-                f"Qwen OAuth refresh failed: {token_data.get('error')} "
-                f"{token_data.get('error_description', '')}".strip()
-            )
-
-        access_token = token_data.get("access_token")
-        token_type = token_data.get("token_type")
-        expires_in = token_data.get("expires_in")
-        if not isinstance(access_token, str) or not access_token:
-            raise RuntimeError("Qwen OAuth refresh did not return access_token")
-        if not isinstance(expires_in, int):
-            raise RuntimeError("Qwen OAuth refresh did not return expires_in")
-        self._credentials["access_token"] = access_token
-        if isinstance(token_type, str) and token_type:
-            self._credentials["token_type"] = token_type
-        self._credentials["refresh_token"] = token_data.get(
-            "refresh_token", self._credentials.get("refresh_token")
-        )
-        self._credentials["expiry_date"] = int(time.time() * 1000) + (expires_in * 1000)
-        logger.info(
-            "qwen_oauth_refresh_success token_type=%s expires_in=%s access_token=%s",
-            self._credentials.get("token_type", ""),
-            expires_in,
-            self._mask_secret(access_token),
+        self._token_manager = QwenOAuthTokenManager(
+            oauth_credentials_json=qwen_oauth_credentials_json,
+            credentials_secret_ref=qwen_oauth_secret_ref,
+            storage_dir=qwen_oauth_storage_dir,
         )
 
     @staticmethod
@@ -1313,7 +1215,8 @@ class QwenCodeHandler(ApiHandler):
         return f"{value[:limit]}...<truncated {len(value) - limit} chars>"
 
     def _base_url(self) -> str:
-        base_url = self._credentials.get(
+        credentials = self._token_manager.get_current_credentials()
+        base_url = credentials.get(
             "resource_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
         if not isinstance(base_url, str) or not base_url:
@@ -1331,22 +1234,22 @@ class QwenCodeHandler(ApiHandler):
         tools: list[dict[str, Any]] | None = None,
     ) -> ApiStream:
         """Create streaming message using Qwen Code OAuth credentials."""
-        if not self._is_token_valid(self._credentials):
-            try:
-                self._refresh_access_token()
-            except RuntimeError as exc:
-                # If refresh endpoint is temporarily unavailable (WAF/captcha),
-                # continue with the currently stored token when present.
-                current_access_token = self._credentials.get("access_token")
-                if isinstance(current_access_token, str) and current_access_token:
-                    logger.warning(
-                        "qwen_oauth_refresh_failed_using_existing_access_token error=%s",
-                        exc,
-                    )
-                else:
-                    raise
+        try:
+            credentials = self._token_manager.get_valid_credentials()
+        except RuntimeError as exc:
+            # If refresh endpoint is temporarily unavailable (WAF/captcha),
+            # continue with the currently stored token when present.
+            credentials = self._token_manager.get_current_credentials()
+            current_access_token = credentials.get("access_token")
+            if isinstance(current_access_token, str) and current_access_token:
+                logger.warning(
+                    "qwen_oauth_refresh_failed_using_existing_access_token error=%s",
+                    exc,
+                )
+            else:
+                raise
 
-        access_token = self._credentials.get("access_token")
+        access_token = credentials.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             raise RuntimeError("Qwen OAuth access_token is missing")
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 from enum import Enum
@@ -15,6 +16,7 @@ except Exception:  # noqa: BLE001
     QdrantStore = None
 
 _QDRANT_STORE_CACHE: Any | None = None
+logger = logging.getLogger(__name__)
 
 
 class MemoryType(Enum):
@@ -201,12 +203,17 @@ class MemoryAgent(BaseAgent):
             key=lambda item: float(item.get("score", 0.0)),
             reverse=True,
         )
+        collection_name = str(rag_index.get("collection_name") or "repo_chunks")
 
         return {
             "query": query,
             "matches": ranked_matches[:5],
-            "documents_count": int(rag_index.get("documents_count", len(documents)) or 0),
-            "collection_name": str(rag_index.get("collection_name") or "repo_chunks"),
+            "documents_count": self._resolve_documents_count(
+                rag_index=rag_index,
+                collection_name=collection_name,
+                fallback_count=len(documents),
+            ),
+            "collection_name": collection_name,
         }
 
     def _semantic_search(
@@ -231,7 +238,12 @@ class MemoryAgent(BaseAgent):
                 query_vector=query_vectors[0],
                 limit=max(1, int(limit)),
             )
-        except Exception:
+        except Exception as error:
+            logger.warning(
+                "memory_semantic_search_failed collection=%s error=%s",
+                collection_name,
+                error,
+            )
             return []
 
         matches: list[dict[str, Any]] = []
@@ -257,6 +269,32 @@ class MemoryAgent(BaseAgent):
                 }
             )
         return matches
+
+    def _resolve_documents_count(
+        self, *, rag_index: dict[str, Any], collection_name: str, fallback_count: int
+    ) -> int:
+        raw_count = rag_index.get("documents_count")
+        try:
+            count = int(raw_count or 0)
+        except Exception:
+            count = 0
+        if count > 0:
+            return count
+
+        try:
+            store = self._get_semantic_store()
+            if store is not None and hasattr(store, "get_collection_points_count"):
+                collection_points = store.get_collection_points_count(collection_name)
+                if collection_points is not None and int(collection_points) > 0:
+                    return int(collection_points)
+        except Exception as error:
+            logger.warning(
+                "memory_documents_count_resolution_failed collection=%s error=%s",
+                collection_name,
+                error,
+            )
+
+        return int(fallback_count or 0)
 
     def _get_semantic_store(self) -> Any | None:
         global _QDRANT_STORE_CACHE

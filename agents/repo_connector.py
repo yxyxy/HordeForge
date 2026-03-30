@@ -204,9 +204,8 @@ class RepoConnector(BaseAgent):
         Fetch issues from repository.
         """
         if config.mock_mode:
-            return {
-                "status": "success",
-                "issues": [
+            issues = (
+                [
                     {
                         "number": 1,
                         "title": "Sample issue",
@@ -217,7 +216,12 @@ class RepoConnector(BaseAgent):
                     }
                 ]
                 if state == "open"
-                else [],
+                else []
+            )
+            return {
+                "status": "success",
+                "issues": issues,
+                "count": len(issues),
             }
 
         try:
@@ -225,8 +229,6 @@ class RepoConnector(BaseAgent):
                 repo_name = self._extract_repo_name(config.repo_url)
                 url = f"https://api.github.com/repos/{repo_name}/issues"
                 params = {"state": state}
-                if labels:
-                    params["labels"] = ",".join(labels)
 
                 headers = {"User-Agent": "HordeForge-RepoConnector/1.0"}
                 if config.token:
@@ -237,11 +239,26 @@ class RepoConnector(BaseAgent):
                         issues = await response.json()
                         # Filter out pull requests since GitHub API returns both issues and PRs
                         issues_only = [issue for issue in issues if "pull_request" not in issue]
+                        filtered_issues = issues_only
+                        if labels:
+                            expected = {str(label).strip().lower() for label in labels if label}
+                            if expected:
+                                filtered_issues = [
+                                    issue
+                                    for issue in issues_only
+                                    if expected.intersection(
+                                        {
+                                            str(item.get("name", "")).strip().lower()
+                                            for item in (issue.get("labels") or [])
+                                            if isinstance(item, dict)
+                                        }
+                                    )
+                                ]
 
                         return {
                             "status": "success",
-                            "issues": issues_only,
-                            "count": len(issues_only),
+                            "issues": filtered_issues,
+                            "count": len(filtered_issues),
                         }
                     else:
                         return {
@@ -355,6 +372,12 @@ class RepoConnector(BaseAgent):
         Async implementation of run - called internally by sync run() method.
         """
         repo_url = context.get("repo_url")
+        if (not isinstance(repo_url, str) or not repo_url.strip()) and isinstance(
+            context.get("repository_full_name"), str
+        ):
+            repository_full_name = context.get("repository_full_name", "").strip()
+            if repository_full_name and "/" in repository_full_name:
+                repo_url = f"https://github.com/{repository_full_name}"
         token = context.get("github_token") or context.get("token")
         mock_mode = bool(context.get("mock_mode", False))
         operation = context.get("operation", "connect")

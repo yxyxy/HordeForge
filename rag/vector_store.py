@@ -394,13 +394,26 @@ class QdrantStore:
         """
         if not self.collection_exists(collection_name):
             raise ValueError(f"Collection '{collection_name}' does not exist")
-
-        results = self.client.search(
-            collection_name=collection_name,
-            query_vector=query_vector,
-            limit=limit,
-            query_filter=filters,
-        )
+        # Keep compatibility with both old and new qdrant-client APIs:
+        # - old: client.search(...)
+        # - new: client.query_points(...).points
+        if hasattr(self.client, "search"):
+            results = self.client.search(
+                collection_name=collection_name,
+                query_vector=query_vector,
+                limit=limit,
+                query_filter=filters,
+            )
+        elif hasattr(self.client, "query_points"):
+            query_result = self.client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                limit=limit,
+                query_filter=filters,
+            )
+            results = getattr(query_result, "points", []) or []
+        else:
+            raise RuntimeError("Qdrant client has neither 'search' nor 'query_points' API")
 
         # Format results to return a list of dictionaries
         formatted_results = []
@@ -410,6 +423,17 @@ class QdrantStore:
             )
 
         return formatted_results
+
+    def get_collection_points_count(self, collection_name: str) -> int | None:
+        """Return points count for collection if available."""
+        try:
+            info = self.client.get_collection(collection_name)
+            points_count = getattr(info, "points_count", None)
+            if points_count is None:
+                return None
+            return int(points_count)
+        except Exception:
+            return None
 
     def embed_text(self, texts: list[str]) -> list[list[float]]:
         """

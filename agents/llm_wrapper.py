@@ -12,7 +12,6 @@ from typing import Any
 
 import anthropic
 import google.genai as genai
-import requests
 from openai import OpenAI
 from tenacity import (
     retry,
@@ -752,8 +751,8 @@ class GoogleGenAIWrapper(LLMWrapper, ApiHandler):
 class QwenCodeWrapper(LLMWrapper):
     """Qwen Code wrapper backed by OAuth credentials JSON from profile store."""
 
-    _TOKEN_ENDPOINT = "https://chat.qwen.ai/api/v1/oauth2/token"
-    _CLIENT_ID = "f0304373b74a44d2b584a3fb70ca9e56"
+    _AUTH_FAILURE_COOLDOWN_SECONDS = 300
+    _auth_failure_until_by_fingerprint: dict[str, float] = {}
 
     def __init__(
         self,
@@ -761,87 +760,26 @@ class QwenCodeWrapper(LLMWrapper):
         model: str = "qwen3-coder-plus",
         timeout: int = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        credentials_secret_ref: str | None = None,
+        oauth_storage_dir: str | os.PathLike[str] | None = None,
     ):
         super().__init__(
             api_key=oauth_credentials_json, model=model, timeout=timeout, max_retries=max_retries
         )
-        self._credentials = self._parse_credentials(oauth_credentials_json)
+        from agents.qwen_oauth_token_manager import QwenOAuthTokenManager
+
+        self._token_manager = QwenOAuthTokenManager(
+            oauth_credentials_json=oauth_credentials_json,
+            credentials_secret_ref=credentials_secret_ref,
+            storage_dir=oauth_storage_dir,
+        )
 
     def _get_api_key_from_env(self) -> str:
         return ""
 
     @staticmethod
-    def _parse_credentials(raw_json: str) -> dict[str, Any]:
-        try:
-            credentials = json.loads(raw_json)
-        except json.JSONDecodeError as exc:
-            raise ValueError("Invalid Qwen Code OAuth credentials JSON") from exc
-
-        if not isinstance(credentials, dict):
-            raise ValueError("Invalid Qwen Code OAuth credentials payload")
-        if not isinstance(credentials.get("refresh_token"), str) or not credentials.get(
-            "refresh_token"
-        ):
-            raise ValueError("Qwen Code OAuth refresh_token is missing")
-        if "access_token" not in credentials:
-            credentials["access_token"] = ""
-        return credentials
-
-    @staticmethod
-    def _is_token_valid(credentials: dict[str, Any]) -> bool:
-        access_token = credentials.get("access_token")
-        expiry = credentials.get("expiry_date")
-        if not isinstance(access_token, str) or not access_token:
-            return False
-        if not isinstance(expiry, int):
-            return False
-        return int(time.time() * 1000) < (expiry - 30_000)
-
-    def _refresh_access_token(self) -> None:
-        refresh_token = self._credentials.get("refresh_token")
-        if not isinstance(refresh_token, str) or not refresh_token:
-            raise RuntimeError("Qwen OAuth refresh_token is missing")
-
-        response = requests.post(
-            self._TOKEN_ENDPOINT,
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
-            },
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": self._CLIENT_ID,
-            },
-            timeout=20,
-        )
-        if response.status_code != 200:
-            raise RuntimeError(f"Qwen OAuth refresh failed: {response.status_code} {response.text}")
-        token_data = response.json()
-        if isinstance(token_data, dict) and token_data.get("error"):
-            raise RuntimeError(
-                f"Qwen OAuth refresh failed: {token_data.get('error')} "
-                f"{token_data.get('error_description', '')}".strip()
-            )
-
-        access_token = token_data.get("access_token")
-        expires_in = token_data.get("expires_in")
-        if not isinstance(access_token, str) or not access_token:
-            raise RuntimeError("Qwen OAuth refresh did not return access_token")
-        if not isinstance(expires_in, int):
-            raise RuntimeError("Qwen OAuth refresh did not return expires_in")
-
-        self._credentials["access_token"] = access_token
-        self._credentials["refresh_token"] = token_data.get(
-            "refresh_token", self._credentials.get("refresh_token")
-        )
-        self._credentials["token_type"] = token_data.get(
-            "token_type", self._credentials.get("token_type", "Bearer")
-        )
-        self._credentials["expiry_date"] = int(time.time() * 1000) + expires_in * 1000
-
-    def _resolve_base_url(self) -> str:
-        base_url = self._credentials.get(
+    def _resolve_base_url(credentials: dict[str, Any]) -> str:
+        base_url = credentials.get(
             "resource_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
         if not isinstance(base_url, str) or not base_url:
@@ -852,37 +790,111 @@ class QwenCodeWrapper(LLMWrapper):
             base_url = f"{base_url.rstrip('/')}/v1"
         return base_url
 
+    def _auth_failure_fingerprint(self) -> str:
+        credentials = self._token_manager.get_current_credentials()
+        refresh_token = credentials.get("refresh_token")
+        access_token = credentials.get("access_token")
+        refresh_tail = str(refresh_token)[-8:] if refresh_token else ""
+        access_tail = str(access_token)[-8:] if access_token else ""
+        return f"{refresh_tail}:{access_tail}"
+
+    @staticmethod
+    def _is_auth_error_message(message: str) -> bool:
+        lowered = message.lower()
+        return (
+            "invalid_api_key" in lowered
+            or "authenticationerror" in lowered
+            or "access token expired" in lowered
+            or "status code: 401" in lowered
+            or "error code: 401" in lowered
+        )
+
+    def _mark_auth_failure(self) -> None:
+        self._auth_failure_until_by_fingerprint[self._auth_failure_fingerprint()] = (
+            time.time() + self._AUTH_FAILURE_COOLDOWN_SECONDS
+        )
+
+    def _raise_if_auth_cooldown(self) -> None:
+        until = self._auth_failure_until_by_fingerprint.get(self._auth_failure_fingerprint(), 0.0)
+        now = time.time()
+        if until > now:
+            remaining = int(until - now)
+            raise RuntimeError(
+                "Qwen Code auth cooldown active "
+                f"({remaining}s remaining). Update llm.qwen-code.api_key secret."
+            )
+
     def _client(self) -> OpenAI:
-        if not self._is_token_valid(self._credentials):
-            self._refresh_access_token()
-        access_token = self._credentials.get("access_token")
+        credentials: dict[str, Any]
+        try:
+            credentials = self._token_manager.get_valid_credentials()
+        except RuntimeError as exc:
+            # Refresh endpoint may be transiently unavailable. Keep current
+            # access token when present to avoid hard-failing requests.
+            credentials = self._token_manager.get_current_credentials()
+            current_access_token = credentials.get("access_token")
+            if not isinstance(current_access_token, str) or not current_access_token:
+                raise
+            logger.warning(
+                "qwen_oauth_refresh_failed_using_existing_access_token error=%s",
+                exc,
+            )
+
+        access_token = credentials.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             raise RuntimeError("Qwen OAuth access_token is missing")
         return OpenAI(
             api_key=access_token,
-            base_url=self._resolve_base_url(),
+            base_url=self._resolve_base_url(credentials),
             timeout=self._timeout,
             max_retries=0,
         )
 
     def complete(self, prompt: str, **kwargs) -> str:
+        self._raise_if_auth_cooldown()
         client = self._client()
         model = kwargs.get("model", self._model)
         max_tokens = kwargs.get("max_tokens", 4000)
+        temperature = kwargs.get("temperature", 0.7)
         try:
             response = self._apply_retry(
                 client.chat.completions.create,
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=kwargs.get("temperature", 0.7),
+                temperature=temperature,
                 max_tokens=max_tokens,
             )
+            if response.choices and response.choices[0].message.content:
+                return response.choices[0].message.content
+        except Exception as exc:
+            if self._is_auth_error_message(str(exc)):
+                self._mark_auth_failure()
+                raise RuntimeError(f"Qwen Code authentication failed: {exc}") from exc
+            # Fall back to streaming mode for providers that intermittently
+            # return invalid non-stream payloads via OpenAI-compatible endpoint.
+            pass
+
+        try:
+            stream = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True,
+            )
+            chunks: list[str] = []
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    chunks.append(chunk.choices[0].delta.content)
+            text = "".join(chunks).strip()
+            if text:
+                return text
         except Exception as e:
+            if self._is_auth_error_message(str(e)):
+                self._mark_auth_failure()
             raise RuntimeError(f"Qwen Code API call failed: {e}") from e
 
-        if not response.choices or not response.choices[0].message.content:
-            raise RuntimeError("Empty response from Qwen Code API")
-        return response.choices[0].message.content
+        raise RuntimeError("Empty response from Qwen Code API")
 
     def complete_stream(self, prompt: str, **kwargs) -> Generator[str, None, None]:
         client = self._client()
@@ -902,6 +914,112 @@ class QwenCodeWrapper(LLMWrapper):
         for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
+
+    def close(self) -> None:
+        return None
+
+
+class ProfileFallbackLLMWrapper(LLMWrapper):
+    """LLM wrapper that tries multiple configured profiles in order."""
+
+    def __init__(
+        self,
+        profile_candidates: list[dict[str, Any]],
+        timeout: int = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+    ):
+        super().__init__(api_key="", model="", timeout=timeout, max_retries=max_retries)
+        self._profile_candidates = profile_candidates
+
+    def _get_api_key_from_env(self) -> str:
+        return ""
+
+    def _build_wrapper_for_profile(self, profile: dict[str, Any]) -> LLMWrapper:
+        provider = str(profile.get("provider", "")).strip().lower()
+        if not provider:
+            raise RuntimeError("LLM profile has no provider")
+        kwargs: dict[str, Any] = {
+            "timeout": self._timeout,
+            "max_retries": self._max_retries,
+        }
+        model = profile.get("model")
+        api_key = profile.get("api_key")
+        api_key_ref = profile.get("api_key_ref")
+        base_url = profile.get("base_url")
+        if isinstance(model, str) and model.strip():
+            kwargs["model"] = model.strip()
+        if isinstance(api_key, str) and api_key.strip():
+            kwargs["api_key"] = api_key
+        if isinstance(api_key_ref, str) and api_key_ref.strip():
+            kwargs["api_key_ref"] = api_key_ref.strip()
+        if isinstance(base_url, str) and base_url.strip():
+            kwargs["base_url"] = base_url.strip()
+        wrapper = get_llm_wrapper(provider=provider, **kwargs)
+        if wrapper is None:
+            raise RuntimeError(f"LLM wrapper unavailable for provider '{provider}'")
+        return wrapper
+
+    @staticmethod
+    def _profile_name(profile: dict[str, Any]) -> str:
+        name = profile.get("profile_name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+        return str(profile.get("provider", "unknown"))
+
+    def complete(self, prompt: str, **kwargs) -> str:
+        errors: list[str] = []
+        for profile in self._profile_candidates:
+            wrapper: LLMWrapper | None = None
+            profile_name = self._profile_name(profile)
+            try:
+                wrapper = self._build_wrapper_for_profile(profile)
+                return wrapper.complete(prompt, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{profile_name}: {str(exc)[:220]}")
+                logger.warning(
+                    "llm_profile_fallback_failed profile=%s provider=%s error=%s",
+                    profile_name,
+                    profile.get("provider"),
+                    str(exc)[:500],
+                )
+            finally:
+                if wrapper is not None:
+                    try:
+                        wrapper.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+        raise RuntimeError(
+            "All configured LLM profiles failed. "
+            + (" | ".join(errors) if errors else "No profile candidates available.")
+        )
+
+    def complete_stream(self, prompt: str, **kwargs) -> Generator[str, None, None]:
+        errors: list[str] = []
+        for profile in self._profile_candidates:
+            wrapper: LLMWrapper | None = None
+            profile_name = self._profile_name(profile)
+            try:
+                wrapper = self._build_wrapper_for_profile(profile)
+                yield from wrapper.complete_stream(prompt, **kwargs)
+                return
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{profile_name}: {str(exc)[:220]}")
+                logger.warning(
+                    "llm_profile_fallback_stream_failed profile=%s provider=%s error=%s",
+                    profile_name,
+                    profile.get("provider"),
+                    str(exc)[:500],
+                )
+            finally:
+                if wrapper is not None:
+                    try:
+                        wrapper.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+        raise RuntimeError(
+            "All configured LLM profiles failed in stream mode. "
+            + (" | ".join(errors) if errors else "No profile candidates available.")
+        )
 
     def close(self) -> None:
         return None
@@ -932,8 +1050,75 @@ def _load_profile_defaults(profile_name: str | None = None) -> dict[str, Any] | 
         "provider": provider,
         "model": model or None,
         "api_key": api_key,
+        "api_key_ref": api_key_ref.strip()
+        if isinstance(api_key_ref, str) and api_key_ref.strip()
+        else None,
         "base_url": base_url if isinstance(base_url, str) and base_url.strip() else None,
     }
+
+
+def _load_profile_candidates(profile_name: str | None = None) -> list[dict[str, Any]]:
+    """Load profile candidates in priority order: selected/default first, then others."""
+    try:
+        from cli.repo_store import get_llm_profile, get_secret_value, list_llm_profiles
+    except Exception:
+        return []
+
+    listed = list_llm_profiles()
+    if not isinstance(listed, list) or not listed:
+        return []
+
+    by_name: dict[str, dict[str, Any]] = {}
+    default_name: str | None = None
+    for item in listed:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("profile_name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        n = name.strip()
+        by_name[n] = item
+        if bool(item.get("is_default")) and default_name is None:
+            default_name = n
+
+    if not by_name:
+        return []
+
+    preferred = (
+        profile_name.strip() if isinstance(profile_name, str) and profile_name.strip() else None
+    )
+    first_name = preferred if preferred in by_name else default_name
+    if first_name is None:
+        first_name = sorted(by_name.keys())[0]
+
+    order = [first_name] + [name for name in by_name.keys() if name != first_name]
+    candidates: list[dict[str, Any]] = []
+    for name in order:
+        profile = get_llm_profile(name)
+        if not isinstance(profile, dict):
+            continue
+        provider = str(profile.get("provider", "")).strip().lower()
+        if not provider:
+            continue
+        model = profile.get("model")
+        base_url = profile.get("base_url")
+        api_key = None
+        api_key_ref = profile.get("api_key_ref")
+        if isinstance(api_key_ref, str) and api_key_ref.strip():
+            api_key = get_secret_value(api_key_ref.strip())
+        candidates.append(
+            {
+                "profile_name": name,
+                "provider": provider,
+                "model": model if isinstance(model, str) and model.strip() else None,
+                "api_key": api_key if isinstance(api_key, str) and api_key.strip() else None,
+                "api_key_ref": api_key_ref.strip()
+                if isinstance(api_key_ref, str) and api_key_ref.strip()
+                else None,
+                "base_url": base_url if isinstance(base_url, str) and base_url.strip() else None,
+            }
+        )
+    return candidates
 
 
 def get_llm_wrapper(
@@ -945,13 +1130,34 @@ def get_llm_wrapper(
 
     if not resolved_provider:
         profile_name = os.getenv("HORDEFORGE_LLM_PROFILE", "").strip() or None
+        profile_candidates = _load_profile_candidates(profile_name)
+        if len(profile_candidates) > 1:
+            return ProfileFallbackLLMWrapper(
+                profile_candidates=profile_candidates,
+                timeout=int(kwargs.get("timeout", DEFAULT_TIMEOUT)),
+                max_retries=int(kwargs.get("max_retries", DEFAULT_MAX_RETRIES)),
+            )
+        if len(profile_candidates) == 1:
+            candidate = profile_candidates[0]
+            resolved_provider = candidate["provider"]
+            if candidate.get("model") and not kwargs.get("model"):
+                kwargs["model"] = candidate["model"]
+            if candidate.get("api_key") and not kwargs.get("api_key"):
+                kwargs["api_key"] = candidate["api_key"]
+            if candidate.get("api_key_ref") and not kwargs.get("api_key_ref"):
+                kwargs["api_key_ref"] = candidate["api_key_ref"]
+            if candidate.get("base_url") and not kwargs.get("base_url"):
+                kwargs["base_url"] = candidate["base_url"]
+
         profile_defaults = _load_profile_defaults(profile_name)
-        if profile_defaults:
+        if not resolved_provider and profile_defaults:
             resolved_provider = profile_defaults["provider"]
             if profile_defaults.get("model") and not kwargs.get("model"):
                 kwargs["model"] = profile_defaults["model"]
             if profile_defaults.get("api_key") and not kwargs.get("api_key"):
                 kwargs["api_key"] = profile_defaults["api_key"]
+            if profile_defaults.get("api_key_ref") and not kwargs.get("api_key_ref"):
+                kwargs["api_key_ref"] = profile_defaults["api_key_ref"]
             if profile_defaults.get("base_url") and not kwargs.get("base_url"):
                 kwargs["base_url"] = profile_defaults["base_url"]
 
@@ -978,7 +1184,12 @@ def get_llm_wrapper(
         if not isinstance(oauth_json, str) or not oauth_json.strip():
             raise RuntimeError("Qwen Code profile is missing OAuth credentials in secret store.")
         qwen_model = kwargs.get("model", "qwen3-coder-plus")
-        return QwenCodeWrapper(oauth_credentials_json=oauth_json, model=qwen_model)
+        api_key_ref = kwargs.get("api_key_ref")
+        return QwenCodeWrapper(
+            oauth_credentials_json=oauth_json,
+            model=qwen_model,
+            credentials_secret_ref=api_key_ref if isinstance(api_key_ref, str) else None,
+        )
     elif resolved_provider:
         raise ValueError(f"Unknown LLM provider: {resolved_provider}")
     return None

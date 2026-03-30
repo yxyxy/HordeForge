@@ -98,6 +98,86 @@ def test_dispatcher_fails_without_token():
     assert artifact["reason"] == "missing_github_token"
 
 
+def test_dispatcher_resolves_token_from_secrets_case_insensitive_repo_key(monkeypatch):
+    def fake_build_repo_token_ref(repo_id: str) -> str:
+        return f"repo.{repo_id.replace('/', '_')}.github_token"
+
+    def fake_list_secret_keys() -> list[str]:
+        return ["repo.yxyxy_HordeForge.github_token"]
+
+    def fake_get_secret_value(key: str) -> str | None:
+        if key == "repo.yxyxy_HordeForge.github_token":
+            return "ghs_from_secret"
+        return None
+
+    monkeypatch.setattr("cli.repo_store.build_repo_token_ref", fake_build_repo_token_ref)
+    monkeypatch.setattr("cli.repo_store.list_secret_keys", fake_list_secret_keys)
+    monkeypatch.setattr("cli.repo_store.get_secret_value", fake_get_secret_value)
+    monkeypatch.setattr(
+        IssuePipelineDispatcher,
+        "_build_issue_plan",
+        lambda self, **kwargs: {
+            "status": "ok",
+            "dod": {"acceptance_criteria": []},
+            "spec": {"summary": "spec"},
+            "subtasks": {"items": []},
+            "bdd_specification": {},
+            "tests": {"test_cases": []},
+            "comment_posted": False,
+        },
+    )
+    monkeypatch.setattr(
+        IssuePipelineDispatcher,
+        "_update_issue_stage_label",
+        lambda self, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        IssuePipelineDispatcher,
+        "_enrich_issue_payload_with_comments",
+        staticmethod(lambda **kwargs: kwargs["issue_payload"]),
+    )
+
+    captured_inputs: list[dict] = []
+
+    def fake_dispatch_pipeline(*, pipeline_name, inputs, source, idempotency_key, async_mode):
+        captured_inputs.append(inputs)
+        return {"status": "queued", "task_id": "task-1"}
+
+    monkeypatch.setattr(
+        IssuePipelineDispatcher,
+        "_dispatch_pipeline",
+        staticmethod(fake_dispatch_pipeline),
+    )
+
+    context = {
+        "repository": {"full_name": "yxyxy/hordeforge"},
+        "repo_connector": _step_result(
+            "repository_data",
+            {
+                "issues": [
+                    {
+                        "id": 3,
+                        "number": 3,
+                        "title": "Fix build",
+                        "body": "Pipeline failed",
+                        "labels": [{"name": "agent:opened"}],
+                    }
+                ]
+            },
+        ),
+        "issue_classification": _step_result(
+            "issue_scan",
+            {"classified_issues": [{"id": 3, "number": 3, "title": "Fix build"}]},
+        ),
+    }
+
+    result = IssuePipelineDispatcher().run(context)
+
+    assert result["status"] == "SUCCESS"
+    assert len(captured_inputs) == 1
+    assert captured_inputs[0]["github_token"] == "ghs_from_secret"
+
+
 def test_dispatcher_reports_planning_failure(monkeypatch):
     monkeypatch.setattr(
         IssuePipelineDispatcher,
@@ -461,3 +541,97 @@ def test_dispatcher_closes_fixed_issue_with_related_merged_pr(monkeypatch):
     assert artifact["fixed_processed"][0]["closed"] is True
     assert artifact["fixed_processed"][0]["pr_number"] == 77
     assert closed_issues == [55]
+
+
+def test_dispatcher_does_not_fail_when_fixed_issue_has_no_merged_pr(monkeypatch):
+    class _FakeClient:
+        def __init__(self, token: str, repo: str):
+            self.token = token
+            self.repo = repo
+
+        def list_pull_requests(self, state: str = "closed", page: int = 1, per_page: int = 100):
+            return []
+
+    monkeypatch.setattr("agents.issue_pipeline_dispatcher.GitHubClient", _FakeClient)
+
+    context = {
+        "repository": {"full_name": "acme/hordeforge"},
+        "github_token": "ghs_test",
+        "repo_connector": _step_result(
+            "repository_data",
+            {
+                "issues": [
+                    {
+                        "id": 56,
+                        "number": 56,
+                        "title": "Incident maybe resolved",
+                        "body": "Waiting for merge",
+                        "labels": [{"name": "agent:fixed"}],
+                        "state": "open",
+                    }
+                ]
+            },
+        ),
+        "issue_classification": _step_result(
+            "issue_scan",
+            {"classified_issues": [{"id": 56, "number": 56, "title": "Incident maybe resolved"}]},
+        ),
+    }
+
+    result = IssuePipelineDispatcher().run(context)
+
+    assert result["status"] == "SUCCESS"
+    artifact = result["artifacts"][0]["content"]
+    assert artifact["fixed_processed_count"] == 1
+    assert artifact["failed_count"] == 0
+    assert artifact["fixed_processed"][0]["closed"] is False
+    assert artifact["fixed_processed"][0]["reason"] == "related_merged_pr_not_found"
+
+
+def test_build_issue_plan_disables_strict_llm_for_tests_step(monkeypatch):
+    class _FakeDodExtractor:
+        def run(self, context):
+            return _step_result("dod", {"acceptance_criteria": ["ac-1"]})
+
+    class _FakeSpecificationWriter:
+        def run(self, context):
+            return _step_result("spec", {"summary": "spec"})
+
+    class _FakeTaskDecomposer:
+        def run(self, context):
+            return _step_result("subtasks", {"items": [{"id": "S1"}]})
+
+    class _FakeBDDGenerator:
+        def run(self, context):
+            return _step_result("bdd_specification", {"gherkin_feature": "Feature: X"})
+
+    class _FakeTestGenerator:
+        def run(self, context):
+            if bool(context.get("require_llm")):
+                return {"status": "FAILED", "artifacts": []}
+            return _step_result("tests", {"test_cases": [{"file_path": "tests/test_x.py"}]})
+
+    monkeypatch.setattr("agents.dod_extractor.DodExtractor", _FakeDodExtractor)
+    monkeypatch.setattr("agents.specification_writer.SpecificationWriter", _FakeSpecificationWriter)
+    monkeypatch.setattr("agents.task_decomposer.TaskDecomposer", _FakeTaskDecomposer)
+    monkeypatch.setattr("agents.bdd_generator.BDDGenerator", _FakeBDDGenerator)
+    monkeypatch.setattr("agents.test_generator.TestGenerator", _FakeTestGenerator)
+    monkeypatch.setattr(
+        IssuePipelineDispatcher,
+        "_post_planning_comment",
+        staticmethod(lambda **kwargs: True),
+    )
+
+    result = IssuePipelineDispatcher()._build_issue_plan(  # noqa: SLF001
+        issue={"number": 23, "title": "Test"},
+        repository_full_name="acme/hordeforge",
+        token="ghs_test",
+        use_llm=True,
+        require_llm=True,
+        mock_mode=False,
+        rules=None,
+    )
+
+    assert result["status"] == "ok"
+    assert isinstance(result["tests"], dict)
+    assert len(result["tests"].get("test_cases", [])) == 1

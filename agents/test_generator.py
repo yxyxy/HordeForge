@@ -451,6 +451,7 @@ class TestGenerator(BaseAgent):
         llm_test_result = None
         llm_error = None
         use_llm = context.get("use_llm", True)
+        require_llm = bool(context.get("require_llm", False))
 
         if use_llm and spec and code_patch:
             try:
@@ -490,6 +491,29 @@ class TestGenerator(BaseAgent):
                         llm_test_result = parse_test_generation_output(cleaned_response)
             except Exception as e:
                 llm_error = str(e)
+
+        if use_llm and require_llm and not (llm_test_result and isinstance(llm_test_result, dict)):
+            return build_agent_result(
+                status="FAILED",
+                artifact_type="tests",
+                artifact_content={
+                    "schema_version": "2.0",
+                    "test_cases": [],
+                    "llm_required": True,
+                    "llm_error": llm_error,
+                },
+                reason=(
+                    f"LLM required but unavailable: {llm_error[:160]}"
+                    if isinstance(llm_error, str) and llm_error
+                    else "LLM required but no valid tests were generated."
+                ),
+                confidence=0.95,
+                logs=[
+                    "LLM strict mode enabled (require_llm=true).",
+                    f"LLM error: {(llm_error or 'missing/invalid llm output')[:200]}",
+                ],
+                next_actions=["fix_llm_connectivity"],
+            )
 
         if llm_test_result and isinstance(llm_test_result, dict):
             # Use LLM-generated tests
