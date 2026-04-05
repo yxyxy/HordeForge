@@ -379,19 +379,6 @@ class TestCodeGeneratorAgent:
 
     def test_collect_candidate_files_from_ci_context(self):
         generator = CodeGenerator()
-        context = {
-            "ci_failure_analysis": {
-                "artifacts": [
-                    {
-                        "type": "ci_failure_context",
-                        "content": {
-                            "files": ["workspace/repo/orchestrator/loader.py"],
-                            "test_targets": ["workspace/repo/tests/unit/test_loader.py::test_ok"],
-                        },
-                    }
-                ]
-            }
-        }
         candidate_files = generator._collect_candidate_files(  # noqa: SLF001
             spec={},
             tests={},
@@ -463,7 +450,9 @@ class TestCodeGeneratorAgent:
             "use_llm": False,
             "publish_pr_in_code_generator": False,
             "specification_writer": {
-                "artifacts": [{"type": "spec", "content": {"summary": "Fix CI", "file_changes": []}}]
+                "artifacts": [
+                    {"type": "spec", "content": {"summary": "Fix CI", "file_changes": []}}
+                ]
             },
             "ci_failure_analysis": {
                 "artifacts": [

@@ -180,7 +180,9 @@ class CiIncidentHandoff(BaseAgent):
                         "source_pipeline": source_pipeline,
                         "ci_run_id": ci_run.get("id"),
                         "files": _normalize_string_list(failure_analysis.get("files")),
-                        "test_targets": _normalize_string_list(failure_analysis.get("test_targets")),
+                        "test_targets": _normalize_string_list(
+                            failure_analysis.get("test_targets")
+                        ),
                     },
                     reason=(
                         "CI incident already exists; enriched existing handoff issue."
@@ -305,10 +307,14 @@ class CiIncidentHandoff(BaseAgent):
                 details_section = "\n".join(detail_lines)
 
         files = _normalize_string_list(failure_analysis.get("files"))
-        files_section = "\n".join(f"- `{item}`" for item in files[:15]) or "- no candidate files extracted"
+        files_section = (
+            "\n".join(f"- `{item}`" for item in files[:15]) or "- no candidate files extracted"
+        )
 
         test_targets = _normalize_string_list(failure_analysis.get("test_targets"))
-        test_targets_section = "\n".join(f"- `{item}`" for item in test_targets[:15]) or "- no test targets extracted"
+        test_targets_section = (
+            "\n".join(f"- `{item}`" for item in test_targets[:15]) or "- no test targets extracted"
+        )
 
         per_job_analysis = failure_analysis.get("per_job_analysis")
         per_job_lines: list[str] = []
@@ -387,10 +393,14 @@ class CiIncidentHandoff(BaseAgent):
                     detail_lines.append(f"   - logs: `{logs[:300]}`")
 
         files = _normalize_string_list(failure_analysis.get("files"))
-        files_section = "\n".join(f"- `{item}`" for item in files[:10]) or "- no candidate files extracted"
+        files_section = (
+            "\n".join(f"- `{item}`" for item in files[:10]) or "- no candidate files extracted"
+        )
 
         test_targets = _normalize_string_list(failure_analysis.get("test_targets"))
-        test_targets_section = "\n".join(f"- `{item}`" for item in test_targets[:10]) or "- no test targets extracted"
+        test_targets_section = (
+            "\n".join(f"- `{item}`" for item in test_targets[:10]) or "- no test targets extracted"
+        )
 
         return "\n".join(
             [

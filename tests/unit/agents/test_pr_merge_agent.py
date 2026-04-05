@@ -290,7 +290,9 @@ class TestPrMergeAgentGates:
                 },
                 "review_agent": {
                     "status": "PARTIAL_SUCCESS",
-                    "artifacts": [{"type": "review_result", "content": {"decision": "request_changes"}}],
+                    "artifacts": [
+                        {"type": "review_result", "content": {"decision": "request_changes"}}
+                    ],
                 },
                 "test_runner": {
                     "status": "PARTIAL_SUCCESS",
@@ -334,7 +336,9 @@ class TestPrMergeAgentGates:
                 },
                 "test_runner": {
                     "status": "SUCCESS",
-                    "artifacts": [{"type": "test_results", "content": {"failed": 0, "exit_code": 0}}],
+                    "artifacts": [
+                        {"type": "test_results", "content": {"failed": 0, "exit_code": 0}}
+                    ],
                 },
                 "code_generator": {
                     "status": "SUCCESS",

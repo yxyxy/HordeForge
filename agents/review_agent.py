@@ -417,7 +417,8 @@ class ReviewAgent(BaseAgent):
             overall_decision = "request_changes"
 
         if any(
-            isinstance(f, dict) and str(f.get("type", "")).lower() in {"grounding_mismatch", "verification_invalid"}
+            isinstance(f, dict)
+            and str(f.get("type", "")).lower() in {"grounding_mismatch", "verification_invalid"}
             for f in findings
         ):
             overall_decision = "request_changes"
@@ -593,9 +594,7 @@ class ReviewAgent(BaseAgent):
                 "type": str(finding.get("type", "maintainability")),
                 "severity": str(finding.get("severity", "medium")),
                 "description": str(
-                    finding.get("description")
-                    or finding.get("message")
-                    or "Review finding"
+                    finding.get("description") or finding.get("message") or "Review finding"
                 ),
                 "suggestion": str(
                     finding.get("suggestion") or "Investigate and address the issue."

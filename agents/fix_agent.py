@@ -256,7 +256,9 @@ class FixAgent(BaseAgent):
         llm_error = None
 
         if use_llm and self._is_actionable_failure(test_results):
-            llm_fix_result, llm_error = self._generate_fix_with_code_generator_core(context, iteration)
+            llm_fix_result, llm_error = self._generate_fix_with_code_generator_core(
+                context, iteration
+            )
 
             llm = None
             if not llm_fix_result:
@@ -294,7 +296,11 @@ class FixAgent(BaseAgent):
                                 llm_fix_result = json.loads(response)
                             except json.JSONDecodeError:
                                 candidate_files = self._extract_candidate_files(context)
-                                fallback_path = candidate_files[0] if candidate_files else "tests/test_placeholder.py"
+                                fallback_path = (
+                                    candidate_files[0]
+                                    if candidate_files
+                                    else "tests/test_placeholder.py"
+                                )
                                 llm_fix_result = {
                                     "files": [
                                         {
@@ -389,7 +395,9 @@ class FixAgent(BaseAgent):
                 f"Fix iteration {iteration} produced patch.",
                 f"Remaining simulated failures: {remaining_failures}.",
             ],
-            next_actions=["test_runner"] if self._is_actionable_failure(test_results) else ["review_agent"],
+            next_actions=["test_runner"]
+            if self._is_actionable_failure(test_results)
+            else ["review_agent"],
         )
         result["artifact_type"] = "code_patch"
         result["artifact_content"] = patch

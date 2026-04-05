@@ -1287,7 +1287,10 @@ def test_build_issue_plan_passes_ci_mode_to_steps(monkeypatch):
 
     assert result["status"] == "ok"
     assert all(ctx.get("ci_mode") is True for ctx in seen_contexts)
-    assert "UI renders correctly across supported browsers" not in result["spec"]["acceptance_criteria"]
+    assert (
+        "UI renders correctly across supported browsers"
+        not in result["spec"]["acceptance_criteria"]
+    )
     assert "browser" not in result["bdd_specification"]["gherkin_feature"].lower()
     descriptions = [str(x.get("description", "")).lower() for x in result["tests"]["test_cases"]]
     assert all("browser" not in item for item in descriptions)

@@ -452,9 +452,7 @@ def classify_failure_text(text: str) -> str:
 
 class CiFailureAnalyzer(BaseAgent):
     name = "ci_failure_analyzer"
-    description = (
-        "Parses CI failures with language-aware classification, fingerprinting and root-cause selection."
-    )
+    description = "Parses CI failures with language-aware classification, fingerprinting and root-cause selection."
 
     @staticmethod
     def _classify_failure(failed_jobs: list[dict[str, Any]]) -> str:
@@ -463,7 +461,9 @@ class CiFailureAnalyzer(BaseAgent):
 
         per_job: list[str] = []
         for job in failed_jobs:
-            text = " ".join(str(job.get(key, "") or "") for key in ("name", "reason", "logs")).strip()
+            text = " ".join(
+                str(job.get(key, "") or "") for key in ("name", "reason", "logs")
+            ).strip()
             per_job.append(classify_failure_text(text))
 
         return _pick_most_severe(per_job)
@@ -502,7 +502,9 @@ class CiFailureAnalyzer(BaseAgent):
                 if not candidate:
                     continue
                 lowered = candidate.lower()
-                if any(token in lowered for token in ["agent:opened", "agent:planning", "agent:ready"]):
+                if any(
+                    token in lowered for token in ["agent:opened", "agent:planning", "agent:ready"]
+                ):
                     continue
                 if len(candidate) > 120:
                     continue
@@ -540,7 +542,9 @@ class CiFailureAnalyzer(BaseAgent):
                 return excerpt_match.group(1).strip()
             return logs_raw.strip()
 
-        fallback_pattern = r"\*\*" + escaped_job_name + r"\*\*.*?(?:excerpt=|error=|E\s+)([^\n]{20,500})"
+        fallback_pattern = (
+            r"\*\*" + escaped_job_name + r"\*\*.*?(?:excerpt=|error=|E\s+)([^\n]{20,500})"
+        )
         fallback_match = re.search(fallback_pattern, body, re.DOTALL | re.IGNORECASE)
         if fallback_match:
             return fallback_match.group(1).strip()
@@ -634,7 +638,9 @@ class CiFailureAnalyzer(BaseAgent):
 
         if not failed_jobs:
             fallback_used = True
-            failed_jobs = [{"name": "default-test", "reason": "default failure", "logs": "default logs"}]
+            failed_jobs = [
+                {"name": "default-test", "reason": "default failure", "logs": "default logs"}
+            ]
 
         classification = self._classify_failure(failed_jobs)
         severity = determine_severity(classification)
@@ -649,7 +655,9 @@ class CiFailureAnalyzer(BaseAgent):
             job_name = str(job.get("name") or f"job_{index + 1}")
             job_reason = str(job.get("reason") or "")
             job_logs = str(job.get("logs") or job_reason or "")
-            combined_text = " ".join(part for part in [job_name, job_reason, job_logs] if part).strip()
+            combined_text = " ".join(
+                part for part in [job_name, job_reason, job_logs] if part
+            ).strip()
 
             combined_logs_parts.append(job_logs)
 

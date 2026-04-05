@@ -87,7 +87,9 @@ class PrMergeAgent(BaseAgent):
         if not isinstance(test_results, dict):
             test_results = {}
 
-        pr_number = self._resolve_pr_number(context=context, initial_pr_number=pr_number, code_patch=code_patch)
+        pr_number = self._resolve_pr_number(
+            context=context, initial_pr_number=pr_number, code_patch=code_patch
+        )
 
         decision = str(review.get("decision") or review.get("overall_decision") or "").strip()
         approved = decision == "approve"
@@ -151,17 +153,14 @@ class PrMergeAgent(BaseAgent):
             except Exception as e:  # noqa: BLE001
                 merge_error = str(e)
 
-        merge_reason = (
-            merge_error
-            or (
-                "merged"
-                if merged
-                else "approved_by_review_and_tests"
-                if not gate_fail_reasons and not live_merge
-                else ",".join(gate_fail_reasons)
-                if gate_fail_reasons
-                else "approved_by_review_and_tests"
-            )
+        merge_reason = merge_error or (
+            "merged"
+            if merged
+            else "approved_by_review_and_tests"
+            if not gate_fail_reasons and not live_merge
+            else ",".join(gate_fail_reasons)
+            if gate_fail_reasons
+            else "approved_by_review_and_tests"
         )
 
         merge_status = {
@@ -240,7 +239,9 @@ class PrMergeAgent(BaseAgent):
             if isinstance(codegen_step_result, dict)
             else None
         ) or {}
-        pr_from_codegen = codegen_patch.get("pr_number") if isinstance(codegen_patch, dict) else None
+        pr_from_codegen = (
+            codegen_patch.get("pr_number") if isinstance(codegen_patch, dict) else None
+        )
         if isinstance(pr_from_codegen, int) and pr_from_codegen > 0:
             return pr_from_codegen
 

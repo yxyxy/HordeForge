@@ -471,12 +471,19 @@ class EnhancedCodeGenerator(BaseAgent):
     ) -> bool:
         if candidate_files:
             return False
-        if ci_failure_context.get("classification") in {"path_error", "collection_error", "test_failure"}:
+        if ci_failure_context.get("classification") in {
+            "path_error",
+            "collection_error",
+            "test_failure",
+        }:
             return False
         file_changes = spec.get("file_changes", []) or []
         if file_changes:
             for change in file_changes:
-                if isinstance(change, dict) and str(change.get("change_type", "")).lower() == "create":
+                if (
+                    isinstance(change, dict)
+                    and str(change.get("change_type", "")).lower() == "create"
+                ):
                     return True
         return True
 
@@ -511,9 +518,13 @@ class EnhancedCodeGenerator(BaseAgent):
                 if isinstance(job, dict) and job.get("job_name")
             ][:5]
             ci_failure_details = ci_failure_context.get("details", []) or []
-            ci_files = [str(item) for item in ci_failure_context.get("files", []) if str(item).strip()][:8]
+            ci_files = [
+                str(item) for item in ci_failure_context.get("files", []) if str(item).strip()
+            ][:8]
             ci_test_targets = [
-                str(item) for item in ci_failure_context.get("test_targets", []) if str(item).strip()
+                str(item)
+                for item in ci_failure_context.get("test_targets", [])
+                if str(item).strip()
             ][:8]
 
         return {
