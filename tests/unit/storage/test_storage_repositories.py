@@ -23,9 +23,11 @@ def _workspace_tmp_dir() -> Path:
 def _cleanup_tmp_dir(path: Path) -> None:
     if not path.exists():
         return
-    for item in path.glob("*"):
+    for item in sorted(path.rglob("*"), key=lambda value: len(value.parts), reverse=True):
         if item.is_file():
-            item.unlink()
+            item.unlink(missing_ok=True)
+        elif item.is_dir():
+            item.rmdir()
     path.rmdir()
 
 
@@ -42,7 +44,7 @@ def test_run_repository_crud_and_filtering():
     )
     run_2 = RunRecord(
         run_id="r2",
-        pipeline_name="ci_fix_pipeline",
+        pipeline_name="ci_scanner_pipeline",
         status="FAILED",
         source="test",
         correlation_id="c2",
@@ -196,7 +198,7 @@ def test_run_repository_tenant_isolation_and_run_id_inference():
         repo.create(
             RunRecord(
                 run_id="run-1",
-                pipeline_name="ci_fix_pipeline",
+                pipeline_name="ci_scanner_pipeline",
                 status="FAILED",
                 source="test",
                 correlation_id="c-tenant-b",
@@ -298,5 +300,52 @@ def test_artifact_repository_isolates_by_tenant():
         assert len(beta_artifacts) == 1
         assert default_artifacts[0].content["title"] == "default"
         assert beta_artifacts[0].content["title"] == "beta"
+    finally:
+        _cleanup_tmp_dir(tmp_dir)
+
+
+def test_repositories_write_into_logs_current_directory():
+    tmp_dir = _workspace_tmp_dir()
+    run_repo = RunRepository(storage_dir=str(tmp_dir))
+    step_repo = StepLogRepository(storage_dir=str(tmp_dir))
+    artifact_repo = ArtifactRepository(storage_dir=str(tmp_dir))
+    try:
+        run_repo.create(
+            RunRecord(
+                run_id="r-paths",
+                pipeline_name="init_pipeline",
+                status="SUCCESS",
+                source="test",
+                correlation_id="c-paths",
+                started_at="2026-04-04T10:00:00+00:00",
+            )
+        )
+        step_repo.replace_for_run(
+            "r-paths",
+            [
+                StepLogRecord(
+                    run_id="r-paths",
+                    step_name="step",
+                    status="SUCCESS",
+                    started_at="2026-04-04T10:00:01+00:00",
+                )
+            ],
+        )
+        artifact_repo.replace_for_run(
+            "r-paths",
+            [
+                ArtifactRecord(
+                    run_id="r-paths",
+                    step_name="step",
+                    artifact_type="spec",
+                    content={"ok": True},
+                    size_bytes=0,
+                )
+            ],
+        )
+
+        assert (tmp_dir / "logs" / "current" / "runs.json").exists()
+        assert (tmp_dir / "logs" / "current" / "step_logs.json").exists()
+        assert (tmp_dir / "logs" / "current" / "artifacts.json").exists()
     finally:
         _cleanup_tmp_dir(tmp_dir)

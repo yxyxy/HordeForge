@@ -17,6 +17,15 @@ from .llm_wrapper import (
     ApiStreamUsageChunk,
     ModelInfo,
 )
+from .qwen_dashscope import (
+    build_dashscope_headers,
+)
+from .qwen_dashscope import (
+    resolve_base_url as resolve_qwen_base_url,
+)
+from .qwen_dashscope import (
+    to_dashscope_content_parts as to_qwen_dashscope_content_parts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1216,16 +1225,15 @@ class QwenCodeHandler(ApiHandler):
 
     def _base_url(self) -> str:
         credentials = self._token_manager.get_current_credentials()
-        base_url = credentials.get(
-            "resource_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
-        if not isinstance(base_url, str) or not base_url:
-            base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        if not base_url.startswith("http://") and not base_url.startswith("https://"):
-            base_url = f"https://{base_url}"
-        if not base_url.endswith("/v1"):
-            base_url = f"{base_url.rstrip('/')}/v1"
-        return base_url
+        return resolve_qwen_base_url(credentials)
+
+    @staticmethod
+    def _dashscope_headers() -> dict[str, str]:
+        return build_dashscope_headers()
+
+    @staticmethod
+    def _to_dashscope_content_parts(content: Any) -> list[dict[str, str]]:
+        return to_qwen_dashscope_content_parts(content)
 
     async def create_message(
         self,
@@ -1264,13 +1272,24 @@ class QwenCodeHandler(ApiHandler):
         client = OpenAI(
             base_url=self._base_url(),
             api_key=access_token,
+            default_headers=self._dashscope_headers(),
         )
 
-        openai_messages = [{"role": "system", "content": system_prompt}]
+        openai_messages = [
+            {
+                "role": "system",
+                "content": self._to_dashscope_content_parts(system_prompt),
+            }
+        ]
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            openai_messages.append({"role": role, "content": content})
+            openai_messages.append(
+                {
+                    "role": role,
+                    "content": self._to_dashscope_content_parts(content),
+                }
+            )
 
         try:
             stream = client.chat.completions.create(

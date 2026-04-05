@@ -17,7 +17,7 @@ def test_route_github_event_maps_issues_to_feature_pipeline():
     assert decision.inputs["issue"]["id"] == 1
 
 
-def test_route_github_event_maps_failed_workflow_run_to_ci_fix_pipeline():
+def test_route_github_event_maps_failed_workflow_run_to_ci_scanner_pipeline():
     payload = {
         "workflow_run": {"id": 99, "status": "completed", "conclusion": "failure"},
         "repository": {"full_name": "acme/hordeforge"},
@@ -26,7 +26,7 @@ def test_route_github_event_maps_failed_workflow_run_to_ci_fix_pipeline():
     decision = route_github_event("workflow_run", payload)
 
     assert decision.ignored is False
-    assert decision.pipeline_name == "ci_fix_pipeline"
+    assert decision.pipeline_name == "ci_scanner_pipeline"
     assert decision.inputs["ci_run"]["id"] == 99
 
 

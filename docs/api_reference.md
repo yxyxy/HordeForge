@@ -632,7 +632,7 @@ All error responses follow this format:
     "details": {
       "field": "pipeline_name",
       "value": "invalid_pipeline",
-      "allowed_values": ["feature_pipeline", "init_pipeline", "ci_fix_pipeline"]
+      "allowed_values": ["feature_pipeline", "init_pipeline", "ci_scanner_pipeline"]
     },
     "timestamp": "2026-03-26T22:30:00Z",
     "request_id": "req-123"

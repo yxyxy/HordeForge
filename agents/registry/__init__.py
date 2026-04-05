@@ -149,9 +149,9 @@ def register_default_pipelines(registry: PipelineRegistry | None = None) -> Pipe
     default_pipeline_names = [
         "init_pipeline",
         "feature_pipeline",
-        "ci_fix_pipeline",
+        "ci_scanner_pipeline",
         "issue_scanner_pipeline",
-        "ci_monitoring_pipeline",
+        "ci_fix_pipeline",
         "dependency_check_pipeline",
     ]
 

@@ -6,6 +6,8 @@ import pytest
 
 from orchestrator.engine import OrchestratorEngine
 
+pytestmark = pytest.mark.usefixtures("stub_llm_for_pipeline_runtime")
+
 COMMON_INPUTS = {
     "mock_mode": True,
     "repo_url": "https://github.com/yxyxy/hordeforge.git",
@@ -40,10 +42,10 @@ PIPELINE_CASES = [
     pytest.param("init_pipeline", {}, {"repo_connector", "pipeline_initializer"}, id="init"),
     pytest.param("feature_pipeline", {}, {"code_generator", "pr_merge_agent"}, id="feature"),
     pytest.param(
-        "ci_fix_pipeline",
+        "ci_scanner_pipeline",
         {},
         {"ci_failure_analyzer", "ci_incident_handoff"},
-        id="ci_fix",
+        id="ci_scanner",
     ),
     pytest.param(
         "code_generation", {}, {"memory_retrieval", "memory_writer"}, id="code_generation"
@@ -53,12 +55,6 @@ PIPELINE_CASES = [
         {},
         {"repo_connector", "issue_classification", "issue_dispatch"},
         id="issue_scanner",
-    ),
-    pytest.param(
-        "ci_monitoring_pipeline",
-        {},
-        {"ci_failure_analyzer", "issue_closer"},
-        id="ci_monitoring",
     ),
     pytest.param(
         "dependency_check_pipeline",

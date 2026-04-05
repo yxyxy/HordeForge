@@ -491,7 +491,7 @@ class ArchitecturePlanner(BaseAgent):
 
         if not feature_description:
             return build_agent_result(
-                status="FAILURE",
+                status="FAILED",
                 artifact_type="architecture_proposal",
                 artifact_content={},
                 reason="No feature description provided in context",

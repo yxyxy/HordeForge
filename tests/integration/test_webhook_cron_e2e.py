@@ -16,6 +16,8 @@ from storage.repositories.artifact_repository import ArtifactRepository
 from storage.repositories.run_repository import RunRepository
 from storage.repositories.step_log_repository import StepLogRepository
 
+pytestmark = pytest.mark.usefixtures("stub_llm_for_pipeline_runtime")
+
 
 def _operator_headers() -> dict[str, str]:
     return {
@@ -106,7 +108,7 @@ def test_webhook_issue_event_e2e_triggers_feature_pipeline_and_persists_run():
     assert run_payload["result"]["summary"]["run_id"] == run_id
 
 
-def test_webhook_workflow_failure_e2e_triggers_ci_fix_pipeline():
+def test_webhook_workflow_failure_e2e_triggers_ci_scanner_pipeline():
     webhook_client = TestClient(webhook_api.app)
     gateway_client = TestClient(gateway.app)
     payload = {
@@ -132,13 +134,13 @@ def test_webhook_workflow_failure_e2e_triggers_ci_fix_pipeline():
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "accepted"
-    assert body["pipeline_name"] == "ci_fix_pipeline"
+    assert body["pipeline_name"] == "ci_scanner_pipeline"
     run_id = body["trigger_result"]["run_id"]
 
     run_response = gateway_client.get(f"/runs/{run_id}")
     assert run_response.status_code == 200
     run_payload = run_response.json()
-    assert run_payload["pipeline_name"] == "ci_fix_pipeline"
+    assert run_payload["pipeline_name"] == "ci_scanner_pipeline"
     assert run_payload["status"] in {"SUCCESS", "PARTIAL_SUCCESS", "BLOCKED"}
     assert run_payload["step_summary"]["step_count"] >= 1
 
@@ -195,6 +197,6 @@ def test_cron_jobs_e2e_cover_registered_jobs_and_idempotency():
     assert second_ci_result["published_count"] == 0
 
     scanner_runs = gateway.RUN_REPOSITORY.list(pipeline_name="issue_scanner_pipeline", limit=20)
-    ci_fix_runs = gateway.RUN_REPOSITORY.list(pipeline_name="ci_fix_pipeline", limit=20)
+    ci_scanner_runs = gateway.RUN_REPOSITORY.list(pipeline_name="ci_scanner_pipeline", limit=20)
     assert len(scanner_runs) == 1
-    assert len(ci_fix_runs) == 1
+    assert len(ci_scanner_runs) == 1

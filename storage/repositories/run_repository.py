@@ -3,9 +3,8 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable
 from datetime import datetime, timezone
-from pathlib import Path
 
-from storage.backends import StorageBackend, get_storage_backend
+from storage.backends import StorageBackend, get_current_log_path, get_storage_backend
 from storage.models import RunRecord
 
 _DEFAULT_TABLE_NAME = "hordeforge_runs"
@@ -23,7 +22,7 @@ class RunRepository:
         if backend is None:
             resolved_type = backend_type or os.getenv("HORDEFORGE_STORAGE_BACKEND", "json")
             if resolved_type == "json":
-                file_path = Path(storage_dir) / "runs.json"
+                file_path = get_current_log_path(storage_dir, "runs.json")
                 backend = get_storage_backend("json", file_path=file_path)
             else:
                 backend = get_storage_backend(

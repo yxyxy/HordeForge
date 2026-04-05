@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import agents.fix_agent as fix_agent_module
 from agents.fix_agent import FixAgent
 
 
@@ -136,3 +137,46 @@ def test_fix_agent_static_helpers_exist():
     assert callable(FixAgent.parse_stacktrace)
     assert callable(FixAgent.detect_failure)
     assert callable(FixAgent.generate_fix)
+
+
+def test_fix_agent_prefers_code_generator_core_when_available(monkeypatch):
+    """Fix agent should reuse code generator core patch when it succeeds."""
+    agent = FixAgent()
+
+    def _fake_codegen_core(self, context, iteration):
+        return (
+            {
+                "schema_version": "1.0",
+                "files": [
+                    {
+                        "path": "tests/test_example.py",
+                        "change_type": "modify",
+                        "content": "assert True\n",
+                    }
+                ],
+                "decisions": ["use_codegen_core"],
+            },
+            None,
+        )
+
+    monkeypatch.setattr(
+        fix_agent_module.FixAgent,
+        "_generate_fix_with_code_generator_core",
+        _fake_codegen_core,
+    )
+
+    context = {
+        "use_llm": True,
+        "require_llm": False,
+        "test_runner": _step_result(
+            "PARTIAL_SUCCESS",
+            "test_results",
+            {"total": 2, "passed": 1, "failed": 1},
+        ),
+    }
+    result = agent.run(context)
+
+    assert result["status"] == "SUCCESS"
+    content = _get_content(result, "code_patch")
+    assert content["files"][0]["path"] == "tests/test_example.py"
+    assert "use_codegen_core" in content.get("decisions", [])

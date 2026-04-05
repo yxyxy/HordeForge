@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterable
-from pathlib import Path
 
-from storage.backends import StorageBackend, get_storage_backend
+from storage.backends import StorageBackend, get_current_log_path, get_storage_backend
 from storage.models import ArtifactRecord
 
 _DEFAULT_TABLE_NAME = "hordeforge_artifacts"
@@ -25,7 +24,7 @@ class ArtifactRepository:
         if backend is None:
             resolved_type = backend_type or os.getenv("HORDEFORGE_STORAGE_BACKEND", "json")
             if resolved_type == "json":
-                path = Path(storage_dir) / "artifacts.json"
+                path = get_current_log_path(storage_dir, "artifacts.json")
                 backend = get_storage_backend("json", file_path=path)
             else:
                 backend = get_storage_backend(

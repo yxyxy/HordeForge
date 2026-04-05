@@ -75,7 +75,7 @@ Scheduler слой отвечает за запуск pipeline и маршрут
 | Trigger | Pipeline | Priority |
 |---|---|---|
 | issue_created(feature) | feature_pipeline | P0 |
-| ci_failure_detected | ci_fix_pipeline | P1 |
+| ci_failure_detected | ci_scanner_pipeline | P1 |
 | manual init | init_pipeline | P0 |
 | hourly issue scan | issue_scanner_pipeline | P2 |
 | dependency_vulnerability_found | dependency_check_pipeline | P1 |

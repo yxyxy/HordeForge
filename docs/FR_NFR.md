@@ -203,7 +203,7 @@ Functional requirements:
 - FR-02: **done** — Orchestrator executes sequential/parallel DAG steps with context passing
 - FR-03: **done** — Unified agent contract + runtime schema validation
 - FR-04: **done** — `feature_pipeline.yaml` implemented (expanded chain, including planning/test/code/fix/review/merge flow)
-- FR-05: **done** — `ci_fix_pipeline.yaml` implemented as CI triage/handoff pipeline with `agent:opened` issue creation and staged downstream processing (`opened/planning/ready/fixed`)
+- FR-05: **done** — `ci_scanner_pipeline.yaml` implemented as CI triage/handoff pipeline with `agent:opened` issue creation and staged downstream processing (`opened/planning/ready/fixed`)
 - FR-06: **done** — Step retry and loop handling (`retry_limit`, blocked/failed transitions)
 - FR-07: **done** — GitHub client supports issue/comment/branch/PR/workflow ops, including pagination
 - FR-08: **done** — Step/run logging, run summaries, metrics, webhook + cron + manual trigger paths

@@ -78,12 +78,13 @@
 
 1. `ci_failure_analyzer` анализирует причину сбоя.
 2. `ci_incident_handoff` создает (или переиспользует) issue с полной диагностикой.
-3. На issue ставятся лейблы `agent:opened`, `source:ci_fix_pipeline`, `kind:ci-incident`.
+3. На issue ставятся лейблы `agent:opened`, `source:ci_scanner_pipeline`, `kind:ci-incident`.
 4. Дальнейшее исправление выполняется staged scanner pipeline (`opened -> planning -> ready -> fixed/close`).
 
 ### Артефакты
 
-- `pipelines/ci_fix_pipeline.yaml` — deterministic triage/handoff pipeline (2 шага)
+- `pipelines/ci_scanner_pipeline.yaml` — deterministic triage/handoff pipeline (2 шага)
+- `pipelines/ci_fix_pipeline.yaml` — production-safe execution pipeline для CI инцидентов и задач ремонта
 - Интеграция с GitHub Actions для real-time тестирования
 - Convergence detection для определения завершения fix loop
 - Cron job `ci_monitor` для периодического мониторинга
@@ -164,7 +165,7 @@
 - `agents/ci_monitor_agent/` — основной агент для мониторинга CI
 - `scheduler/jobs/ci_monitor.py` — cron job для периодического мониторинга
 - Поддержка различных CI систем (GitHub Actions, Jenkins, GitLab CI)
-- Интеграция с `pipelines/ci_monitoring_pipeline.yaml`
+- Интеграция с `pipelines/ci_fix_pipeline.yaml`
 - Самовосстановление при сбоях CI
 - Интеграция с различными CI/CD системами
 

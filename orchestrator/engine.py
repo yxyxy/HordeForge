@@ -30,6 +30,7 @@ from rules.loader import DEFAULT_RULE_SET_VERSION, RulePackLoader
 POLICY_ACTIONS: dict[str, str] = {
     "stop_pipeline": "stop",
     "log_warning": "continue",
+    "continue": "continue",
     "retry_step": "retry",
     "create_issue_for_human": "block",
     "escalate_to_human": "block",
@@ -370,6 +371,8 @@ class OrchestratorEngine:
                 action = "block"
 
             if action == "continue":
+                if run_state.run_status in {StepStatus.FAILED.value, StepStatus.BLOCKED.value}:
+                    run_state.set_run_status(StepStatus.RUNNING)
                 run_state.mark_step_status(
                     step.name,
                     StepStatus.SKIPPED,
@@ -498,8 +501,12 @@ class OrchestratorEngine:
         context: ExecutionContext,
         run_state: PipelineRunState,
         step_results: dict[str, dict[str, Any]],
+        externally_satisfied_dependencies: set[str] | None = None,
     ) -> bool:
-        dependencies = build_step_dependency_graph(steps_to_execute)
+        dependencies = build_step_dependency_graph(
+            steps_to_execute,
+            externally_satisfied_dependencies=externally_satisfied_dependencies,
+        )
         step_by_name = {step.name: step for step in steps_to_execute}
         ordered_names = [step.name for step in steps_to_execute]
         executed: set[str] = set()
@@ -727,7 +734,11 @@ class OrchestratorEngine:
 
                 if not should_stop and post_loop_steps:
                     should_stop = self._execute_with_parallelism(
-                        post_loop_steps, context, run_state, step_results
+                        post_loop_steps,
+                        context,
+                        run_state,
+                        step_results,
+                        externally_satisfied_dependencies=set(step_results.keys()),
                     )
                     _trigger_hooks_for_new_steps(post_loop_steps)
             else:

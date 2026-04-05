@@ -1,0 +1,49 @@
+# pipelines/ci_scanner_pipeline.yaml
+# CI Scanner Pipeline for HordeForge
+# Description: Analyze failed CI runs and create/enrich incident issue for staged processing.
+
+pipeline_name: ci_scanner_pipeline
+description: |
+  Deterministic CI triage/handoff pipeline.
+  1) Analyze CI failure payload.
+  2) Create/enrich GitHub issue labeled `agent:opened` + `kind:ci-incident`.
+  Downstream staged planning/dispatch is handled by issue_scanner_pipeline.
+
+triggers:
+  - workflow_failure
+  - manual_trigger
+
+steps:
+  - name: ci_failure_analyzer
+    agent: ci_failure_analyzer
+    description: Analyze CI failure and produce structured diagnostics
+    input:
+      ci_run: "{{ci_run}}"
+      issue: "{{issue}}"
+      mock_mode: "{{mock_mode}}"
+    output: "{{failure_analysis}}"
+    on_failure: stop_pipeline
+
+  - name: ci_incident_handoff
+    agent: ci_incident_handoff
+    description: Create/enrich incident issue with `agent:opened` label for staged processing
+    depends_on:
+      - ci_failure_analyzer
+    depends_on_explicit: true
+    condition: "{{ ci_run.conclusion == 'failure' or ci_run.status == 'failed' }}"
+    input:
+      repository: "{{repository}}"
+      ci_run: "{{ci_run}}"
+      failure_analysis: "{{failure_analysis}}"
+      source_pipeline: "ci_scanner_pipeline"
+      mock_mode: "{{mock_mode}}"
+      github_token: "{{github_token}}"
+      token: "{{token}}"
+    output: "{{ci_issue}}"
+    on_failure: continue
+
+logging:
+  level: INFO
+  log_decisions: true
+  log_artifacts: true
+  post_to_github: false

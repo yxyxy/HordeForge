@@ -48,3 +48,21 @@ def test_select_lock_aware_batch_skips_conflicting_steps():
     batch = select_lock_aware_batch(ready)
 
     assert [item.name for item in batch] == ["step_a", "step_c"]
+
+
+def test_build_step_dependency_graph_allows_external_completed_dependencies():
+    steps = [
+        StepDefinition(
+            name="review_agent",
+            agent="review_agent",
+            depends_on=["test_runner", "fix_agent"],
+            depends_on_explicit=True,
+        )
+    ]
+
+    graph = build_step_dependency_graph(
+        steps,
+        externally_satisfied_dependencies={"test_runner", "fix_agent"},
+    )
+
+    assert graph["review_agent"] == set()

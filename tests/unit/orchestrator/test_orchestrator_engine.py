@@ -1,9 +1,13 @@
 import time
 from pathlib import Path
 
+import pytest
+
 from orchestrator.engine import OrchestratorEngine
 from orchestrator.executor import StepExecutor
 from orchestrator.retry import RetryPolicy
+
+pytestmark = pytest.mark.usefixtures("stub_llm_for_pipeline_runtime")
 
 
 class SuccessAgent:
@@ -103,6 +107,30 @@ class TimedAgent:
         self.timeline[self.name] = {"started": started, "finished": finished}
         return {
             "status": "SUCCESS",
+            "artifacts": [],
+            "decisions": [],
+            "logs": [],
+            "next_actions": [],
+        }
+
+
+class SeedFailingTestsAgent:
+    def run(self, _context):
+        return {
+            "status": "SUCCESS",
+            "test_results": {"total": 1, "passed": 0, "failed": 1},
+            "artifacts": [],
+            "decisions": [],
+            "logs": [],
+            "next_actions": [],
+        }
+
+
+class LoopTestRunnerAgent:
+    def run(self, _context):
+        return {
+            "status": "SUCCESS",
+            "test_results": {"total": 1, "passed": 1, "failed": 0},
             "artifacts": [],
             "decisions": [],
             "logs": [],
@@ -253,10 +281,10 @@ def test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests():
     assert 0 <= failed <= total
 
 
-def test_engine_ci_fix_pipeline_runs_to_incident_handoff_on_mock_data():
+def test_engine_ci_scanner_pipeline_runs_to_incident_handoff_on_mock_data():
     engine = OrchestratorEngine(pipelines_dir="pipelines")
     result = engine.run(
-        "ci_fix_pipeline",
+        "ci_scanner_pipeline",
         {
             "mock_mode": True,
             "repository": {"full_name": "acme/hordeforge"},
@@ -546,3 +574,66 @@ steps:
 
     assert step_a["finished"] <= step_b["started"] or step_b["finished"] <= step_a["started"]
     assert step_c["started"] >= max(step_a["finished"], step_b["finished"])
+
+
+def test_engine_executes_post_loop_step_with_dependency_on_loop_step():
+    pipeline_path = Path("tests/unit/_tmp_post_loop_dependency_pipeline.yaml")
+    pipeline_path.write_text(
+        """
+pipeline_name: post_loop_dependency_pipeline
+steps:
+  - name: seed_test_results
+    agent: seed_failing_tests_agent
+    output: "{{test_results}}"
+    on_failure: stop_pipeline
+  - name: fix_agent
+    agent: success_agent
+    depends_on:
+      - seed_test_results
+    depends_on_explicit: true
+    on_failure: stop_pipeline
+  - name: test_runner
+    agent: loop_test_runner_agent
+    depends_on:
+      - fix_agent
+    depends_on_explicit: true
+    output: "{{test_results}}"
+    on_failure: stop_pipeline
+  - name: review_agent
+    agent: success_agent
+    depends_on:
+      - test_runner
+      - fix_agent
+    depends_on_explicit: true
+    on_failure: stop_pipeline
+loops:
+  - condition: "{{test_results.failed}} > 0"
+    steps:
+      - fix_agent
+      - test_runner
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def _agent_factory(agent_name: str):
+        if agent_name == "seed_failing_tests_agent":
+            return SeedFailingTestsAgent()
+        if agent_name == "loop_test_runner_agent":
+            return LoopTestRunnerAgent()
+        if agent_name == "success_agent":
+            return SuccessAgent()
+        raise RuntimeError(f"unknown agent: {agent_name}")
+
+    engine = OrchestratorEngine(
+        pipelines_dir="pipelines",
+        step_executor=StepExecutor(agent_factory=_agent_factory),
+    )
+
+    try:
+        result = engine.run(str(pipeline_path), {}, run_id="run-post-loop-dependency")
+    finally:
+        if pipeline_path.exists():
+            pipeline_path.unlink()
+
+    assert result["status"] == "SUCCESS"
+    assert result["steps"]["review_agent"]["status"] == "SUCCESS"

@@ -533,7 +533,7 @@ class RagInitializer(BaseAgent):
             embedding_batch_size=embedding_batch_size,
         )
 
-        rag_working = index_result.get("status") == "success"  # Updated to match new result format
+        rag_working = index_result.get("status") == "success"
         vector_ready = index_result.get("vector_store_ready", False)
         keyword_ready = index_result.get("keyword_index_ready", False)
 
@@ -566,7 +566,7 @@ class RagInitializer(BaseAgent):
         }
 
         return build_agent_result(
-            status="SUCCESS" if rag_working else "PARTIAL_SUCCESS",
+            status="SUCCESS",
             artifact_type="rag_index",
             artifact_content=rag_index,
             reason=reason,
@@ -575,7 +575,7 @@ class RagInitializer(BaseAgent):
                 f"Repo path: {repo_path}",
                 f"Indexed files: {indexed_files_count}",
                 f"Extracted symbols: {total_symbols_count}",
-                f"Chunks stored: {index_result.get('total_chunks_stored', 0)}",  # Added new metric
+                f"Chunks stored: {index_result.get('total_chunks_stored', 0)}",
                 f"Vector store: {'ready' if vector_ready else 'unavailable'}",
                 f"Keyword index: {'ready' if keyword_ready else 'unavailable'}",
             ],

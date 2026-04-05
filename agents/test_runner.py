@@ -6,15 +6,11 @@ import re
 import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from agents.base import BaseAgent
-from agents.context_utils import build_agent_result
-from agents.llm_wrapper import build_code_prompt, get_llm_wrapper
-from agents.llm_wrapper_backward_compatibility import (
-    get_legacy_llm_wrapper,
-    legacy_build_code_prompt,
-)
+from agents.context_utils import build_agent_result, get_artifact_from_result
 
 
 class TestRunner(BaseAgent):
@@ -23,83 +19,320 @@ class TestRunner(BaseAgent):
         "Runs tests for multiple frameworks (pytest, jest, go test) with isolation and coverage."
     )
 
-    def _detect_test_framework(self, context: dict[str, Any]) -> str:
-        """Определяет используемый фреймворк тестирования."""
+    def _detect_test_framework(self, context: dict[str, Any]) -> tuple[str, str]:
         project_metadata = context.get("project_metadata", {})
-        detected_framework = project_metadata.get("test_framework")
+        if project_metadata.get("test_framework"):
+            return str(project_metadata["test_framework"]), "explicit_metadata"
 
-        if detected_framework:
-            return detected_framework
-
-        # Попробуем определить по наличию конфигурационных файлов
         project_path = context.get("project_path", ".")
-
-        if (
-            os.path.exists(os.path.join(project_path, "pytest.ini"))
-            or os.path.exists(os.path.join(project_path, "pyproject.toml"))
-            or os.path.exists(os.path.join(project_path, "setup.cfg"))
-        ):
-            # Проверим наличие pytest в зависимостях
-            for req_file in ["requirements.txt", "pyproject.toml", "setup.py"]:
-                req_path = os.path.join(project_path, req_file)
-                if os.path.exists(req_path):
-                    with open(req_path) as f:
-                        content = f.read().lower()
-                        if "pytest" in content:
-                            return "pytest"
-
         if os.path.exists(os.path.join(project_path, "package.json")):
-            with open(os.path.join(project_path, "package.json")) as f:
-                package_json = json.load(f)
+            try:
+                with open(os.path.join(project_path, "package.json"), encoding="utf-8") as f:
+                    package_json = json.load(f)
                 if "jest" in str(package_json.get("devDependencies", {})) or "jest" in str(
                     package_json.get("scripts", {})
                 ):
-                    return "jest"
+                    return "jest", "package_json"
+            except Exception:
+                pass
 
-        # Проверим наличие go.mod файла
         if os.path.exists(os.path.join(project_path, "go.mod")):
-            return "go_test"
+            return "go_test", "go_mod"
 
-        # По умолчанию возвращаем первый подходящий фреймворк на основе языка
-        language = project_metadata.get("language", "").lower()
-        if language == "python":
-            return "pytest"
-        elif language in ["javascript", "typescript"]:
-            return "jest"
-        elif language == "go":
-            return "go_test"
+        if any(
+            os.path.exists(os.path.join(project_path, f))
+            for f in ("pytest.ini", "pyproject.toml", "setup.cfg")
+        ):
+            for req_file in ("requirements.txt", "pyproject.toml", "setup.py"):
+                req_path = os.path.join(project_path, req_file)
+                if os.path.exists(req_path):
+                    try:
+                        with open(req_path, encoding="utf-8") as f:
+                            if "pytest" in f.read().lower():
+                                return "pytest", req_file
+                    except Exception:
+                        pass
 
-        return "pytest"  # по умолчанию
+        language = str(project_metadata.get("language", "")).lower()
+        return {
+            "python": ("pytest", "language_default"),
+            "javascript": ("jest", "language_default"),
+            "typescript": ("jest", "language_default"),
+            "go": ("go_test", "language_default"),
+        }.get(language, ("pytest", "global_default"))
 
-    def _create_isolated_environment(self, context: dict[str, Any]) -> str:
-        """Создает изолированное окружение для запуска тестов."""
-        # Создаем временный каталог для изоляции
+    def _resolve_project_path(self, context: dict[str, Any]) -> tuple[str, str]:
+        project_path = context.get("project_path")
+        if isinstance(project_path, str) and project_path.strip() and os.path.exists(project_path):
+            return project_path, "context.project_path"
+
+        workspace_repo = Path("./workspace/repo")
+        if workspace_repo.exists() and any(workspace_repo.iterdir()):
+            return str(workspace_repo.resolve()), "workspace/repo"
+
+        return str(Path(".").resolve()), "cwd"
+
+    def _create_isolated_environment(self, source_path: str) -> str:
         temp_dir = tempfile.mkdtemp(prefix="test_runner_isolated_")
+        dest_path = os.path.join(temp_dir, os.path.basename(source_path.rstrip("/\\")) or "repo")
+        shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
+        return dest_path
 
-        # Если указан путь к проекту, копируем его в изолированное окружение
-        project_path = context.get("project_path", ".")
-        if project_path != "." and os.path.exists(project_path):
-            # Копируем проект в изолированное окружение
-            dest_path = os.path.join(temp_dir, os.path.basename(project_path))
-            shutil.copytree(project_path, dest_path, dirs_exist_ok=True)
-            return dest_path
+    def _validate_code_patch(
+        self, code_patch: dict[str, Any] | None
+    ) -> tuple[bool, list[str], int]:
+        if code_patch is None:
+            return False, ["missing code_patch"], 0
 
-        return temp_dir
+        files = code_patch.get("files")
+        if files is None:
+            return False, ["code_patch.files missing"], 0
+        if not isinstance(files, list):
+            return False, ["code_patch.files must be a list"], 0
+
+        errors: list[str] = []
+        applied = 0
+        for i, item in enumerate(files):
+            if not isinstance(item, dict):
+                errors.append(f"code_patch.files[{i}] must be an object")
+                continue
+
+            path = item.get("path")
+            if not isinstance(path, str) or not path.strip():
+                errors.append(f"code_patch.files[{i}].path must be a non-empty string")
+                continue
+
+            normalized = path.strip().replace("\\", "/")
+            if normalized.startswith("/") or ".." in normalized.split("/"):
+                errors.append(f"code_patch.files[{i}].path must be relative and safe")
+
+            applied += 1
+
+        if applied == 0:
+            errors.append("code_patch contains zero applicable files")
+
+        return not errors, errors, applied
+
+    @staticmethod
+    def _extract_ci_test_paths(ci_failure_context: dict[str, Any]) -> list[str]:
+        """
+        Extract test paths from CI failure context.
+        Looks for test names in per_job_analysis, details, and memory/RAG matches.
+        Normalizes paths to be relative to project root (for sandbox compatibility).
+        """
+        if not isinstance(ci_failure_context, dict):
+            return []
+
+        test_paths: list[str] = []
+
+        # Prefer explicit test targets when available.
+        explicit_targets = ci_failure_context.get("test_targets", [])
+        if isinstance(explicit_targets, list):
+            for target in explicit_targets:
+                if isinstance(target, str) and target.strip():
+                    test_paths.append(target.strip())
+
+        # Try to extract from per_job_analysis
+        per_job_analysis = ci_failure_context.get("per_job_analysis", [])
+        if isinstance(per_job_analysis, list):
+            for job in per_job_analysis:
+                if not isinstance(job, dict):
+                    continue
+                # Look for flaky_tests or parsed_errors that might contain test names
+                for key in ["flaky_tests", "parsed_errors"]:
+                    items = job.get(key, [])
+                    if isinstance(items, list):
+                        for item in items:
+                            if isinstance(item, str) and (
+                                "test_" in item.lower() or "::test" in item.lower()
+                            ):
+                                test_paths.append(item)
+
+        # Try to extract from details (job logs might contain test names)
+        details = ci_failure_context.get("details", [])
+        if isinstance(details, list):
+            for detail in details:
+                if not isinstance(detail, dict):
+                    continue
+                logs = str(detail.get("logs", ""))
+                # Look for pytest test patterns like tests/file.py::test_name
+                test_patterns = re.findall(r"([\w/]+\.py::[\w_]+)", logs)
+                test_paths.extend(test_patterns)
+
+                # Look for standalone test names
+                test_names = re.findall(r"(test_[A-Za-z0-9_]+)", logs)
+                test_paths.extend([name for name in test_names if len(name) > 8])
+
+        # Fallback: try to extract from memory_context if available
+        memory_context = ci_failure_context.get("_memory_context", {})
+        if isinstance(memory_context, dict):
+            matches = memory_context.get("matches", [])
+            for match in matches:
+                if not isinstance(match, dict):
+                    continue
+                path = str(match.get("path", ""))
+                summary = str(match.get("summary", ""))
+                # Look for test file paths - normalize to relative
+                if "test" in path.lower() and path.endswith(".py"):
+                    # Strip workspace/repo/ prefix if present
+                    normalized = path
+                    for prefix in [
+                        "/workspace/repo/",
+                        "workspace/repo/",
+                        "/workspace/",
+                        "workspace/",
+                        "repo/",
+                    ]:
+                        if normalized.startswith(prefix):
+                            normalized = normalized[len(prefix) :]
+                            break
+                    test_paths.append(normalized)
+                # Look for test function names in summary
+                if "def test_" in summary:
+                    func_matches = re.findall(r"def (test_[A-Za-z0-9_]+)", summary)
+                    test_paths.extend(func_matches)
+
+        # Normalize paths: strip workspace prefixes
+        normalized_paths = []
+        for path in test_paths:
+            # Remove workspace/repo/ prefix
+            for prefix in [
+                "/workspace/repo/",
+                "workspace/repo/",
+                "/workspace/",
+                "workspace/",
+                "repo/",
+            ]:
+                if path.startswith(prefix):
+                    path = path[len(prefix) :]
+                    break
+            # Only keep paths that look like test files or functions
+            if path.endswith(".py") or path.startswith("test_") or "::test" in path:
+                normalized_paths.append(path)
+
+        # Deduplicate and return
+        return list(dict.fromkeys(normalized_paths))[:10]
+
+    def _apply_code_patch_to_workspace(
+        self, workspace_path: str, code_patch: dict[str, Any] | None
+    ) -> int:
+        if not isinstance(code_patch, dict):
+            return 0
+
+        files = code_patch.get("files")
+        if not isinstance(files, list):
+            return 0
+
+        workspace_root = Path(workspace_path).resolve()
+        applied = 0
+
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+
+            rel = item.get("path")
+            if not isinstance(rel, str) or not rel.strip():
+                continue
+
+            target = (workspace_root / rel.strip().replace("\\", "/")).resolve()
+            if workspace_root not in target.parents and target != workspace_root:
+                continue
+
+            change_type = str(item.get("change_type", "modify")).lower()
+            if change_type == "delete":
+                try:
+                    target.unlink(missing_ok=True)
+                    applied += 1
+                except Exception:
+                    pass
+                continue
+
+            content = item.get("content")
+            if not isinstance(content, str):
+                if isinstance(item.get("diff"), str) and item.get("diff").strip():
+                    applied += 1
+                continue
+
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            applied += 1
+
+        return applied
+
+    def _prepare_python_env(self, project_path: str) -> list[str]:
+        logs: list[str] = []
+
+        req_txt = os.path.join(project_path, "requirements.txt")
+        if os.path.exists(req_txt):
+            try:
+                result = subprocess.run(
+                    ["python", "-m", "pip", "install", "-r", "requirements.txt"],
+                    cwd=project_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+                logs.append(f"pip install -r requirements.txt exit_code={result.returncode}")
+            except Exception as exc:
+                logs.append(f"requirements install failed: {type(exc).__name__}: {exc}")
+
+        try:
+            result = subprocess.run(
+                ["python", "-m", "pip", "install", "pytest", "pytest-json-report"],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            logs.append(f"pip install pytest pytest-json-report exit_code={result.returncode}")
+        except Exception as exc:
+            logs.append(f"pytest install failed: {type(exc).__name__}: {exc}")
+
+        return logs
 
     def _run_pytest(self, project_path: str, context: dict[str, Any]) -> dict[str, Any]:
-        """Запускает pytest."""
-        cmd = ["python", "-m", "pytest"]
+        prep_logs = self._prepare_python_env(project_path)
 
-        # Добавляем флаги для покрытия кода, если включено
-        coverage_enabled = context.get("coverage_enabled", False)
-        if coverage_enabled:
+        cmd = ["python", "-m", "pytest"]
+        if context.get("coverage_enabled", False):
             cmd.extend(["--cov", "--cov-report", "json", "--cov-report", "html"])
 
-        # Добавляем дополнительные параметры из контекста
-        pytest_args = context.get("pytest_args", [])
-        cmd.extend(pytest_args)
+        # Extract specific test paths from CI failure context if available
+        ci_failure_context = context.get("ci_failure_context", {})
 
-        # Добавляем флаг для вывода результата в формате JSON, если возможно
+        # Pass memory_context to ci_failure_context for test extraction
+        memory_context = context.get("memory_context", {})
+        if isinstance(memory_context, dict) and memory_context:
+            ci_failure_context["_memory_context"] = memory_context
+
+        test_paths = self._extract_ci_test_paths(ci_failure_context)
+
+        pytest_args = context.get("pytest_args", [])
+        if isinstance(pytest_args, list):
+            cmd.extend(str(arg) for arg in pytest_args)
+
+        # Add specific test paths from CI failures
+        if test_paths:
+            # Validate that paths exist in sandbox before adding them
+            valid_test_paths = []
+            for test_path in test_paths:
+                # Support pytest node ids like tests/x.py::test_case.
+                fs_path = test_path.split("::", 1)[0]
+                full_path = os.path.join(project_path, fs_path)
+                if os.path.exists(full_path):
+                    valid_test_paths.append(test_path)
+                # Skip function names (test_*) and non-existent files
+
+            if valid_test_paths:
+                cmd.extend(valid_test_paths)
+            else:
+                # No valid test files found, run all tests
+                cmd.append(".")
+        else:
+            # Fallback: run all tests in the project if no specific tests found
+            # This ensures we don't get "collected 0 items"
+            cmd.append(".")
+
         cmd.append("--json-report")
         cmd.extend(["--json-report-file", os.path.join(project_path, "pytest_report.json")])
 
@@ -109,36 +342,37 @@ class TestRunner(BaseAgent):
                 cwd=project_path,
                 capture_output=True,
                 text=True,
-                timeout=300,  # 5 минут таймаут
+                timeout=300,
             )
-
-            # Анализируем результат
-            test_results = {
+            payload = {
                 "framework": "pytest",
                 "exit_code": result.returncode,
                 "stdout": result.stdout,
                 "stderr": result.stderr,
                 "command": " ".join(cmd),
+                "preparation_logs": prep_logs,
             }
+            error_classification = self._classify_pytest_error(
+                stdout=result.stdout,
+                stderr=result.stderr,
+                exit_code=result.returncode,
+            )
+            if error_classification:
+                payload["error_classification"] = error_classification
+            if context.get("coverage_enabled", False):
+                cov = self._extract_pytest_coverage(project_path)
+                if cov:
+                    payload["coverage_report"] = cov
 
-            # Пытаемся получить отчет о покрытии, если он был сгенерирован
-            if coverage_enabled:
-                coverage_report = self._extract_pytest_coverage(project_path)
-                if coverage_report:
-                    test_results["coverage_report"] = coverage_report
-
-            # Пытаемся получить JSON отчет, если он был сгенерирован
-            json_report_path = os.path.join(project_path, "pytest_report.json")
-            if os.path.exists(json_report_path):
+            report_path = os.path.join(project_path, "pytest_report.json")
+            if os.path.exists(report_path):
                 try:
-                    with open(json_report_path) as f:
-                        json_report = json.load(f)
-                        test_results["json_report"] = json_report
+                    with open(report_path, encoding="utf-8") as f:
+                        payload["json_report"] = json.load(f)
                 except Exception:
-                    pass  # Игнорируем ошибки при чтении JSON отчета
+                    pass
 
-            return test_results
-
+            return payload
         except subprocess.TimeoutExpired:
             return {
                 "framework": "pytest",
@@ -146,66 +380,58 @@ class TestRunner(BaseAgent):
                 "stdout": "",
                 "stderr": "Test execution timed out",
                 "command": " ".join(cmd),
+                "preparation_logs": prep_logs,
             }
-        except Exception as e:
+        except Exception as exc:
             return {
                 "framework": "pytest",
                 "exit_code": -1,
                 "stdout": "",
-                "stderr": str(e),
+                "stderr": str(exc),
                 "command": " ".join(cmd),
+                "preparation_logs": prep_logs,
             }
 
     def _extract_pytest_coverage(self, project_path: str) -> dict[str, Any] | None:
-        """Извлекает отчет о покрытии из результатов pytest."""
-        # Проверяем наличие JSON отчета о покрытии
         cov_json_path = os.path.join(project_path, ".coverage.json")
         if os.path.exists(cov_json_path):
             try:
-                with open(cov_json_path) as f:
+                with open(cov_json_path, encoding="utf-8") as f:
                     return json.load(f)
-            except (json.JSONDecodeError, OSError):
+            except Exception:
                 pass
 
-        # Альтернативно, можем попытаться получить покрытие через coverage report
         try:
             result = subprocess.run(
                 ["python", "-m", "coverage", "report", "--format=json"],
                 cwd=project_path,
                 capture_output=True,
                 text=True,
-                timeout=30,  # Add timeout to prevent hanging
+                timeout=30,
             )
             if result.returncode == 0:
                 try:
-                    coverage_data = json.loads(result.stdout)
-                    return coverage_data
+                    return json.loads(result.stdout)
                 except json.JSONDecodeError:
-                    # Если JSON невалиден, пробуем получить процент покрытия из текстового вывода
                     match = re.search(r"(\d+)%", result.stdout)
                     if match:
                         return {
                             "coverage_percentage": float(match.group(1)),
                             "raw_output": result.stdout,
                         }
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+        except Exception:
             pass
 
         return None
 
     def _run_jest(self, project_path: str, context: dict[str, Any]) -> dict[str, Any]:
-        """Запускает jest."""
         cmd = ["npx", "jest"]
+        if context.get("coverage_enabled", False):
+            cmd.extend(["--coverage", "--coverageReporters", "json", "html"])
 
-        # Добавляем флаги для покрытия кода, если включено
-        coverage_enabled = context.get("coverage_enabled", False)
-        if coverage_enabled:
-            cmd.append("--coverage")
-            cmd.extend(["--coverageReporters", "json", "html"])
-
-        # Добавляем дополнительные параметры из контекста
         jest_args = context.get("jest_args", [])
-        cmd.extend(jest_args)
+        if isinstance(jest_args, list):
+            cmd.extend(str(arg) for arg in jest_args)
 
         try:
             result = subprocess.run(
@@ -213,25 +439,20 @@ class TestRunner(BaseAgent):
                 cwd=project_path,
                 capture_output=True,
                 text=True,
-                timeout=300,  # 5 минут таймаут
+                timeout=300,
             )
-
-            test_results = {
+            payload = {
                 "framework": "jest",
                 "exit_code": result.returncode,
                 "stdout": result.stdout,
                 "stderr": result.stderr,
                 "command": " ".join(cmd),
             }
-
-            # Пытаемся получить отчет о покрытии, если он был сгенерирован
-            if coverage_enabled:
-                coverage_report = self._extract_jest_coverage(project_path)
-                if coverage_report:
-                    test_results["coverage_report"] = coverage_report
-
-            return test_results
-
+            if context.get("coverage_enabled", False):
+                cov = self._extract_jest_coverage(project_path)
+                if cov:
+                    payload["coverage_report"] = cov
+            return payload
         except subprocess.TimeoutExpired:
             return {
                 "framework": "jest",
@@ -240,81 +461,55 @@ class TestRunner(BaseAgent):
                 "stderr": "Test execution timed out",
                 "command": " ".join(cmd),
             }
-        except Exception as e:
+        except Exception as exc:
             return {
                 "framework": "jest",
                 "exit_code": -1,
                 "stdout": "",
-                "stderr": str(e),
+                "stderr": str(exc),
                 "command": " ".join(cmd),
             }
 
     def _extract_jest_coverage(self, project_path: str) -> dict[str, Any] | None:
-        """Извлекает отчет о покрытии из результатов jest."""
-        # Jest обычно сохраняет отчет о покрытии в папку coverage
-        coverage_dir = os.path.join(project_path, "coverage")
-        summary_path = os.path.join(coverage_dir, "coverage-summary.json")
-
+        summary_path = os.path.join(project_path, "coverage", "coverage-summary.json")
         if os.path.exists(summary_path):
             try:
-                with open(summary_path) as f:
+                with open(summary_path, encoding="utf-8") as f:
                     return json.load(f)
             except Exception:
                 pass
-
-        # Альтернативно, пробуем найти json файл отчета
-        for root, _dirs, files in os.walk(coverage_dir):
-            for file in files:
-                if file.endswith(".json") and "summary" in file.lower():
-                    try:
-                        with open(os.path.join(root, file)) as f:
-                            return json.load(f)
-                    except Exception:
-                        pass
-
         return None
 
     def _run_go_test(self, project_path: str, context: dict[str, Any]) -> dict[str, Any]:
-        """Запускает go test."""
         cmd = ["go", "test"]
-
-        # Добавляем флаги для покрытия кода, если включено
-        coverage_enabled = context.get("coverage_enabled", False)
-        if coverage_enabled:
+        if context.get("coverage_enabled", False):
             cmd.extend(["-cover", "-coverprofile=coverage.out", "-covermode=atomic"])
 
-        # Добавляем дополнительные параметры из контекста
         go_test_args = context.get("go_test_args", [])
-        cmd.extend(go_test_args)
+        if isinstance(go_test_args, list):
+            cmd.extend(str(arg) for arg in go_test_args)
 
-        # Добавляем флаг для подробного вывода
         cmd.append("-v")
-
         try:
             result = subprocess.run(
                 cmd,
                 cwd=project_path,
                 capture_output=True,
                 text=True,
-                timeout=300,  # 5 минут таймаут
+                timeout=300,
             )
-
-            test_results = {
+            payload = {
                 "framework": "go_test",
                 "exit_code": result.returncode,
                 "stdout": result.stdout,
                 "stderr": result.stderr,
                 "command": " ".join(cmd),
             }
-
-            # Пытаемся получить отчет о покрытии, если он был сгенерирован
-            if coverage_enabled:
-                coverage_report = self._extract_go_coverage(project_path)
-                if coverage_report:
-                    test_results["coverage_report"] = coverage_report
-
-            return test_results
-
+            if context.get("coverage_enabled", False):
+                cov = self._extract_go_coverage(project_path)
+                if cov:
+                    payload["coverage_report"] = cov
+            return payload
         except subprocess.TimeoutExpired:
             return {
                 "framework": "go_test",
@@ -323,131 +518,187 @@ class TestRunner(BaseAgent):
                 "stderr": "Test execution timed out",
                 "command": " ".join(cmd),
             }
-        except Exception as e:
+        except Exception as exc:
             return {
                 "framework": "go_test",
                 "exit_code": -1,
                 "stdout": "",
-                "stderr": str(e),
+                "stderr": str(exc),
                 "command": " ".join(cmd),
             }
 
-    def _analyze_test_results_with_llm(
-        self, test_results: dict[str, Any], context: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Analyze test results using LLM for enhanced insights."""
-        use_llm = context.get("use_llm", True)
-        if not use_llm:
+    def _extract_go_coverage(self, project_path: str) -> dict[str, Any] | None:
+        coverage_file = os.path.join(project_path, "coverage.out")
+        if os.path.exists(coverage_file):
+            with open(coverage_file, encoding="utf-8") as f:
+                return {"coverage_profile": f.read()[:2000]}
+        return None
+
+    def _classify_execution_result(self, test_results: dict[str, Any]) -> str:
+        error_classification = str(test_results.get("error_classification", "")).strip().lower()
+        if error_classification in {"path_error", "collection_error"}:
+            return error_classification
+
+        stderr = str(test_results.get("stderr", "")).lower()
+        exit_code = int(test_results.get("exit_code", -1))
+
+        if "unsupported test framework" in stderr:
+            return "unsupported_framework"
+        if "timed out" in stderr:
+            return "timeout"
+        if exit_code == 0:
+            return "passed"
+        if exit_code == -1:
+            return "infra_error"
+        return "test_failures"
+
+    def _populate_test_counts(self, test_results: dict[str, Any]) -> dict[str, Any]:
+        report = test_results.get("json_report")
+        if isinstance(report, dict) and isinstance(report.get("summary"), dict):
+            summary = report["summary"]
+            test_results["passed"] = int(summary.get("passed", 0) or 0)
+            test_results["failed"] = int(summary.get("failed", 0) or 0)
+            test_results["total"] = int(
+                summary.get("total", test_results["passed"] + test_results["failed"]) or 0
+            )
             return test_results
 
-        try:
-            # Try to use the new LLM wrapper first, fall back to legacy if needed
-            llm = get_llm_wrapper()
-            if llm is None:
-                # Try legacy wrapper for backward compatibility
-                llm = get_legacy_llm_wrapper()
+        stdout = str(test_results.get("stdout", ""))
+        error_classification = str(test_results.get("error_classification", "")).strip().lower()
+        if error_classification in {"path_error", "collection_error"}:
+            test_results["passed"] = 0
+            test_results["failed"] = 0
+            test_results["total"] = 0
+            return test_results
 
-            if llm is not None:
-                # Prepare context for LLM analysis
-                analysis_context = {
-                    "test_framework": test_results.get("framework", "unknown"),
-                    "exit_code": test_results.get("exit_code", 0),
-                    "stdout": test_results.get("stdout", "")[:2000],  # Limit length
-                    "stderr": test_results.get("stderr", "")[:2000],  # Limit length
-                    "command": test_results.get("command", ""),
-                    "coverage_report": test_results.get("coverage_report"),
-                }
+        passed_match = re.search(r"(\d+)\s+passed", stdout)
+        failed_match = re.search(r"(\d+)\s+failed", stdout)
 
-                # Build prompt for LLM to analyze test results
-                # Try new prompt building first, fall back to legacy if needed
-                try:
-                    prompt = build_code_prompt(
-                        {
-                            "summary": "Analyze test execution results and provide insights",
-                            "requirements": [
-                                "Identify test failures",
-                                "Suggest fixes",
-                                "Assess code quality",
-                            ],
-                        },
-                        [analysis_context],
-                        {"language": "python", "framework": "testing"},
-                    )
-                except AttributeError:
-                    # Fall back to legacy prompt building
-                    prompt = legacy_build_code_prompt(
-                        {
-                            "summary": "Analyze test execution results and provide insights",
-                            "requirements": [
-                                "Identify test failures",
-                                "Suggest fixes",
-                                "Assess code quality",
-                            ],
-                        },
-                        [analysis_context],
-                        {"language": "python", "framework": "testing"},
-                    )
-
-                response = llm.complete(prompt)
-                llm.close()
-
-                # Parse LLM response for additional insights
-                import json
-
-                try:
-                    llm_analysis = json.loads(response)
-                    # Add LLM insights to test results
-                    test_results["llm_analysis"] = llm_analysis
-                    test_results["llm_enhanced"] = True
-                except json.JSONDecodeError:
-                    # If response is not JSON, add as plain analysis
-                    test_results["llm_analysis"] = {"insights": response[:1000]}  # Limit length
-                    test_results["llm_enhanced"] = True
-
-        except Exception as e:
-            # If LLM analysis fails, continue with original results
-            test_results["llm_error"] = str(e)[:200]  # Limit error length
-
+        test_results["passed"] = (
+            int(passed_match.group(1))
+            if passed_match
+            else (1 if test_results.get("exit_code") == 0 else 0)
+        )
+        test_results["failed"] = (
+            int(failed_match.group(1))
+            if failed_match
+            else (1 if test_results.get("exit_code") not in (0, None) else 0)
+        )
+        test_results["total"] = max(
+            test_results["passed"] + test_results["failed"],
+            1 if test_results.get("exit_code") == 0 else test_results["failed"] or 1,
+        )
         return test_results
 
-    def run(self, context: dict[str, Any]) -> dict:
-        # Проверим, есть ли mock-данные из предыдущих шагов (например, code_generator)
-        code_generator_result = context.get("code_generator", {})
-        from agents.context_utils import get_artifact_from_result
+    @staticmethod
+    def _classify_pytest_error(*, stdout: str, stderr: str, exit_code: int) -> str | None:
+        if exit_code == 0:
+            return None
 
-        latest_code_patch = None
-        for step_name in ("fix_agent", "fix_loop", "test_fixer", "code_generator"):
-            step_result = context.get(step_name)
-            candidate = get_artifact_from_result(step_result, "code_patch")
-            if isinstance(candidate, dict):
-                latest_code_patch = candidate
-                break
+        stderr_lower = str(stderr or "").lower()
+        stdout_lower = str(stdout or "").lower()
+        combined = f"{stdout_lower}\n{stderr_lower}"
 
-        if latest_code_patch is None:
-            direct_patch = context.get("code_patch")
-            if isinstance(direct_patch, dict):
-                latest_code_patch = direct_patch
+        if "file or directory not found" in combined:
+            return "path_error"
 
-        if (
-            latest_code_patch is None
-            and isinstance(code_generator_result, dict)
-            and code_generator_result.get("status") == "SUCCESS"
+        if "collected 0 items" in combined:
+            return "collection_error"
+
+        return None
+
+    def _validate_execution_input(
+        self, context: dict[str, Any], latest_code_patch: dict[str, Any] | None
+    ) -> tuple[bool, str]:
+        framework, _ = self._detect_test_framework(context)
+        if framework not in {"pytest", "jest", "go_test"} and not bool(
+            context.get("mock_test_execution", context.get("mock_mode", False))
         ):
-            latest_code_patch = get_artifact_from_result(code_generator_result, "code_patch")
+            return False, f"Unsupported test framework: {framework}"
 
-        if isinstance(latest_code_patch, dict):
-            expected_failures = latest_code_patch.get("remaining_failures")
-            if not isinstance(expected_failures, int):
-                expected_failures = latest_code_patch.get("expected_failures", 0)
+        project_path, _ = self._resolve_project_path(context)
+        if not os.path.exists(project_path):
+            return False, f"Project path does not exist: {project_path}"
+
+        if latest_code_patch is not None:
+            valid_patch, errors, _ = self._validate_code_patch(latest_code_patch)
+            if not valid_patch:
+                return False, "; ".join(errors)
+
+        return True, ""
+
+    def _resolve_latest_code_patch(self, context: dict[str, Any]) -> dict[str, Any] | None:
+        direct_patch = context.get("code_patch")
+        if isinstance(direct_patch, dict):
+            return direct_patch
+
+        for step_name in ("fix_agent", "test_runner", "test_fixer", "fix_loop", "code_generator"):
+            step = context.get(step_name)
+            if not isinstance(step, dict):
+                continue
+
+            artifact_content = step.get("artifact_content")
+            if isinstance(artifact_content, dict) and isinstance(
+                artifact_content.get("files"), list
+            ):
+                return artifact_content
+
+            direct = step.get("code_patch")
+            if isinstance(direct, dict) and isinstance(direct.get("files"), list):
+                return direct
+
+            extracted = get_artifact_from_result(step, "code_patch")
+            if isinstance(extracted, dict):
+                return extracted
+
+        return None
+
+    def run(self, context: dict[str, Any]) -> dict:
+        latest_code_patch = self._resolve_latest_code_patch(context)
+        use_mock = bool(context.get("mock_test_execution", context.get("mock_mode", False)))
+
+        valid, reason = self._validate_execution_input(context, latest_code_patch)
+        if not valid and not use_mock:
+            artifact = {
+                "framework": "unknown",
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": reason,
+                "command": "",
+                "result_type": "infra_error",
+                "execution_mode": "real",
+                "quality_signals": {"input_valid": False},
+            }
+            result = build_agent_result(
+                status="BLOCKED",
+                artifact_type="test_results",
+                artifact_content=artifact,
+                reason=reason,
+                confidence=0.99,
+                logs=[reason],
+                next_actions=["fix_test_execution_input"],
+            )
+            result["artifact_type"] = "test_results"
+            result["artifact_content"] = artifact
+            result["test_results"] = artifact
+            return result
+
+        if use_mock and isinstance(latest_code_patch, dict):
+            expected_failures = latest_code_patch.get(
+                "remaining_failures", latest_code_patch.get("expected_failures", 0)
+            )
             try:
                 expected_failures = max(0, int(expected_failures))
-            except (TypeError, ValueError):
+            except Exception:
                 expected_failures = 0
 
-            test_results = {
+            artifact = {
                 "framework": "mock",
                 "exit_code": 1 if expected_failures > 0 else 0,
-                "stdout": f"Mock test run: {expected_failures} failed, {max(0, 1 - expected_failures)} passed",
+                "stdout": (
+                    f"Mock test run: {expected_failures} failed, "
+                    f"{max(0, 1 - expected_failures)} passed"
+                ),
                 "stderr": "",
                 "command": "mock-test-command",
                 "passed": max(0, 1 - expected_failures),
@@ -456,133 +707,145 @@ class TestRunner(BaseAgent):
                 "isolated": False,
                 "sandbox_path": None,
                 "mock": True,
+                "result_type": "passed" if expected_failures == 0 else "test_failures",
+                "execution_mode": "mock",
+                "quality_signals": {
+                    "input_valid": True,
+                    "code_patch_provided": True,
+                    "code_patch_applied_files": 0,
+                },
             }
-
-            status = "SUCCESS" if test_results["exit_code"] == 0 else "PARTIAL_SUCCESS"
-
+            status = "SUCCESS" if artifact["exit_code"] == 0 else "PARTIAL_SUCCESS"
             result = build_agent_result(
                 status=status,
                 artifact_type="test_results",
-                artifact_content=test_results,
+                artifact_content=artifact,
                 reason=f"Mock test execution completed. Expected failures: {expected_failures}",
                 confidence=0.95,
                 logs=[f"Mock test run: expected_failures={expected_failures}"],
-                next_actions=["review_agent"] if test_results["exit_code"] == 0 else ["fix_agent"],
+                next_actions=["review_agent"] if artifact["exit_code"] == 0 else ["fix_agent"],
             )
-
             result["artifact_type"] = "test_results"
-            result["artifact_content"] = test_results
-            result["test_results"] = test_results
-
+            result["artifact_content"] = artifact
+            result["test_results"] = artifact
             return result
 
-        framework = self._detect_test_framework(context)
+        framework, detected_from = self._detect_test_framework(context)
+        source_path, path_source = self._resolve_project_path(context)
+        requested_isolation = bool(context.get("isolate_test_environment", True))
+        use_isolation = requested_isolation
+        execution_path = source_path
+        if requested_isolation:
+            try:
+                execution_path = self._create_isolated_environment(source_path)
+            except OSError:
+                use_isolation = False
+                execution_path = source_path
 
-        # Создаем изолированное окружение
-        isolated_env_path = self._create_isolated_environment(context)
+        applied_files = self._apply_code_patch_to_workspace(execution_path, latest_code_patch)
+        if isinstance(latest_code_patch, dict) and applied_files == 0:
+            artifact = {
+                "framework": framework,
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": "No files from code_patch were applied before test execution",
+                "command": "",
+                "result_type": "infra_error",
+                "execution_mode": "real",
+                "isolated": use_isolation,
+                "sandbox_path": execution_path if use_isolation else None,
+                "quality_signals": {
+                    "input_valid": True,
+                    "framework_confidence": detected_from,
+                    "workspace_mode": "isolated" if use_isolation else "inplace",
+                    "code_patch_provided": True,
+                    "code_patch_applied_files": 0,
+                },
+            }
+            result = build_agent_result(
+                status="BLOCKED",
+                artifact_type="test_results",
+                artifact_content=artifact,
+                reason="Code patch was resolved but no files were applied to workspace.",
+                confidence=0.99,
+                logs=["WARNING: no code patch applied before test execution"],
+                next_actions=["fix_code_patch_resolution"],
+            )
+            result["artifact_type"] = "test_results"
+            result["artifact_content"] = artifact
+            result["test_results"] = artifact
+            if use_isolation:
+                try:
+                    shutil.rmtree(execution_path)
+                except Exception:
+                    pass
+            return result
 
         try:
-            # Выполняем тесты в зависимости от фреймворка
             if framework == "pytest":
-                test_results = self._run_pytest(isolated_env_path, context)
+                artifact = self._run_pytest(execution_path, context)
             elif framework == "jest":
-                test_results = self._run_jest(isolated_env_path, context)
-            elif framework == "go_test":
-                test_results = self._run_go_test(isolated_env_path, context)
+                artifact = self._run_jest(execution_path, context)
             else:
-                # Неизвестный фреймворк
-                test_results = {
-                    "framework": framework,
-                    "exit_code": -1,
-                    "stdout": "",
-                    "stderr": f"Unsupported test framework: {framework}",
-                    "command": "",
-                }
+                artifact = self._run_go_test(execution_path, context)
 
-            # Добавляем информацию об изоляции
-            test_results["isolated"] = True
-            test_results["sandbox_path"] = isolated_env_path
+            artifact["isolated"] = use_isolation
+            artifact["sandbox_path"] = execution_path if use_isolation else None
+            artifact["execution_mode"] = "real"
+            artifact["framework_detected_from"] = detected_from
+            artifact["project_path_resolved_from"] = path_source
 
-            # Enhance test results with LLM analysis
-            test_results = self._analyze_test_results_with_llm(test_results, context)
-            require_llm = bool(context.get("require_llm", False))
-            if require_llm and isinstance(test_results.get("llm_error"), str):
-                llm_error = str(test_results.get("llm_error"))
-                result = build_agent_result(
-                    status="FAILED",
-                    artifact_type="test_results",
-                    artifact_content=test_results,
-                    reason=f"LLM required but unavailable: {llm_error[:160]}",
-                    confidence=0.95,
-                    logs=[
-                        "LLM strict mode enabled (require_llm=true).",
-                        f"LLM error: {llm_error[:200]}",
-                    ],
-                    next_actions=["fix_llm_connectivity"],
-                )
-                result["artifact_type"] = "test_results"
-                result["artifact_content"] = test_results
-                result["test_results"] = test_results
-                return result
+            artifact = self._populate_test_counts(artifact)
+            artifact["result_type"] = self._classify_execution_result(artifact)
 
-            # Определяем статус на основе результатов тестов
-            status = "SUCCESS" if test_results["exit_code"] == 0 else "FAILURE"
-
-            # Для совместимости с тестами, также добавим информацию о количестве пройденных/неудачных тестов
-            if "pytest" in str(test_results.get("framework", "")):
-                # Для pytest пытаемся извлечь количество тестов из stdout
-                stdout = test_results.get("stdout", "")
-                import re
-
-                passed_match = re.search(r"(\d+) passed", stdout)
-                failed_match = re.search(r"(\d+) failed", stdout)
-
-                test_results["passed"] = int(passed_match.group(1)) if passed_match else 0
-                test_results["failed"] = (
-                    int(failed_match.group(1))
-                    if failed_match
-                    else (1 if test_results["exit_code"] != 0 else 0)
-                )
-            else:
-                # Для других фреймворков устанавливаем значения по умолчанию
-                test_results["passed"] = 0 if test_results["exit_code"] != 0 else 1
-                test_results["failed"] = 1 if test_results["exit_code"] != 0 else 0
-
-            # Также добавим поле 'total' для совместимости с тестами
-            test_results["total"] = test_results["passed"] + test_results["failed"]
-
-            # Создаем результат агента
-            result = build_agent_result(
-                status=status,
-                artifact_type="test_results",
-                artifact_content=test_results,
-                reason=f"Test execution completed for {framework}. Exit code: {test_results['exit_code']}",
-                confidence=0.95,
-                logs=[f"Executed tests with {framework}: exit_code={test_results['exit_code']}"],
-                next_actions=["review_agent"] if test_results["exit_code"] == 0 else ["fix_agent"],
-            )
-
-            # Добавляем прямые ключи для совместимости с ожиданиями тестов
-            result["artifact_type"] = "test_results"
-            result["artifact_content"] = test_results
-
-            # Добавляем результаты тестов верхний уровень для условий цикла
-            result["test_results"] = test_results
-
-            # Если включен режим покрытия, но отчет о покрытии отсутствует, добавляем заглушку
-            coverage_enabled = context.get("coverage_enabled", False)
-            if coverage_enabled and "coverage_report" not in test_results:
-                test_results["coverage_report"] = {
+            if context.get("coverage_enabled", False) and "coverage_report" not in artifact:
+                artifact["coverage_report"] = {
                     "coverage_percentage": 0.0,
                     "message": "Coverage report not generated - coverage tool may not be available",
                 }
 
-            return result
+            artifact["quality_signals"] = {
+                "input_valid": True,
+                "framework_confidence": detected_from,
+                "workspace_mode": "isolated" if use_isolation else "inplace",
+                "code_patch_provided": isinstance(latest_code_patch, dict),
+                "code_patch_applied_files": applied_files,
+                "coverage_available": "coverage_report" in artifact,
+                "llm_analysis_used": False,
+            }
 
+            status = "SUCCESS" if artifact["result_type"] == "passed" else "PARTIAL_SUCCESS"
+            if artifact["result_type"] in {"infra_error", "timeout", "unsupported_framework"}:
+                status = "BLOCKED"
+
+            logs = [
+                f"Executed tests with {framework}: exit_code={artifact['exit_code']}, "
+                f"result_type={artifact['result_type']}",
+                f"Applied files before execution: {applied_files}",
+            ]
+            prep_logs = artifact.get("preparation_logs")
+            if isinstance(prep_logs, list):
+                logs.extend(prep_logs[:10])
+
+            result = build_agent_result(
+                status=status,
+                artifact_type="test_results",
+                artifact_content=artifact,
+                reason=(
+                    f"Test execution completed for {framework}. "
+                    f"Result: {artifact['result_type']}. Exit code: {artifact['exit_code']}"
+                ),
+                confidence=0.95,
+                logs=logs,
+                next_actions=["review_agent"] if status == "SUCCESS" else ["fix_agent"],
+            )
+            result["artifact_type"] = "test_results"
+            result["artifact_content"] = artifact
+            result["test_results"] = artifact
+            return result
         finally:
-            # Удаляем изолированное окружение после завершения
-            try:
-                shutil.rmtree(isolated_env_path)
-            except Exception:
-                # Игнорируем ошибки при удалении временного каталога
-                pass
+            if use_isolation:
+                try:
+                    shutil.rmtree(execution_path)
+                except Exception:
+                    pass

@@ -28,6 +28,7 @@
 | task_decomposer | Декомпозирует задачи на подзадачи | agents.task_decomposer.TaskDecomposerAgent | Не указана | context.dod.v1 | context.dod.v1 |
 | test_analyzer | Анализирует тесты | agents.test_analyzer.TestAnalyzer | Не указана | context.spec.v1 | context.spec.v1 |
 | test_generator | Генерирует тесты | agents.test_generator.TestGeneratorAgent | Не указана | context.spec.v1 | context.tests.v1 |
+| ci_incident_handoff | Создает инцидент CI с триажем и меткой agent:opened | agents.ci_incident_handoff.CiIncidentHandoff | Не указана | context.spec.v1 | context.spec.v1 |
 | test_runner | Запускает тесты | agents.test_runner.TestRunner | Не указана | context.spec.v1 | context.spec.v1 |
 
 ## Подробное описание агентов
@@ -412,7 +413,24 @@
 
 - **Класс**: `agents.test_runner.TestRunner`
 
-- **Категория**: Не указана
+- **Категория**: Не указна
+
+- **Входной контракт**: context.spec.v1
+
+- **Выходной контракт**: context.spec.v1
+
+- **Версия**: Не указана
+
+- **Автор**: Не указан
+
+
+### ci_incident_handoff
+
+- **Описание**: Создает инцидент CI с триажем и меткой agent:opened
+
+- **Класс**: `agents.ci_incident_handoff.CiIncidentHandoff`
+
+- **Категория**: Не указна
 
 - **Входной контракт**: context.spec.v1
 

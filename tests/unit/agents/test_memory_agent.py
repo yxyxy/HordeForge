@@ -1,87 +1,85 @@
-# tests/unit/agents/test_memory_agent.py
-from agents.memory_agent import retrieve_context, setup_memory, store_context
+from agents.memory_agent import MemoryAgent, retrieve_context, setup_memory, store_context
 
 
 class TestMemoryStorageSetup:
-    """TDD: Memory Storage Setup"""
-
-    def test_setup_memory_success(self):
-        """TDD: Memory storage initialized"""
-        # Arrange
-        config = {"type": "json", "file_path": ".hordeforge_data/test_memory.json"}
-
-        # Act
-        result = setup_memory(config)
-
-        # Assert
-        assert result["status"] == "ready"
+    def test_setup_memory_success(self, tmp_path):
+        assert (
+            setup_memory({"type": "json", "file_path": str(tmp_path / "test_memory.json")})[
+                "status"
+            ]
+            == "ready"
+        )
 
     def test_setup_memory_failure(self):
-        """TDD: Memory storage failed"""
-        # Arrange
-        config = {"type": "invalid"}
-
-        # Act
-        result = setup_memory(config)
-
-        # Assert
-        assert result["status"] == "failed"
+        assert setup_memory({"type": "invalid"})["status"] == "failed"
 
 
 class TestContextRetrieval:
-    """TDD: Context Retrieval"""
-
-    def test_retrieve_context_success(self):
-        """TDD: Context retrieved successfully"""
-        # Arrange
-        # First store a context
-        context = {"data": "test_data", "context_id": "ctx_123"}
-        store_result = store_context(context)
-        assert store_result["status"] == "success"
-
-        context_id = "ctx_123"
-
-        # Act
-        result = retrieve_context(context_id)
-
-        # Assert
+    def test_retrieve_context_success(self, tmp_path):
+        setup_memory({"type": "json", "file_path": str(tmp_path / "memory.json")})
+        assert store_context({"data": "test_data", "context_id": "ctx_123"})["status"] == "success"
+        result = retrieve_context("ctx_123")
         assert result["status"] == "success"
         assert "context" in result
 
-    def test_retrieve_context_not_found(self):
-        """TDD: Context not found"""
-        # Arrange
-        context_id = "nonexistent"
-
-        # Act
-        result = retrieve_context(context_id)
-
-        # Assert
-        assert result["status"] == "not_found"
+    def test_retrieve_context_not_found(self, tmp_path):
+        setup_memory({"type": "json", "file_path": str(tmp_path / "memory.json")})
+        assert retrieve_context("nonexistent")["status"] == "not_found"
 
 
 class TestContextStorage:
-    """TDD: Context Storage"""
-
-    def test_store_context_success(self):
-        """TDD: Context stored successfully"""
-        # Arrange
-        context = {"data": "test"}
-
-        # Act
-        result = store_context(context)
-
-        # Assert
+    def test_store_context_success(self, tmp_path):
+        setup_memory({"type": "json", "file_path": str(tmp_path / "memory.json")})
+        result = store_context({"data": "test"})
         assert result["status"] == "success"
         assert "context_id" in result
 
     def test_store_context_failure(self):
-        """TDD: Context storage failed"""
-        # Arrange
-        context = {}
+        assert store_context({})["status"] == "failed"
 
-        # Act
-        result = store_context(context)
 
-        # Assert
-        assert result["status"] == "failed"
+class TestMemoryAgentModes:
+    def test_seed_mode(self):
+        result = MemoryAgent().run({"repository": {"full_name": "org/repo"}})
+        assert result["status"] in {"SUCCESS", "PARTIAL_SUCCESS"}
+        assert result["artifacts"][0]["content"]["quality_signals"]["memory_mode"] == "seed"
+
+    def test_retrieve_mode_with_query(self):
+        context = {
+            "query": "auth logic",
+            "rag_initializer": {
+                "artifacts": [
+                    {
+                        "type": "rag_index",
+                        "content": {
+                            "documents": [
+                                {
+                                    "path": "auth.py",
+                                    "summary": "Authentication helpers",
+                                    "content": "auth logic",
+                                }
+                            ],
+                            "documents_count": 1,
+                            "collection_name": "repo_chunks",
+                        },
+                    }
+                ]
+            },
+        }
+        result = MemoryAgent().run(context)
+        assert result["status"] in {"SUCCESS", "PARTIAL_SUCCESS"}
+        assert result["artifacts"][0]["content"]["quality_signals"]["memory_mode"] == "retrieve"
+
+    def test_write_mode_persists(self, tmp_path):
+        setup_memory({"type": "json", "file_path": str(tmp_path / "memory.json")})
+        result = MemoryAgent().run(
+            {
+                "task_description": "Fix auth bug",
+                "result": {"status": "SUCCESS"},
+                "code_patch": {"files": [{"path": "auth.py", "content": "print(1)"}]},
+            }
+        )
+        assert result["status"] in {"SUCCESS", "PARTIAL_SUCCESS"}
+        artifact = result["artifacts"][0]["content"]
+        assert artifact["quality_signals"]["memory_mode"] == "write"
+        assert artifact["quality_signals"]["write_persisted"] is True

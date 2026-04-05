@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ruff *)",
+      "Bash(pytest *)",
+      "Bash(python *)",
+      "Bash(d:\\python\\python.exe *)"
+    ]
+  },
+  "$version": 3
+}

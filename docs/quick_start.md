@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide provides a quick introduction to getting started with HordeForge, an autonomous AI software development orchestrator. The system automates the software lifecycle via agent pipelines, including CI triage/handoff (`ci_fix_pipeline`) that creates `agent:opened` issues for downstream staged processing.
+This guide provides a quick introduction to getting started with HordeForge, an autonomous AI software development orchestrator. The system automates the software lifecycle via agent pipelines, including CI triage/handoff (`ci_scanner_pipeline`) that creates `agent:opened` issues for downstream staged processing.
 
 ## Requirements
 
@@ -138,7 +138,7 @@ horde pipeline run init yxyxy/HordeForge
 horde pipeline run feature --inputs '{"prompt": "Add user authentication"}'
 
 # Run CI triage pipeline (defaults repo/branch/sha from profile + local git)
-horde pipeline run ci_fix_pipeline
+horde pipeline run ci_scanner_pipeline
 
 # Run development task
 horde task "Implement user authentication system"

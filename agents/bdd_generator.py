@@ -1,9 +1,17 @@
-"""BDD Generator Agent - Generates BDD scenarios in Gherkin format."""
+"""BDD Generator Agent - Generates BDD scenarios in Gherkin format.
+
+Stage-1 improvements:
+- builds from acceptance criteria when available
+- supports technical/repair-friendly fallback phrasing
+- stricter passthrough validation
+- adds quality/specificity metadata
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 from agents.base import BaseAgent
 from agents.context_utils import build_agent_result
@@ -18,6 +26,18 @@ class BDDComponentType(Enum):
 
 
 @dataclass
+class BDDScenario:
+    """Represents a BDD scenario in Gherkin format."""
+
+    title: str
+    given: str
+    when: str
+    then: str
+    and_steps: list[str] = field(default_factory=list)
+    scenario_type: str = "success"
+
+
+@dataclass
 class BDDFeature:
     """Represents a BDD feature in Gherkin format."""
 
@@ -27,45 +47,37 @@ class BDDFeature:
     background: str = ""
 
 
-@dataclass
-class BDDScenario:
-    """Represents a BDD scenario in Gherkin format."""
+def _normalize_text(value: Any) -> str:
+    return str(value or "").strip()
 
-    title: str
-    given: str
-    when: str
-    then: str
-    and_steps: list[str] = field(default_factory=list)
-    scenario_type: str = "success"  # "success", "failure", "edge_case"
+
+def _coerce_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = _normalize_text(item)
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return result
 
 
 def _extract_feature_name(feature_description: str) -> str:
-    """Extract feature name from description.
+    feature = feature_description
+    for token in ["Add", "Implement", "Create", "Fix", "Update", "Improve"]:
+        feature = feature.replace(token, "")
+    feature = feature.split(".")[0].strip() or feature_description
 
-    Args:
-        feature_description: Feature description
-
-    Returns:
-        Feature name in proper case
-    """
-    # Remove common verbs and extract the main feature
-    feature = (
-        feature_description.replace("Add", "")
-        .replace("Implement", "")
-        .replace("Create", "")
-        .strip()
-    )
-    feature = feature.replace("Fix", "").replace("Update", "").replace("Improve", "").strip()
-    feature = feature.split(".")[0].strip()  # Take only first sentence
-
-    if not feature:
-        feature = feature_description
-
-    # Capitalize first letter of each word, preserving common acronyms
     words = feature.split()
     stop_words = {"a", "an", "the", "of", "in", "on", "at", "to", "for", "with", "by"}
     acronyms = {"api", "jwt", "ui", "ci", "cd", "sql"}
-    capitalized_words = []
+    capitalized_words: list[str] = []
     for word in words:
         lowered = word.lower()
         if lowered in stop_words:
@@ -74,249 +86,235 @@ def _extract_feature_name(feature_description: str) -> str:
             capitalized_words.append(lowered.upper())
         else:
             capitalized_words.append(word.capitalize())
+    return " ".join(capitalized_words) or "Feature"
 
-    return " ".join(capitalized_words)
+
+def _extract_spec_mode(feature_description: str, labels: list[str]) -> str:
+    combined = f"{feature_description} {' '.join(labels)}".lower()
+    if (
+        "ci incident" in combined
+        or "kind:ci-incident" in combined
+        or "source:ci_scanner_pipeline" in combined
+    ):
+        return "ci_incident"
+    if any(token in combined for token in ["bug", "fix", "regression", "failure", "error"]):
+        return "bugfix"
+    if any(token in combined for token in ["infra", "config", "workflow", "pipeline", "docker"]):
+        return "infra"
+    return "feature"
 
 
-def _generate_feature_description(feature_description: str, feature_name: str) -> str:
-    """Generate feature description in BDD format.
-
-    Args:
-        feature_description: Original feature description
-        feature_name: Extracted feature name
-
-    Returns:
-        Feature description in BDD format
-    """
-    # Determine role based on feature content
+def _generate_feature_description(feature_description: str, spec_mode: str) -> str:
     feature_lower = feature_description.lower()
-
-    if any(word in feature_lower for word in ["user", "customer", "client"]):
-        role = "user"
-    elif any(word in feature_lower for word in ["admin", "administrator", "manager"]):
-        role = "administrator"
-    elif any(word in feature_lower for word in ["api", "service", "endpoint"]):
-        role = "developer"
-    else:
-        role = "user"  # Default role
-
-    # Determine goal based on feature
-    if any(word in feature_lower for word in ["login", "authenticate", "access"]):
-        goal = "access my account securely"
-    elif any(word in feature_lower for word in ["create", "add", "implement"]):
-        goal = "perform the required action"
-    elif any(word in feature_lower for word in ["view", "see", "display"]):
-        goal = "view the required information"
-    elif any(word in feature_lower for word in ["update", "modify", "edit"]):
-        goal = "update my information"
-    elif any(word in feature_lower for word in ["delete", "remove"]):
-        goal = "remove unwanted items"
-    else:
-        goal = "achieve my goals"
-
-    return f"As a {role},\n  I want to {feature_description.lower()},\n  So that I can {goal}"
-
-
-def _generate_scenarios(feature_description: str) -> list[dict[str, str]]:
-    """Generate BDD scenarios for the feature.
-
-    Args:
-        feature_description: Feature description
-
-    Returns:
-        List of BDD scenarios as dictionaries
-    """
-    scenarios = []
-    feature_lower = feature_description.lower()
-
-    # Generate success scenario
-    if any(word in feature_lower for word in ["login", "authenticate", "access"]):
-        scenarios.append(
-            {
-                "title": "Successful Login",
-                "given": "I have valid login credentials",
-                "when": "I enter my username and password",
-                "then": "I am logged in successfully",
-                "and_steps": ["I am redirected to my dashboard", "My session is created"],
-                "scenario_type": "success",
-            }
+    if spec_mode == "feature":
+        if any(word in feature_lower for word in ["user", "customer", "client"]):
+            role = "user"
+        elif any(word in feature_lower for word in ["admin", "administrator", "manager"]):
+            role = "administrator"
+        elif any(word in feature_lower for word in ["api", "service", "endpoint"]):
+            role = "developer"
+        else:
+            role = "user"
+        return (
+            f"As a {role},\n"
+            f"  I want to {feature_description.lower()},\n"
+            "  So that I can achieve the expected outcome"
         )
 
-    elif any(word in feature_lower for word in ["create", "add", "register"]):
-        scenarios.append(
-            {
-                "title": "Successful Creation",
-                "given": "I am authenticated and have required permissions",
-                "when": "I submit valid data",
-                "then": "The item is created successfully",
-                "and_steps": ["I receive a success notification", "The item appears in the list"],
-                "scenario_type": "success",
-            }
+    if spec_mode == "ci_incident":
+        return (
+            "In order to restore CI stability,\n"
+            "  the failing path must be reproduced, fixed, and verified,\n"
+            "  so that the affected checks pass again"
         )
 
-    elif any(word in feature_lower for word in ["view", "display", "show"]):
-        scenarios.append(
-            {
-                "title": "Successful View",
-                "given": "I am authenticated and have required permissions",
-                "when": "I navigate to the page",
-                "then": "The information is displayed correctly",
-                "and_steps": ["All fields are visible", "Data is properly formatted"],
-                "scenario_type": "success",
-            }
+    if spec_mode == "bugfix":
+        return (
+            "In order to restore expected behaviour,\n"
+            "  the failing scenario must be corrected without broad regressions,\n"
+            "  so that the system behaves predictably again"
         )
 
-    else:
-        # Generic success scenario
-        scenarios.append(
-            {
-                "title": "Successful Execution",
-                "given": "I have proper access rights",
-                "when": "I perform the action",
-                "then": "The action completes successfully",
-                "and_steps": [],
-                "scenario_type": "success",
-            }
-        )
+    return (
+        "In order to implement the requested technical change,\n"
+        "  the affected components must be updated safely,\n"
+        "  so that the system remains stable"
+    )
 
-    # Generate failure scenario
-    if any(word in feature_lower for word in ["login", "authenticate", "access"]):
-        scenarios.append(
-            {
-                "title": "Failed Login",
-                "given": "I have invalid login credentials",
-                "when": "I enter incorrect username or password",
-                "then": "Authentication fails",
-                "and_steps": ["An error message is displayed", "My session is not created"],
-                "scenario_type": "failure",
-            }
-        )
 
-    elif any(word in feature_lower for word in ["create", "add", "register"]):
-        scenarios.append(
-            {
-                "title": "Failed Creation",
-                "given": "I am authenticated but submit invalid data",
-                "when": "I submit the form with errors",
-                "then": "The item is not created",
-                "and_steps": ["I receive an error notification", "Validation errors are shown"],
-                "scenario_type": "failure",
-            }
-        )
-
-    else:
-        # Generic failure scenario
-        scenarios.append(
-            {
-                "title": "Failed Execution",
-                "given": "I have insufficient permissions",
-                "when": "I attempt to perform the action",
-                "then": "The action is denied",
-                "and_steps": ["An error message is displayed"],
-                "scenario_type": "failure",
-            }
-        )
-
-    # Add edge case scenario if applicable
-    if any(word in feature_lower for word in ["api", "endpoint", "service"]):
-        scenarios.append(
-            {
-                "title": "API Rate Limiting",
-                "given": "I am making frequent API requests",
-                "when": "I exceed the rate limit",
-                "then": "My requests are throttled",
-                "and_steps": ["A rate limit error is returned", "I am notified of the limit"],
-                "scenario_type": "edge_case",
-            }
-        )
-
+def _build_scenarios_from_criteria(criteria: list[str], spec_mode: str) -> list[BDDScenario]:
+    scenarios: list[BDDScenario] = []
+    for index, criterion in enumerate(criteria, start=1):
+        title = criterion.rstrip(".")
+        if spec_mode == "ci_incident":
+            scenarios.append(
+                BDDScenario(
+                    title=f"Repair criterion {index}: {title}",
+                    given="the failing CI job and relevant test context are available",
+                    when=f"the fix is applied to satisfy: {title}",
+                    then="the affected CI checks pass without introducing new failures",
+                    and_steps=["regression coverage is updated where needed"],
+                    scenario_type="success",
+                )
+            )
+        elif spec_mode == "bugfix":
+            scenarios.append(
+                BDDScenario(
+                    title=f"Regression criterion {index}: {title}",
+                    given="the original failing scenario is reproducible",
+                    when=f"the implementation satisfies: {title}",
+                    then="the defect no longer reproduces",
+                    and_steps=["existing expected behaviour remains intact"],
+                    scenario_type="success",
+                )
+            )
+        else:
+            scenarios.append(
+                BDDScenario(
+                    title=f"Acceptance criterion {index}: {title}",
+                    given="the relevant preconditions are met",
+                    when=f"the user or system performs the action for: {title}",
+                    then="the expected outcome is observed",
+                    and_steps=[],
+                    scenario_type="success",
+                )
+            )
     return scenarios
 
 
-def generate_gherkin_feature(feature_description: str) -> str:
-    """Generate a Gherkin feature from feature description.
+def _generate_default_scenarios(feature_description: str, spec_mode: str) -> list[BDDScenario]:
+    feature_lower = feature_description.lower()
+    if spec_mode == "ci_incident":
+        return [
+            BDDScenario(
+                title="Reproduce the failing CI job",
+                given="the failing workflow and artifacts are available",
+                when="the affected job is rerun in isolated mode",
+                then="the original failure is reproduced deterministically",
+                scenario_type="success",
+            ),
+            BDDScenario(
+                title="Verify the repair",
+                given="a targeted fix has been applied",
+                when="the affected checks are executed again",
+                then="the previously failing checks pass",
+                and_steps=["no new regression is introduced in nearby checks"],
+                scenario_type="failure",
+            ),
+        ]
 
-    Args:
-        feature_description: Description of the feature to generate Gherkin for
+    if spec_mode == "bugfix":
+        return [
+            BDDScenario(
+                title="Confirm the bug is fixed",
+                given="the original failing case exists",
+                when="the corrected implementation is executed",
+                then="the incorrect behaviour no longer appears",
+                scenario_type="success",
+            ),
+            BDDScenario(
+                title="Guard against regressions",
+                given="the fix is present",
+                when="related behaviour is exercised",
+                then="existing behaviour remains unchanged",
+                scenario_type="failure",
+            ),
+        ]
 
-    Returns:
-        Gherkin feature in string format
-    """
-    # Extract feature name from description
+    if any(word in feature_lower for word in ["login", "authenticate", "access"]):
+        return [
+            BDDScenario(
+                title="Successful Login",
+                given="I have valid login credentials",
+                when="I enter my username and password",
+                then="I am logged in successfully",
+                and_steps=["I am redirected to my dashboard", "My session is created"],
+            ),
+            BDDScenario(
+                title="Failed Login",
+                given="I have invalid login credentials",
+                when="I enter incorrect username or password",
+                then="authentication fails",
+                and_steps=["an error message is displayed", "my session is not created"],
+                scenario_type="failure",
+            ),
+        ]
+
+    if any(word in feature_lower for word in ["api", "endpoint", "service"]):
+        return [
+            BDDScenario(
+                title="Successful execution",
+                given="the service is reachable and inputs are valid",
+                when="the operation is invoked",
+                then="the expected response is returned",
+            ),
+            BDDScenario(
+                title="Handles invalid input",
+                given="the service receives invalid input",
+                when="validation is triggered",
+                then="a controlled error is returned",
+                scenario_type="failure",
+            ),
+            BDDScenario(
+                title="Rate limiting under load",
+                given="request volume exceeds the configured threshold",
+                when="additional requests arrive",
+                then="requests are throttled gracefully",
+                scenario_type="edge_case",
+            ),
+        ]
+
+    return [
+        BDDScenario(
+            title="Successful execution",
+            given="the relevant preconditions are met",
+            when="the action is performed",
+            then="the action completes successfully",
+        ),
+        BDDScenario(
+            title="Failed execution",
+            given="a blocking condition exists",
+            when="the action is attempted",
+            then="the system rejects the action safely",
+            scenario_type="failure",
+        ),
+    ]
+
+
+def generate_gherkin_feature(
+    feature_description: str, scenarios: list[BDDScenario], spec_mode: str
+) -> str:
     feature_name = _extract_feature_name(feature_description)
-
-    # Generate feature description based on the feature type
-    feature_desc = _generate_feature_description(feature_description, feature_name)
-
-    # Create the Gherkin feature
+    feature_desc = _generate_feature_description(feature_description, spec_mode)
     gherkin = f"Feature: {feature_name}\n"
     gherkin += f"  {feature_desc}\n\n"
-
-    # Generate scenarios based on feature description
-    scenario_dicts = _generate_scenarios(feature_description)
-
-    for i, scenario_dict in enumerate(scenario_dicts):
-        gherkin += f"  Scenario: {scenario_dict['title']}\n"
-        gherkin += f"    Given {scenario_dict['given']}\n"
-        gherkin += f"    When {scenario_dict['when']}\n"
-        gherkin += f"    Then {scenario_dict['then']}\n"
-        for and_step in scenario_dict["and_steps"]:
+    for index, scenario in enumerate(scenarios):
+        gherkin += f"  Scenario: {scenario.title}\n"
+        gherkin += f"    Given {scenario.given}\n"
+        gherkin += f"    When {scenario.when}\n"
+        gherkin += f"    Then {scenario.then}\n"
+        for and_step in scenario.and_steps:
             gherkin += f"    And {and_step}\n"
-        if i < len(scenario_dicts) - 1:
+        if index < len(scenarios) - 1:
             gherkin += "\n"
-
     return gherkin
 
 
-def generate_scenario(feature: str, scenario_type: str = "success") -> str:
-    """Generate a specific scenario in Given-When-Then format.
-
-    Args:
-        feature: Feature description
-        scenario_type: Type of scenario ("success", "failure", "edge_case")
-
-    Returns:
-        Scenario in Given-When-Then format
-    """
-    feature_lower = feature.lower()
-
-    if scenario_type == "success":
-        if any(word in feature_lower for word in ["login", "authenticate"]):
-            return """Given I have valid credentials
-When I log in with correct username and password
-Then I am authenticated successfully"""
-        elif any(word in feature_lower for word in ["create", "add"]):
-            return """Given I am authorized to create items
-When I submit valid data
-Then the item is created successfully"""
-        else:
-            return """Given the system is ready
-When I perform the action
-Then it completes successfully"""
-
-    elif scenario_type == "failure":
-        if any(word in feature_lower for word in ["login", "authenticate"]):
-            return """Given I have invalid credentials
-When I attempt to log in
-Then authentication fails"""
-        elif any(word in feature_lower for word in ["create", "add"]):
-            return """Given I am authorized but submit invalid data
-When I submit the form
-Then the item is not created"""
-        else:
-            return """Given I have insufficient permissions
-When I attempt the action
-Then it is denied"""
-
-    else:  # edge case
-        if any(word in feature_lower for word in ["api", "service"]):
-            return """Given the system is under heavy load
-When I make multiple concurrent requests
-Then requests are handled gracefully"""
-        else:
-            return """Given unusual conditions
-When I perform the action
-Then the system handles it appropriately"""
+def generate_scenario(
+    feature: str, scenario_type: str = "success", spec_mode: str = "feature"
+) -> str:
+    scenarios = _generate_default_scenarios(feature, spec_mode)
+    for scenario in scenarios:
+        if scenario.scenario_type == scenario_type:
+            lines = [
+                f"Given {scenario.given}",
+                f"When {scenario.when}",
+                f"Then {scenario.then}",
+            ]
+            lines.extend(f"And {step}" for step in scenario.and_steps)
+            return "\n".join(lines)
+    scenario = scenarios[0]
+    return f"Given {scenario.given}\nWhen {scenario.when}\nThen {scenario.then}"
 
 
 class BDDGenerator(BaseAgent):
@@ -326,96 +324,142 @@ class BDDGenerator(BaseAgent):
     description = "Generates BDD scenarios in Gherkin format with Given-When-Then structure."
 
     def run(self, context: dict) -> dict:
-        """Run the BDD generation process.
-
-        Args:
-            context: Context containing issue/feature data
-
-        Returns:
-            Agent result with generated BDD scenarios
-        """
-        # Extract issue data from context
-        issue = context.get("issue", {})
-        feature_description = issue.get("title", "") or context.get("feature_description", "")
-        if not feature_description:
+        existing_bdd = context.get("bdd_specification")
+        if isinstance(existing_bdd, dict) and (
+            _normalize_text(existing_bdd.get("gherkin_feature"))
+            or (isinstance(existing_bdd.get("scenarios"), dict) and existing_bdd.get("scenarios"))
+        ):
+            passthrough_content = dict(existing_bdd)
+            passthrough_content.setdefault(
+                "quality_signals",
+                {
+                    "scenario_count": len(passthrough_content.get("scenarios", {})),
+                    "specificity": "high"
+                    if _normalize_text(passthrough_content.get("gherkin_feature"))
+                    else "medium",
+                },
+            )
+            passthrough_content.setdefault(
+                "plan_provenance",
+                {
+                    "source": context.get("plan_source", "upstream_pipeline"),
+                    "passthrough": True,
+                    "rebuilt": False,
+                },
+            )
             return build_agent_result(
-                status="FAILURE",
+                status="SUCCESS",
                 artifact_type="bdd_specification",
-                artifact_content={},
-                reason="No feature description provided in context",
-                confidence=0.0,
-                logs=["No feature description found in context"],
-                next_actions=[],
+                artifact_content=passthrough_content,
+                reason="BDD specification passed through from upstream pipeline.",
+                confidence=0.95,
+                logs=["BDD specification reused from upstream pipeline (passthrough mode)."],
+                next_actions=["test_generator"],
             )
 
-        # Generate Gherkin feature
-        gherkin_feature = generate_gherkin_feature(feature_description)
+        issue = context.get("issue", {}) if isinstance(context.get("issue"), dict) else {}
+        spec = context.get("spec") if isinstance(context.get("spec"), dict) else {}
+        feature_description = _normalize_text(
+            issue.get("title") or context.get("feature_description")
+        )
+        if not feature_description and isinstance(spec, dict):
+            feature_description = _normalize_text(
+                spec.get("summary") or spec.get("feature_description")
+            )
 
-        # Generate individual scenarios
-        success_scenario = generate_scenario(feature_description, "success")
-        failure_scenario = generate_scenario(feature_description, "failure")
-        edge_case_scenario = generate_scenario(feature_description, "edge_case")
+        if not feature_description:
+            return build_agent_result(
+                status="FAILED",
+                artifact_type="bdd_specification",
+                artifact_content={},
+                reason="No feature description provided in context.",
+                confidence=1.0,
+                logs=["No feature description found in issue or specification context."],
+                next_actions=["specification_writer", "request_human_input"],
+            )
 
-        # Prepare result content
+        labels: list[str] = []
+        raw_labels = issue.get("labels", [])
+        if isinstance(raw_labels, list):
+            for label in raw_labels:
+                labels.append(
+                    _normalize_text(label.get("name") if isinstance(label, dict) else label)
+                )
+
+        acceptance_criteria = []
+        dod = context.get("dod") if isinstance(context.get("dod"), dict) else {}
+        if isinstance(spec, dict):
+            acceptance_criteria.extend(_coerce_list(spec.get("acceptance_criteria")))
+        if isinstance(dod, dict):
+            acceptance_criteria.extend(_coerce_list(dod.get("acceptance_criteria")))
+        acceptance_criteria = _coerce_list(acceptance_criteria)
+
+        spec_mode = _extract_spec_mode(feature_description, labels)
+        scenarios = (
+            _build_scenarios_from_criteria(acceptance_criteria, spec_mode)
+            if acceptance_criteria
+            else _generate_default_scenarios(feature_description, spec_mode)
+        )
+        gherkin_feature = generate_gherkin_feature(feature_description, scenarios, spec_mode)
+
+        scenario_map = {
+            scenario.scenario_type: generate_scenario(
+                feature_description, scenario.scenario_type, spec_mode
+            )
+            for scenario in scenarios
+        }
         result_content = {
             "schema_version": "1.0",
             "feature_description": feature_description,
             "gherkin_feature": gherkin_feature,
-            "scenarios": {
-                "success": success_scenario,
-                "failure": failure_scenario,
-                "edge_case": edge_case_scenario,
-            },
+            "scenarios": scenario_map,
             "generation_context": {
                 "feature_type": self._identify_feature_type(feature_description),
-                "complexity_estimate": len(feature_description.split()) // 10 + 1,
+                "spec_mode": spec_mode,
+                "criteria_seed_count": len(acceptance_criteria),
+                "complexity_estimate": max(1, len(feature_description.split()) // 10 + 1),
+            },
+            "quality_signals": {
+                "scenario_count": len(scenarios),
+                "specificity": "high" if acceptance_criteria else "medium",
+                "generic_fallback_used": not bool(acceptance_criteria),
+            },
+            "plan_provenance": {
+                "source": context.get("plan_source", "generated"),
+                "passthrough": False,
+                "rebuilt": False,
             },
         }
 
-        # Create the result in the expected format
         result = build_agent_result(
             status="SUCCESS",
             artifact_type="bdd_specification",
             artifact_content=result_content,
-            reason="BDD specification generated successfully",
+            reason="BDD specification generated successfully.",
             confidence=0.9,
             logs=[
-                f"Generated BDD for: {feature_description[:50]}...",
-                "Scenarios created: 3 (success, failure, edge_case)",
-                f"Feature type: {self._identify_feature_type(feature_description)}",
+                f"Generated BDD for: {feature_description[:80]}",
+                f"spec_mode={spec_mode}",
+                f"scenario_count={len(scenarios)}",
             ],
-            next_actions=["architecture_planner", "implementation_planner"],
+            next_actions=["test_generator"],
         )
-
-        # Add top-level keys expected by tests
         result["artifact_type"] = "bdd_specification"
         result["artifact_content"] = result_content
         result["confidence"] = 0.9
-
         return result
 
     def _identify_feature_type(self, feature_description: str) -> str:
-        """Identify feature type from description.
-
-        Args:
-            feature_description: Feature description
-
-        Returns:
-            Feature type as string
-        """
         feature_lower = feature_description.lower()
-
         if any(word in feature_lower for word in ["api", "endpoint", "service"]):
             return "api"
-        elif any(word in feature_lower for word in ["ui", "interface", "form", "page"]):
+        if any(word in feature_lower for word in ["ui", "interface", "form", "page"]):
             return "ui"
-        elif any(word in feature_lower for word in ["auth", "authentication", "login", "register"]):
+        if any(word in feature_lower for word in ["auth", "authentication", "login", "register"]):
             return "authentication"
-        elif any(word in feature_lower for word in ["data", "database", "model", "schema"]):
+        if any(word in feature_lower for word in ["data", "database", "model", "schema"]):
             return "data_layer"
-        else:
-            return "general"
+        return "general"
 
 
-# Backward-compatible alias
 BDDGeneratorAgent = BDDGenerator

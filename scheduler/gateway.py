@@ -46,6 +46,7 @@ from scheduler.tenant_registry import (
     extract_repository_full_name,
     normalize_tenant_id,
 )
+from storage.backends import archive_and_prune_rotated_logs, rotate_current_log_files
 from storage.models import ArtifactRecord, RunRecord, StepLogRecord
 from storage.repositories.artifact_repository import ArtifactRepository
 from storage.repositories.run_repository import RunRepository
@@ -64,6 +65,7 @@ app = FastAPI(title="HordeForge Scheduler Gateway", version="0.1.0")
 logger = logging.getLogger("hordeforge.gateway")
 
 config = RunConfig.from_env()
+CONTAINER_STARTED_AT = datetime.now(timezone.utc)
 
 # Initialize JWT validator if auth is enabled
 JWT_VALIDATOR: JWTValidator | None = None
@@ -525,6 +527,12 @@ def _queue_autodrain_worker() -> None:
 @app.on_event("startup")
 def startup_queue_autodrain_worker() -> None:
     global QUEUE_AUTODRAIN_THREAD
+    if STORAGE_BACKEND_REQUESTED == "json":
+        archive_and_prune_rotated_logs(
+            storage_dir=config.storage_dir,
+            archive_after_days=7,
+            retention_days=7,
+        )
     if not _queue_autodrain_enabled():
         logger.info("Queue autodrain worker disabled by HORDEFORGE_QUEUE_AUTODRAIN_ENABLED.")
         return
@@ -542,11 +550,21 @@ def startup_queue_autodrain_worker() -> None:
 @app.on_event("shutdown")
 def shutdown_queue_autodrain_worker() -> None:
     global QUEUE_AUTODRAIN_THREAD
-    if QUEUE_AUTODRAIN_THREAD is None:
-        return
-    QUEUE_AUTODRAIN_STOP.set()
-    QUEUE_AUTODRAIN_THREAD.join(timeout=3.0)
-    QUEUE_AUTODRAIN_THREAD = None
+    if QUEUE_AUTODRAIN_THREAD is not None:
+        QUEUE_AUTODRAIN_STOP.set()
+        QUEUE_AUTODRAIN_THREAD.join(timeout=3.0)
+        QUEUE_AUTODRAIN_THREAD = None
+
+    if STORAGE_BACKEND_REQUESTED == "json":
+        rotate_current_log_files(
+            storage_dir=config.storage_dir,
+            container_started_at=CONTAINER_STARTED_AT,
+        )
+        archive_and_prune_rotated_logs(
+            storage_dir=config.storage_dir,
+            archive_after_days=7,
+            retention_days=7,
+        )
 
 
 @app.post("/llm/profiles")

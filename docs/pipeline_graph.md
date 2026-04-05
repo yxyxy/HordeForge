@@ -2,13 +2,13 @@
 
 ```mermaid
 graph TD
-  A[ci_fix_pipeline] --> B[ci_incident_handoff issue with agent:opened]
+  A[ci_scanner_pipeline] --> B[ci_incident_handoff issue with agent:opened]
   B --> C[issue_scanner_pipeline]
   C --> D[issue_pipeline_dispatcher]
   D --> E[feature_pipeline]
 ```
 
-## ci_fix_pipeline
+## ci_scanner_pipeline
 
 ```mermaid
 graph TD

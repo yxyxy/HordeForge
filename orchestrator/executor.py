@@ -486,7 +486,7 @@ class StepExecutor:
         if isinstance(raw_status, str):
             status_upper = raw_status.strip().upper()
             if status_upper in {"FAILURE", "ERROR", "FAIL"}:
-                status_upper = StepStatus.FAILED.value
+                status_upper = "FAILED"  # Normalize to consistent FAILED status
             if status_upper:
                 sanitized["status"] = status_upper
 

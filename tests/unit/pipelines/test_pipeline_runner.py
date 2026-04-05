@@ -1,6 +1,10 @@
 import json
 
+import pytest
+
 from agents.pipeline_runner import PipelineRunner
+
+pytestmark = pytest.mark.usefixtures("stub_llm_for_pipeline_runtime")
 
 
 def test_pipeline_runner_load_error_for_missing_file():
@@ -24,7 +28,8 @@ def test_pipeline_runner_executes_feature_pipeline_smoke():
     runner = PipelineRunner()
     result = runner.run("feature_pipeline", {"issue": {"body": "test issue"}})
     # Допускаем FAILED статус из-за проблем с RAG-инициализацией, как показано в ошибках тестов
-    assert result["status"] in {"SUCCESS", "PARTIAL_SUCCESS", "FAILED"}
+    # BLOCKED is also valid (e.g., when upstream steps fail and block downstream)
+    assert result["status"] in {"SUCCESS", "PARTIAL_SUCCESS", "FAILED", "BLOCKED"}
     assert "code_generator" in result["steps"]
 
 

@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from orchestrator.loader import PipelineDefinition, PipelineLoader
 from registry.agents import AgentRegistry
 from registry.placeholder_mapping import (
     extract_placeholders,
@@ -12,6 +12,9 @@ from registry.placeholder_mapping import (
     resolve_contract_for_placeholder,
     root_key,
 )
+
+if TYPE_CHECKING:
+    from orchestrator.loader import PipelineDefinition
 
 
 @dataclass(frozen=True)
@@ -148,6 +151,8 @@ class PipelineRegistry:
         if metadata is None:
             raise ValueError(f"Pipeline '{pipeline_name}' not found in registry")
 
+        from orchestrator.loader import PipelineLoader
+
         loader = PipelineLoader()
         pipeline_def = loader.load(metadata.path)
 
@@ -259,6 +264,8 @@ class PipelineRegistry:
     def _validate_contracts(self, pipeline_def, agent_registry, steps_by_name):
 
         for step in pipeline_def.steps:
+            if step.depends_on_explicit:
+                continue
             step_agent = agent_registry.get(step.agent)
 
             step_input_contract = step_agent.input_contract if step_agent else None

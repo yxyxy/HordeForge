@@ -1,4 +1,4 @@
-# pipelines/feature_pipeline.yaml
+# feature_pipeline.yaml
 # Feature Pipeline for HordeForge
 # Description: Production execution pipeline from prepared plan to PR/merge
 
@@ -25,7 +25,7 @@ steps:
     description: Initialize RAG with repository data
     input:
       repository: "{{repository}}"
-    output: "{{rag_context}}"
+    output: "{{rag_index}}"
     on_failure: continue
 
   - name: memory_retrieval
@@ -36,23 +36,79 @@ steps:
     output: "{{memory_context}}"
     on_failure: continue
 
+  - name: specification_passthrough
+    agent: specification_writer
+    description: Ensure specification is available in context
+    input:
+      spec: "{{spec}}"
+      dod: "{{dod}}"
+      require_llm: true
+    output: "{{spec}}"
+    on_failure: continue
+
+  - name: subtasks_passthrough
+    agent: task_decomposer
+    description: Ensure subtasks are available in context
+    input:
+      spec: "{{spec}}"
+      dod: "{{dod}}"
+      subtasks: "{{subtasks}}"
+      require_llm: true
+    output: "{{subtasks}}"
+    on_failure: continue
+
+  - name: bdd_passthrough
+    agent: bdd_generator
+    description: Ensure BDD specification is available in context
+    input:
+      spec: "{{spec}}"
+      bdd_specification: "{{bdd_specification}}"
+      require_llm: true
+    output: "{{bdd_specification}}"
+    on_failure: continue
+
+  - name: tests_passthrough
+    agent: test_generator
+    description: Ensure tests are available in context
+    input:
+      spec: "{{spec}}"
+      tests: "{{tests}}"
+      dod: "{{dod}}"
+      subtasks: "{{subtasks}}"
+      bdd_specification: "{{bdd_specification}}"
+      require_llm: true
+    output: "{{tests}}"
+    on_failure: continue
+
   - name: code_generator
     agent: code_generator
     description: Implement code according to prepared issue plan from pipeline inputs
+    depends_on:
+      - specification_passthrough
+      - subtasks_passthrough
+      - bdd_passthrough
+      - tests_passthrough
+    depends_on_explicit: true
     input:
       issue: "{{issue}}"
       repository: "{{repository}}"
       memory_context: "{{memory_context}}"
       require_llm: true
+      publish_pr_in_code_generator: false
     output: "{{code_patch}}"
     on_failure: retry_step
 
   - name: test_runner
     agent: test_runner
     description: Run tests on code patch
+    depends_on:
+      - code_generator
+    depends_on_explicit: true
     input:
       code_patch: "{{code_patch}}"
       tests: "{{tests}}"
+      mock_test_execution: false
+      isolate_test_environment: true
       require_llm: true
     output: "{{test_results}}"
     on_failure: trigger_fix_loop
@@ -60,7 +116,10 @@ steps:
   - name: fix_agent
     agent: fix_agent
     description: Iteratively fix failing tests until all pass
-    condition: "{{ test_runner.test_results.failed > 0 }}"
+    depends_on:
+      - test_runner
+    depends_on_explicit: true
+    condition: "{{ (test_results.failed | default(0)) > 0 or (test_results.exit_code | default(0)) != 0 }}"
     input:
       code_patch: "{{code_patch}}"
       test_results: "{{test_results}}"
@@ -98,26 +157,19 @@ steps:
       test_results: "{{test_results}}"
       code_patch: "{{fixed_code_patch}}"
       repository: "{{repository}}"
+      publish_pr_in_merge_agent: true
+      live_merge: false
     output: "{{merge_status}}"
     on_failure: create_issue_for_human
 
 loops:
-  - condition: "{{test_runner.test_results.failed}} > 0"
+  - condition: "{{ (test_results.failed | default(0)) > 0 or (test_results.exit_code | default(0)) != 0 }}"
     steps:
       - fix_agent
       - test_runner
-
-# Logging
 
 logging:
   level: INFO
   log_decisions: true
   log_artifacts: true
   post_to_github: true
-
-# Notes:
-
-# - Each step follows AGENT_SPEC.md contract
-# - All outputs must be validated JSON
-# - Planning artifacts (DoD/BDD/TDD/spec/subtasks/tests) are expected to be prepared upstream.
-# - Merge is guarded by test/review/PR gates in pr_merge_agent.

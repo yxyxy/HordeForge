@@ -12,10 +12,10 @@ from storage.backends import StorageBackend, get_storage_backend
 
 try:
     from rag.vector_store import QdrantStore
-except Exception:  # noqa: BLE001
+except Exception:
     QdrantStore = None
 
-_QDRANT_STORE_CACHE: Any | None = None
+_QDRANT_STORE_CACHE: dict[str, Any] = {}
 logger = logging.getLogger(__name__)
 
 
@@ -26,101 +26,225 @@ class MemoryType(Enum):
 
 class MemoryAgent(BaseAgent):
     name = "memory_agent"
-    description = "Creates an initial downstream-ready memory state."
+    description = "Creates a downstream-ready memory state, retrieves relevant memory, and persists memory entries."
+    storage: StorageBackend | None = None
 
     def __init__(self):
-        self.storage: StorageBackend | None = None
+        self.storage = MemoryAgent.storage
 
     def run(self, context: dict[str, Any]) -> dict:
-        # Try both artifact types: repository_data (from repo_connector) and repository_metadata
+        mode = self._detect_memory_mode(context)
         repository_metadata = (
             get_artifact_from_context(
-                context,
-                "repository_data",
-                preferred_steps=["repo_connector"],
+                context, "repository_data", preferred_steps=["repo_connector"]
             )
             or get_artifact_from_context(
-                context,
-                "repository_metadata",
-                preferred_steps=["repo_connector"],
+                context, "repository_metadata", preferred_steps=["repo_connector"]
             )
             or {}
         )
         rag_index = (
-            get_artifact_from_context(
-                context,
-                "rag_index",
-                preferred_steps=["rag_initializer"],
-            )
+            get_artifact_from_context(context, "rag_index", preferred_steps=["rag_initializer"])
             or {}
         )
-
-        raw_query = context.get("query")
-        query = self._resolve_query(raw_query, context)
-        if isinstance(query, str) and query.strip():
-            memory_context = self._build_memory_context(query.strip(), rag_index)
-            return build_agent_result(
-                status="SUCCESS",
-                artifact_type="memory_context",
-                artifact_content=memory_context,
-                reason="Memory context retrieved from indexed documents.",
-                confidence=0.84 if memory_context.get("matches") else 0.72,
-                logs=[
-                    f"Memory retrieval query received: {query.strip()[:120]}",
-                    f"Memory retrieval matches: {len(memory_context.get('matches', []))}.",
-                ],
-                next_actions=["code_generator", "architecture_planner"],
+        query = self._resolve_query(context.get("query"), context)
+        if mode == "retrieve":
+            return self._run_retrieve_mode(
+                query=query, rag_index=rag_index, repository_metadata=repository_metadata
             )
+        if mode == "write":
+            return self._run_write_mode(
+                context=context, repository_metadata=repository_metadata, rag_index=rag_index
+            )
+        return self._run_seed_mode(repository_metadata=repository_metadata, rag_index=rag_index)
 
-        repository_input = context.get("repository")
-        has_repository_input = isinstance(repository_input, dict) and bool(
-            str(repository_input.get("full_name") or "").strip()
+    def _detect_memory_mode(self, context: dict[str, Any]) -> str:
+        if context.get("memory_mode") in {"retrieve", "write", "seed"}:
+            return str(context["memory_mode"])
+        if all([context.get("task_description"), context.get("result"), context.get("code_patch")]):
+            return "write"
+        if self._resolve_query(context.get("query"), context).strip():
+            return "retrieve"
+        return "seed"
+
+    def _run_retrieve_mode(
+        self, *, query: str, rag_index: dict[str, Any], repository_metadata: dict[str, Any]
+    ) -> dict:
+        if not query.strip():
+            return build_agent_result(
+                status="BLOCKED",
+                artifact_type="memory_context",
+                artifact_content={
+                    "query": "",
+                    "matches": [],
+                    "quality_signals": {
+                        "memory_mode": "retrieve",
+                        "retrieval_strategy": "none",
+                        "semantic_store_available": False,
+                        "retrieval_confidence": "low",
+                    },
+                },
+                reason="Memory retrieval requested but query could not be resolved.",
+                confidence=0.99,
+                logs=["Missing or empty memory retrieval query."],
+                next_actions=["provide_query"],
+            )
+        ctx = self._build_memory_context(query.strip(), rag_index)
+        ctx["repository"] = {
+            "owner": repository_metadata.get("owner", "unknown"),
+            "repo_name": repository_metadata.get("repo_name", "unknown"),
+            "full_name": repository_metadata.get("full_name", "unknown"),
+        }
+        quality = ctx.get("quality_signals", {})
+        confidence = {"high": 0.84, "medium": 0.76, "low": 0.68}.get(
+            quality.get("retrieval_confidence", "low"), 0.68
+        )
+        return build_agent_result(
+            status="SUCCESS" if ctx.get("matches") else "PARTIAL_SUCCESS",
+            artifact_type="memory_context",
+            artifact_content=ctx,
+            reason="Memory context retrieved from available indexes.",
+            confidence=confidence,
+            logs=[
+                "Memory retrieval mode: retrieve",
+                f"Memory retrieval query received: {query.strip()[:120]}",
+                f"Memory retrieval matches: {len(ctx.get('matches', []))}.",
+                f"Retrieval strategy: {quality.get('retrieval_strategy', 'unknown')}.",
+            ],
+            next_actions=["code_generator", "architecture_planner"],
         )
 
-        has_repo = bool(repository_metadata)
-        if not has_repo and has_repository_input:
-            full_name = str(repository_input.get("full_name")).strip()
-            owner, _, repo_name = full_name.partition("/")
-            repository_metadata = {
-                "owner": owner or "unknown",
-                "repo_name": repo_name or "unknown",
-                "full_name": full_name,
-            }
-            has_repo = True
-        has_rag = bool(rag_index)
-        status = "SUCCESS" if has_repo and has_rag else "PARTIAL_SUCCESS"
-        memory_state = {
-            "schema_version": "1.0",
+    def _run_seed_mode(
+        self, *, repository_metadata: dict[str, Any], rag_index: dict[str, Any]
+    ) -> dict:
+        docs_count = self._resolve_documents_count(
+            rag_index=rag_index if isinstance(rag_index, dict) else {},
+            collection_name=str(rag_index.get("collection_name") or "repo_chunks")
+            if isinstance(rag_index, dict)
+            else "repo_chunks",
+            fallback_count=len(rag_index.get("documents", []))
+            if isinstance(rag_index, dict) and isinstance(rag_index.get("documents"), list)
+            else 0,
+        )
+        semantic_store_available = (
+            self._get_semantic_store(mode=self._resolve_vector_store_mode()) is not None
+        )
+        ready = bool(repository_metadata and (rag_index or docs_count > 0))
+        artifact = {
+            "schema_version": "1.1",
             "repository": {
                 "owner": repository_metadata.get("owner", "unknown"),
                 "repo_name": repository_metadata.get("repo_name", "unknown"),
                 "full_name": repository_metadata.get("full_name", "unknown"),
             },
             "knowledge": {
-                "documents_count": rag_index.get("documents_count", 0),
-                "index_id": rag_index.get("index_id", "rag_index_missing"),
+                "documents_count": docs_count,
+                "index_id": rag_index.get("index_id", "rag_index_missing")
+                if isinstance(rag_index, dict)
+                else "rag_index_missing",
+                "collection_name": str(rag_index.get("collection_name") or "repo_chunks")
+                if isinstance(rag_index, dict)
+                else "repo_chunks",
             },
-            "events": [
-                {
-                    "type": "memory_initialized",
-                    "source": "memory_agent",
-                }
-            ],
-            "ready_for_downstream": True,
+            "events": [{"type": "memory_initialized", "source": "memory_agent"}],
+            "ready_for_downstream": ready,
+            "quality_signals": {
+                "memory_mode": "seed",
+                "semantic_store_available": semantic_store_available,
+                "documents_count_source": "rag_index_or_store",
+                "retrieval_confidence": "medium" if ready else "low",
+            },
+            "plan_provenance": {"source": "repository_metadata_and_rag_index", "rebuilt": False},
         }
-
         return build_agent_result(
-            status=status,
-            artifact_type="memory_state",
-            artifact_content=memory_state,
-            reason="Memory state seeded from repository metadata and docs index.",
-            confidence=0.86 if status == "SUCCESS" else 0.7,
+            status="SUCCESS" if ready else "PARTIAL_SUCCESS",
+            artifact_type="memory_context",
+            artifact_content=artifact,
+            reason="Memory state prepared from repository metadata and docs index.",
+            confidence=0.86 if ready else 0.7,
             logs=[
                 "Initial memory state prepared.",
-                f"Repository metadata present: {has_repo}.",
-                f"RAG index present: {has_rag}.",
+                f"Repository metadata present: {bool(repository_metadata)}.",
+                f"RAG index present: {bool(rag_index)}.",
+                f"Semantic store available: {semantic_store_available}.",
             ],
             next_actions=["architecture_evaluator", "test_analyzer"],
+        )
+
+    def _run_write_mode(
+        self,
+        *,
+        context: dict[str, Any],
+        repository_metadata: dict[str, Any],
+        rag_index: dict[str, Any],
+    ) -> dict:
+        task_description = str(context.get("task_description", "")).strip()
+        result_payload = context.get("result")
+        code_patch = context.get("code_patch")
+
+        # Fallback: try to extract from nested structures if direct values are missing
+        if not task_description or result_payload is None or not isinstance(code_patch, dict):
+            task_description = self._extract_task_description_fallback(context, task_description)
+            result_payload = self._extract_result_fallback(context, result_payload)
+            code_patch = self._extract_code_patch_fallback(context, code_patch)
+
+        if not task_description or result_payload is None or not isinstance(code_patch, dict):
+            return build_agent_result(
+                status="BLOCKED",
+                artifact_type="memory_write_result",
+                artifact_content={
+                    "schema_version": "1.1",
+                    "quality_signals": {"memory_mode": "write", "write_persisted": False},
+                },
+                reason="Memory write requested but task_description, result, or code_patch is missing.",
+                confidence=0.99,
+                logs=["Write mode requires task_description, result, and code_patch."],
+                next_actions=["provide_memory_write_payload"],
+            )
+        payload = {
+            "task_description": task_description,
+            "repository": repository_metadata.get("full_name", "unknown"),
+            "result": result_payload,
+            "code_patch": code_patch,
+            "rag_index_id": rag_index.get("index_id") if isinstance(rag_index, dict) else None,
+            "entry_type": "task",
+        }
+        store_result = store_context(payload)
+        persisted = store_result.get("status") == "success"
+        artifact = {
+            "schema_version": "1.1",
+            "task_description": task_description,
+            "result": result_payload,
+            "code_patch": code_patch,
+            "event_type": "memory_write",
+            "context_id": store_result.get("context_id"),
+            "quality_signals": {
+                "memory_mode": "write",
+                "write_persisted": persisted,
+                "semantic_store_available": self._get_semantic_store(
+                    mode=self._resolve_vector_store_mode()
+                )
+                is not None,
+            },
+            "plan_provenance": {"source": "write_request", "rebuilt": False},
+        }
+        logs = [
+            "Memory write operation attempted.",
+            f"Repository metadata present: {bool(repository_metadata)}.",
+            f"RAG index present: {bool(rag_index)}.",
+        ]
+        if store_result.get("error"):
+            logs.append(f"Memory write error: {store_result['error']}")
+        return build_agent_result(
+            status="SUCCESS" if persisted else "PARTIAL_SUCCESS",
+            artifact_type="memory_write_result",
+            artifact_content=artifact,
+            reason="Memory write operation completed successfully."
+            if persisted
+            else "Memory write request handled but persistence failed.",
+            confidence=0.88 if persisted else 0.72,
+            logs=logs,
+            next_actions=["pr_merge_agent"] if persisted else ["check_memory_storage"],
         )
 
     def _resolve_query(self, raw_query: Any, context: dict[str, Any]) -> str:
@@ -128,125 +252,121 @@ class MemoryAgent(BaseAgent):
             query = raw_query.strip()
             if query and "{{" not in query and "}}" not in query:
                 return query
-
         issue = context.get("issue")
         if not isinstance(issue, dict):
             return ""
-
-        parts: list[str] = []
-        title = issue.get("title")
-        body = issue.get("body")
-        comments_context = issue.get("comments_context")
-        comments = issue.get("comments")
-
-        if isinstance(title, str) and title.strip():
-            parts.append(title.strip())
-        if isinstance(body, str) and body.strip():
-            parts.append(body.strip())
-        if isinstance(comments_context, str) and comments_context.strip():
-            parts.append(comments_context.strip())
-        if isinstance(comments, list):
-            comment_bodies: list[str] = []
-            for item in comments:
-                if not isinstance(item, dict):
-                    continue
-                body_value = item.get("body")
-                if isinstance(body_value, str) and body_value.strip():
-                    comment_bodies.append(body_value.strip())
-            if comment_bodies:
-                parts.append("\n".join(comment_bodies[:10]))
-
-        return "\n".join(part for part in parts if part)
+        parts = []
+        for field in ("title", "body", "comments_context"):
+            value = issue.get(field)
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+        if isinstance(issue.get("comments"), list):
+            bodies = [
+                item.get("body", "").strip()
+                for item in issue["comments"]
+                if isinstance(item, dict)
+                and isinstance(item.get("body"), str)
+                and item.get("body").strip()
+            ]
+            if bodies:
+                parts.append("\n".join(bodies[:10]))
+        return "\n".join(parts)
 
     def _build_memory_context(self, query: str, rag_index: dict[str, Any]) -> dict[str, Any]:
         semantic_matches = self._semantic_search(query=query, rag_index=rag_index, limit=8)
-
-        documents = rag_index.get("documents")
-        if not isinstance(documents, list):
-            documents = []
-
+        docs = rag_index.get("documents") if isinstance(rag_index, dict) else []
+        if not isinstance(docs, list):
+            docs = []
         query_tokens = self._tokenize(query)
-        lexical_matches: list[dict[str, Any]] = []
-
-        for item in documents:
+        lexical_matches = []
+        for item in docs:
             if not isinstance(item, dict):
                 continue
             path = str(item.get("path", "")).strip()
             summary = str(item.get("summary", "")).strip()
             content = str(item.get("content", "")).strip()
-            searchable = f"{path} {summary} {content}".strip()
-            score = self._overlap_score(query_tokens, self._tokenize(searchable))
-            if score <= 0:
-                continue
-            lexical_matches.append(
-                {
-                    "path": path or "unknown",
-                    "summary": summary or content[:200],
-                    "score": float(score),
-                    "source": "lexical",
-                }
-            )
-
-        lexical_matches.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
-
-        merged: dict[str, dict[str, Any]] = {}
+            score = self._overlap_score(query_tokens, self._tokenize(f"{path} {summary} {content}"))
+            if score > 0:
+                lexical_matches.append(
+                    {
+                        "path": path or "unknown",
+                        "summary": summary or content[:200],
+                        "score": float(score),
+                        "source": "lexical",
+                    }
+                )
+        lexical_matches.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
+        merged = {}
         for item in semantic_matches + lexical_matches:
             key = f"{item.get('path')}|{item.get('summary')}"
-            existing = merged.get(key)
-            if existing is None or float(item.get("score", 0.0)) > float(
-                existing.get("score", 0.0)
+            if key not in merged or float(item.get("score", 0.0)) > float(
+                merged[key].get("score", 0.0)
             ):
                 merged[key] = item
-
-        ranked_matches = sorted(
-            merged.values(),
-            key=lambda item: float(item.get("score", 0.0)),
-            reverse=True,
+        ranked = sorted(merged.values(), key=lambda x: float(x.get("score", 0.0)), reverse=True)
+        strategy = (
+            "hybrid"
+            if semantic_matches and lexical_matches
+            else "semantic"
+            if semantic_matches
+            else "lexical_fallback"
         )
-        collection_name = str(rag_index.get("collection_name") or "repo_chunks")
-
+        confidence = "high" if semantic_matches else "medium" if lexical_matches else "low"
+        collection = (
+            str(rag_index.get("collection_name") or "repo_chunks")
+            if isinstance(rag_index, dict)
+            else "repo_chunks"
+        )
         return {
             "query": query,
-            "matches": ranked_matches[:5],
+            "matches": ranked[:5],
             "documents_count": self._resolve_documents_count(
-                rag_index=rag_index,
-                collection_name=collection_name,
-                fallback_count=len(documents),
+                rag_index=rag_index if isinstance(rag_index, dict) else {},
+                collection_name=collection,
+                fallback_count=len(docs),
             ),
-            "collection_name": collection_name,
+            "collection_name": collection,
+            "quality_signals": {
+                "memory_mode": "retrieve",
+                "semantic_store_available": self._get_semantic_store(
+                    mode=self._resolve_vector_store_mode()
+                )
+                is not None,
+                "semantic_matches_count": len(semantic_matches),
+                "lexical_matches_count": len(lexical_matches),
+                "documents_count_source": "rag_index_or_store",
+                "retrieval_strategy": strategy,
+                "retrieval_confidence": confidence,
+            },
+            "plan_provenance": {"source": "query_and_rag_index", "rebuilt": False},
         }
 
-    def _semantic_search(
-        self, *, query: str, rag_index: dict[str, Any], limit: int
-    ) -> list[dict[str, Any]]:
+    def _semantic_search(self, *, query: str, rag_index: dict[str, Any], limit: int):
         if QdrantStore is None:
             return []
-
-        collection_name = str(rag_index.get("collection_name") or "repo_chunks").strip()
-        if not collection_name:
-            collection_name = "repo_chunks"
-
+        collection = (
+            str(rag_index.get("collection_name") or "repo_chunks").strip()
+            if isinstance(rag_index, dict)
+            else "repo_chunks"
+        )
         try:
-            store = self._get_semantic_store()
+            store = self._get_semantic_store(mode=self._resolve_vector_store_mode())
             if store is None:
                 return []
-            query_vectors = store.embed_text([query])
-            if not query_vectors:
+            vectors = store.embed_text([query])
+            if not vectors:
                 return []
             results = store.search(
-                collection_name=collection_name,
-                query_vector=query_vectors[0],
+                collection_name=collection or "repo_chunks",
+                query_vector=vectors[0],
                 limit=max(1, int(limit)),
             )
         except Exception as error:
             logger.warning(
-                "memory_semantic_search_failed collection=%s error=%s",
-                collection_name,
-                error,
+                "memory_semantic_search_failed collection=%s error=%s", collection, error
             )
             return []
-
-        matches: list[dict[str, Any]] = []
+        matches = []
         for result in results:
             if not isinstance(result, dict):
                 continue
@@ -255,182 +375,202 @@ class MemoryAgent(BaseAgent):
                 payload = {}
             text = str(payload.get("text", "")).strip()
             path = str(payload.get("file_path", "")).strip() or "unknown"
-            symbol_name = str(payload.get("symbol_name", "")).strip()
-            summary = text[:220] if text else symbol_name or "semantic_match"
-            score = float(result.get("score", 0.0) or 0.0)
-            if score <= 0:
-                continue
-            matches.append(
-                {
-                    "path": path,
-                    "summary": summary,
-                    "score": score,
-                    "source": "semantic",
-                }
+            summary = (
+                text[:220]
+                if text
+                else str(payload.get("symbol_name", "")).strip() or "semantic_match"
             )
+            score = float(result.get("score", 0.0) or 0.0)
+            if score > 0:
+                matches.append(
+                    {"path": path, "summary": summary, "score": score, "source": "semantic"}
+                )
         return matches
 
     def _resolve_documents_count(
         self, *, rag_index: dict[str, Any], collection_name: str, fallback_count: int
     ) -> int:
-        raw_count = rag_index.get("documents_count")
         try:
-            count = int(raw_count or 0)
+            count = int(
+                (rag_index.get("documents_count") if isinstance(rag_index, dict) else 0) or 0
+            )
         except Exception:
             count = 0
         if count > 0:
             return count
-
         try:
-            store = self._get_semantic_store()
+            store = self._get_semantic_store(mode=self._resolve_vector_store_mode())
             if store is not None and hasattr(store, "get_collection_points_count"):
-                collection_points = store.get_collection_points_count(collection_name)
-                if collection_points is not None and int(collection_points) > 0:
-                    return int(collection_points)
+                points = store.get_collection_points_count(collection_name)
+                if points is not None and int(points) > 0:
+                    return int(points)
         except Exception as error:
             logger.warning(
                 "memory_documents_count_resolution_failed collection=%s error=%s",
                 collection_name,
                 error,
             )
-
         return int(fallback_count or 0)
 
-    def _get_semantic_store(self) -> Any | None:
-        global _QDRANT_STORE_CACHE
-        if _QDRANT_STORE_CACHE is not None:
-            return _QDRANT_STORE_CACHE
+    def _resolve_vector_store_mode(self) -> str:
+        return str(os.getenv("HORDEFORGE_VECTOR_STORE_MODE", "auto") or "auto").strip() or "auto"
+
+    def _get_semantic_store(self, *, mode: str):
+        if mode in _QDRANT_STORE_CACHE:
+            return _QDRANT_STORE_CACHE[mode]
         if QdrantStore is None:
             return None
         try:
-            _QDRANT_STORE_CACHE = QdrantStore(check_compatibility=False, mode="host")
-            return _QDRANT_STORE_CACHE
+            store = QdrantStore(check_compatibility=False, mode=mode)
+            _QDRANT_STORE_CACHE[mode] = store
+            return store
         except Exception:
             return None
 
     @staticmethod
     def _tokenize(text: str) -> set[str]:
-        if not text:
-            return set()
-        return {token for token in re.findall(r"[a-zA-Z0-9_]+", text.lower()) if len(token) > 2}
+        return (
+            {t for t in re.findall(r"[a-zA-Z0-9_]+", text.lower()) if len(t) > 2} if text else set()
+        )
 
     @staticmethod
     def _overlap_score(query_tokens: set[str], target_tokens: set[str]) -> float:
         if not query_tokens or not target_tokens:
             return 0.0
         overlap = query_tokens.intersection(target_tokens)
-        if not overlap:
-            return 0.0
-        return len(overlap) / len(query_tokens)
+        return len(overlap) / len(query_tokens) if overlap else 0.0
+
+    @staticmethod
+    def _extract_task_description_fallback(context: dict[str, Any], current: str) -> str:
+        """Try to extract task description from context if not directly available."""
+        if current:
+            return current
+
+        # Try issue context
+        issue = context.get("issue")
+        if isinstance(issue, dict):
+            title = issue.get("title")
+            if isinstance(title, str) and title.strip():
+                return title.strip()
+            body = issue.get("body")
+            if isinstance(body, str) and body.strip():
+                return body.strip()[:500]
+
+        # Try spec context
+        spec = context.get("spec")
+        if isinstance(spec, dict):
+            summary = spec.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                return summary.strip()
+
+        return current
+
+    @staticmethod
+    def _extract_result_fallback(context: dict[str, Any], current: Any) -> Any:
+        """Try to extract result from context if not directly available."""
+        if current is not None:
+            return current
+
+        # Try review_result
+        review = context.get("review_result")
+        if isinstance(review, dict):
+            return review
+
+        # Try test_results
+        test_results = context.get("test_results")
+        if isinstance(test_results, dict):
+            return test_results
+
+        # Create minimal result from context
+        return {
+            "status": "completed",
+            "source": "memory_agent_fallback",
+            "context_keys": list(context.keys())[:10],
+        }
+
+    @staticmethod
+    def _extract_code_patch_fallback(context: dict[str, Any], current: Any) -> Any:
+        """Try to extract code patch from context if not directly available."""
+        if isinstance(current, dict):
+            return current
+
+        # Try final_code_patch
+        final_patch = context.get("final_code_patch")
+        if isinstance(final_patch, dict):
+            return final_patch
+
+        # Try fixed_code_patch
+        fixed_patch = context.get("fixed_code_patch")
+        if isinstance(fixed_patch, dict):
+            return fixed_patch
+
+        # Try to get from code_generator result
+        code_gen = context.get("code_generator")
+        if isinstance(code_gen, dict):
+            patch = code_gen.get("code_patch")
+            if isinstance(patch, dict):
+                return patch
+
+        # Create minimal patch
+        return {
+            "files": [],
+            "schema_version": "1.0",
+            "note": "fallback_empty_patch",
+        }
 
 
 def setup_memory(config: dict[str, Any]) -> dict[str, Any]:
-    """
-    Initialize memory storage based on configuration.
-
-    Args:
-        config: Configuration dictionary containing storage type and settings
-
-    Returns:
-        Dictionary with initialization status
-    """
     try:
         storage_type = config.get("type", "json")
-
         if storage_type == "json":
-            file_path = config.get("file_path", ".hordeforge_data/memory.json")
-            storage = get_storage_backend(backend_type=storage_type, file_path=file_path)
-        elif storage_type == "postgres":
-            connection_string = config.get("connection_string") or os.getenv(
-                "HORDEFORGE_POSTGRES_CONNECTION_STRING", ""
-            )
             storage = get_storage_backend(
-                backend_type=storage_type, connection_string=connection_string
+                backend_type=storage_type,
+                file_path=config.get("file_path", ".hordeforge_data/memory.json"),
+            )
+        elif storage_type == "postgres":
+            storage = get_storage_backend(
+                backend_type=storage_type,
+                connection_string=config.get("connection_string")
+                or os.getenv("HORDEFORGE_POSTGRES_CONNECTION_STRING", ""),
             )
         else:
             return {"status": "failed", "error": f"Unsupported storage type: {storage_type}"}
-
-        # Store the storage instance in the MemoryAgent class for later use
         MemoryAgent.storage = storage
-
         return {"status": "ready"}
-    except Exception as e:
-        return {"status": "failed", "error": str(e)}
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc)}
 
 
 def retrieve_context(context_id: str) -> dict[str, Any]:
-    """
-    Retrieve context from memory storage.
-
-    Args:
-        context_id: Unique identifier for the context to retrieve
-
-    Returns:
-        Dictionary with retrieval status and context data
-    """
     try:
-        if MemoryAgent.storage is None:
-            # Initialize storage with default settings if not already set up
-            result = setup_memory({"type": "json"})
-            if result["status"] != "ready":
-                return {"status": "not_found", "error": "Failed to initialize storage"}
-
-        # Read all items from storage
-        all_items = MemoryAgent.storage.read_all()
-
-        # Find the item with the matching context_id
-        for item in all_items:
+        if MemoryAgent.storage is None and setup_memory({"type": "json"}).get("status") != "ready":
+            return {"status": "not_found", "error": "Failed to initialize storage"}
+        for item in MemoryAgent.storage.read_all():
             if item.get("context_id") == context_id:
                 return {"status": "success", "context": item}
-
         return {"status": "not_found"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
 
 
 def store_context(context: dict[str, Any]) -> dict[str, Any]:
-    """
-    Store context in memory storage.
-
-    Args:
-        context: Context data to store
-
-    Returns:
-        Dictionary with storage status and context ID
-    """
     try:
         if not context:
             return {"status": "failed", "error": "Empty context provided"}
-
-        if MemoryAgent.storage is None:
-            # Initialize storage with default settings if not already set up
-            result = setup_memory({"type": "json"})
-            if result["status"] != "ready":
-                return {"status": "failed", "error": "Failed to initialize storage"}
-
-        # Generate a context ID if not provided
+        if MemoryAgent.storage is None and setup_memory({"type": "json"}).get("status") != "ready":
+            return {"status": "failed", "error": "Failed to initialize storage"}
         import uuid
 
         context_id = context.get("context_id", str(uuid.uuid4()))
         context["context_id"] = context_id
-
-        # Read existing items
-        all_items = MemoryAgent.storage.read_all()
-
-        # Check if context with this ID already exists and update it, otherwise add new
-        updated = False
-        for i, item in enumerate(all_items):
+        items = MemoryAgent.storage.read_all()
+        for i, item in enumerate(items):
             if item.get("context_id") == context_id:
-                all_items[i] = context
-                updated = True
+                items[i] = context
                 break
-
-        if not updated:
-            all_items.append(context)
-
-        # Write all items back to storage
-        MemoryAgent.storage.write_all(all_items)
-
+        else:
+            items.append(context)
+        MemoryAgent.storage.write_all(items)
         return {"status": "success", "context_id": context_id}
-    except Exception as e:
-        return {"status": "failed", "error": str(e)}
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc)}

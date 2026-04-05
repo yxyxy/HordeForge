@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import requests
 
 import agents.llm_wrapper as llm_wrapper_module
 from agents.llm_wrapper import (
@@ -102,6 +103,85 @@ def test_get_llm_wrapper_uses_profile_fallback_when_multiple_profiles(monkeypatc
     assert isinstance(wrapper, ProfileFallbackLLMWrapper)
 
 
+def test_load_profile_defaults_uses_gateway_profile_field(monkeypatch):
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "profile": {
+                    "profile_name": "qwen-code",
+                    "provider": "qwen-code",
+                    "model": "coder-model",
+                    "base_url": None,
+                    "api_key_ref": "llm.qwen-code.api_key",
+                }
+            }
+
+    monkeypatch.setenv("HORDEFORGE_GATEWAY_URL", "http://gw.test")
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: _Resp())
+    monkeypatch.setattr(
+        llm_wrapper_module,
+        "_load_secret_with_gateway_fallback",
+        lambda _key: "token-json",
+    )
+
+    loaded = llm_wrapper_module._load_profile_defaults("qwen-code")
+
+    assert loaded is not None
+    assert loaded["provider"] == "qwen-code"
+    assert loaded["model"] == "coder-model"
+    assert loaded["api_key"] == "token-json"
+
+
+def test_load_profile_candidates_prefers_gateway(monkeypatch):
+    def _fake_get(url: str, params=None, **kwargs):
+        class _Resp:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                if params and params.get("profile_name") == "qwen-code":
+                    return {
+                        "profile": {
+                            "profile_name": "qwen-code",
+                            "provider": "qwen-code",
+                            "model": "coder-model",
+                            "base_url": None,
+                            "api_key_ref": "llm.qwen-code.api_key",
+                        }
+                    }
+                return {
+                    "profiles": [
+                        {
+                            "profile_name": "qwen-code",
+                            "provider": "qwen-code",
+                            "model": "coder-model",
+                            "base_url": None,
+                            "api_key_ref": "llm.qwen-code.api_key",
+                            "is_default": True,
+                        }
+                    ]
+                }
+
+        return _Resp()
+
+    monkeypatch.setenv("HORDEFORGE_GATEWAY_URL", "http://gw.test")
+    monkeypatch.setattr(requests, "get", _fake_get)
+    monkeypatch.setattr(
+        llm_wrapper_module,
+        "_load_secret_with_gateway_fallback",
+        lambda _key: "token-json",
+    )
+
+    candidates = llm_wrapper_module._load_profile_candidates("qwen-code")
+
+    assert len(candidates) == 1
+    assert candidates[0]["provider"] == "qwen-code"
+    assert candidates[0]["model"] == "coder-model"
+
+
 def test_profile_fallback_wrapper_tries_next_profile_on_failure(monkeypatch):
     class _FailWrapper:
         def complete(self, prompt: str, **kwargs):
@@ -142,6 +222,50 @@ def test_profile_fallback_wrapper_tries_next_profile_on_failure(monkeypatch):
     )
 
     assert wrapper.complete("hello") == "ok-response"
+
+
+def test_profile_fallback_qwen_refresh_does_not_force_refresh():
+    class _TokenManager:
+        def __init__(self):
+            self.calls: list[tuple[tuple, dict]] = []
+
+        def get_valid_credentials(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return {"access_token": "ok"}
+
+    class _Wrapper:
+        def __init__(self):
+            self._token_manager = _TokenManager()
+            self._model = "coder-model"
+
+    wrapper = _Wrapper()
+    ProfileFallbackLLMWrapper._try_refresh_qwen_oauth(wrapper)
+    calls = wrapper._token_manager.calls
+    assert len(calls) == 1
+    assert calls[0][0] == ()
+    assert calls[0][1] == {}
+
+
+def test_profile_fallback_qwen_refresh_failure_does_not_log_access_token(caplog):
+    secret_token = "secret_access_token_value"
+
+    class _TokenManager:
+        def get_valid_credentials(self, *args, **kwargs):
+            raise RuntimeError("refresh failed")
+
+        def get_current_credentials(self):
+            return {"access_token": secret_token}
+
+    class _Wrapper:
+        def __init__(self):
+            self._token_manager = _TokenManager()
+            self._model = "coder-model"
+
+    caplog.set_level("WARNING")
+    ProfileFallbackLLMWrapper._try_refresh_qwen_oauth(_Wrapper())
+    assert "llm_profile_qwen_oauth_refresh_failed" in caplog.text
+    assert "refresh failed" in caplog.text
+    assert secret_token not in caplog.text
 
 
 def test_openai_wrapper_no_api_key():
@@ -199,6 +323,7 @@ def test_qwen_wrapper_falls_back_to_stream_when_non_stream_fails(monkeypatch):
             '"expiry_date":9999999999999}'
         )
     )
+    wrapper._auth_failure_until_by_fingerprint.clear()
     monkeypatch.setattr(wrapper, "_client", lambda: _Client())
 
     result = wrapper.complete("Say hello")
@@ -240,6 +365,59 @@ def test_qwen_wrapper_uses_existing_token_when_refresh_returns_non_json(monkeypa
     assert client.kwargs["api_key"] == "x"
 
 
+def test_qwen_wrapper_sends_dashscope_headers_and_content_parts(monkeypatch):
+    captured_client_kwargs: dict[str, object] = {}
+    captured_create_kwargs: dict[str, object] = {}
+
+    class _ResponseChoice:
+        def __init__(self):
+            self.message = type("Message", (), {"content": "ok"})()
+
+    class _Response:
+        def __init__(self):
+            self.choices = [_ResponseChoice()]
+
+    class _Completions:
+        def create(self, **kwargs):
+            captured_create_kwargs.clear()
+            captured_create_kwargs.update(kwargs)
+            return _Response()
+
+    class _Chat:
+        def __init__(self):
+            self.completions = _Completions()
+
+    class _DummyOpenAI:
+        def __init__(self, **kwargs):
+            captured_client_kwargs.clear()
+            captured_client_kwargs.update(kwargs)
+            self.chat = _Chat()
+
+    monkeypatch.setattr(llm_wrapper_module, "OpenAI", _DummyOpenAI)
+
+    wrapper = QwenCodeWrapper(
+        oauth_credentials_json=(
+            '{"access_token":"x","refresh_token":"y","resource_url":"portal.qwen.ai",'
+            '"expiry_date":9999999999999}'
+        ),
+        model="coder-model",
+    )
+
+    wrapper.complete("Hello", max_retries=1, max_tokens=64, temperature=0.1)
+
+    assert captured_client_kwargs["base_url"] == "https://portal.qwen.ai/v1"
+    default_headers = captured_client_kwargs.get("default_headers")
+    assert isinstance(default_headers, dict)
+    assert default_headers["X-DashScope-AuthType"] == "qwen-oauth"
+    assert default_headers["X-DashScope-CacheControl"] == "enable"
+
+    messages = captured_create_kwargs["messages"]
+    assert isinstance(messages, list)
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
+    assert messages[1]["content"] == [{"type": "text", "text": "Hello"}]
+
+
 def test_qwen_wrapper_sets_auth_cooldown_after_invalid_api_key(monkeypatch):
     class _Completions:
         def create(self, **kwargs):
@@ -278,3 +456,115 @@ def test_qwen_wrapper_sets_auth_cooldown_after_invalid_api_key(monkeypatch):
     with pytest.raises(RuntimeError, match="auth cooldown"):
         wrapper.complete("test prompt")
     assert called["count"] == 1
+
+
+def test_qwen_wrapper_retries_on_empty_body_and_succeeds(monkeypatch):
+    QwenCodeWrapper._auth_failure_until_by_fingerprint.clear()
+
+    class _Delta:
+        def __init__(self, content: str):
+            self.content = content
+
+    class _Choice:
+        def __init__(self, content: str):
+            self.delta = _Delta(content)
+            self.message = type("Message", (), {"content": content})()
+
+    class _Chunk:
+        def __init__(self, content: str):
+            self.choices = [_Choice(content)]
+
+    class _Response:
+        def __init__(self, content: str):
+            self.choices = [_Choice(content)]
+
+    class _Completions:
+        def __init__(self):
+            self.stream_calls = 0
+            self.non_stream_calls = 0
+
+        def create(self, **kwargs):
+            if kwargs.get("stream"):
+                self.stream_calls += 1
+                if self.stream_calls == 1:
+                    return [_Chunk("")]
+                return [_Chunk("ok"), _Chunk("-after-retry")]
+            self.non_stream_calls += 1
+            return _Response("")
+
+    class _Chat:
+        def __init__(self):
+            self.completions = _Completions()
+
+    class _Client:
+        def __init__(self):
+            self.chat = _Chat()
+
+    wrapper = QwenCodeWrapper(
+        oauth_credentials_json=(
+            '{"access_token":"x","refresh_token":"y","resource_url":"portal.qwen.ai",'
+            '"expiry_date":9999999999999}'
+        )
+    )
+    monkeypatch.setattr(wrapper, "_client", lambda: _Client())
+    monkeypatch.setattr(llm_wrapper_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr(llm_wrapper_module.random, "uniform", lambda _a, _b: 0.0)
+
+    result = wrapper.complete("test prompt")
+
+    assert result == "ok-after-retry"
+
+
+def test_qwen_wrapper_does_not_retry_on_http_401_and_logs_diagnostics(monkeypatch, caplog):
+    QwenCodeWrapper._auth_failure_until_by_fingerprint.clear()
+
+    class _FakeResponse:
+        status_code = 401
+        headers = {
+            "content-type": "application/json",
+            "x-request-id": "req-401",
+        }
+        text = '{"error":{"code":"invalid_api_key"}}'
+
+    class _FakeError(Exception):
+        def __init__(self):
+            super().__init__("Error code: 401 - invalid access token")
+            self.status_code = 401
+            self.request_id = "req-401"
+            self.response = _FakeResponse()
+
+    class _Completions:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **kwargs):
+            self.calls += 1
+            raise _FakeError()
+
+    class _Chat:
+        def __init__(self):
+            self.completions = _Completions()
+
+    class _Client:
+        def __init__(self):
+            self.chat = _Chat()
+
+    wrapper = QwenCodeWrapper(
+        oauth_credentials_json=(
+            '{"access_token":"x","refresh_token":"y","resource_url":"portal.qwen.ai",'
+            '"expiry_date":9999999999999}'
+        )
+    )
+    client = _Client()
+    monkeypatch.setattr(wrapper, "_client", lambda: client)
+    monkeypatch.setattr(llm_wrapper_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr(llm_wrapper_module.random, "uniform", lambda _a, _b: 0.0)
+
+    caplog.set_level("WARNING")
+    with pytest.raises(RuntimeError):
+        wrapper.complete("test prompt")
+
+    assert client.chat.completions.calls == 2
+    assert "qwen_llm_retry_scheduled" not in caplog.text
+    assert "status_code=401" in caplog.text
+    assert "request_id=req-401" in caplog.text

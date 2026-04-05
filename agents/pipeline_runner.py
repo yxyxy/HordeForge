@@ -109,10 +109,14 @@ class PipelineRunner:
                     output = agent.run(context)
                 if not isinstance(output, dict):
                     raise TypeError("Agent output must be a dict")
+                import_or_class_error = False
             except Exception as exc:  # pylint: disable=broad-except
                 output = self._error_result(
                     "FAILED",
                     f"Agent '{agent_name}' failed: {exc}",
+                )
+                import_or_class_error = isinstance(
+                    exc, (ImportError, ModuleNotFoundError, AttributeError)
                 )
 
             status = output.get("status", "FAILED")
@@ -130,6 +134,8 @@ class PipelineRunner:
 
             if status in {"FAILED", "BLOCKED"}:
                 final_status = status
+                if import_or_class_error:
+                    break
                 if on_failure in {
                     "stop_pipeline",
                     "escalate_to_human",

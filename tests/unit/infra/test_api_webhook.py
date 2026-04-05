@@ -110,7 +110,7 @@ def test_webhook_routes_issue_event_to_feature_pipeline(monkeypatch):
     assert data["trigger_result"]["result"]["summary"]["run_id"] == data["trigger_result"]["run_id"]
 
 
-def test_webhook_routes_failed_workflow_run_to_ci_fix_pipeline(monkeypatch):
+def test_webhook_routes_failed_workflow_run_to_ci_scanner_pipeline(monkeypatch):
     RUNS.clear()
     secret = _set_test_secret(monkeypatch)
     client = TestClient(webhook_api.app)
@@ -130,8 +130,8 @@ def test_webhook_routes_failed_workflow_run_to_ci_fix_pipeline(monkeypatch):
 
     assert response.status_code == 200
     assert data["status"] == "accepted"
-    assert data["pipeline_name"] == "ci_fix_pipeline"
-    assert data["trigger_result"]["pipeline"] == "ci_fix_pipeline"
+    assert data["pipeline_name"] == "ci_scanner_pipeline"
+    assert data["trigger_result"]["pipeline"] == "ci_scanner_pipeline"
 
 
 def test_webhook_duplicate_delivery_is_suppressed_by_idempotency(monkeypatch):

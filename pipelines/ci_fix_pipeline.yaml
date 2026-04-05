@@ -1,47 +1,204 @@
-# pipelines/ci_fix_pipeline.yaml
-# CI Incident Triage + Handoff Pipeline for HordeForge
-# Description: Analyzes failing CI and creates agent-opened issue for downstream planning pipeline.
-
 pipeline_name: ci_fix_pipeline
+
 description: |
-  Pipeline for monitoring CI failures, extracting diagnostics, and opening
-  a structured handoff issue for downstream implementation pipeline.
+  Production-safe execution pipeline for CI incidents and repair tasks.
+  Intended flow:
+    - normalize existing CI failure context
+    - reuse prepared plan artifacts from issue_scanner_pipeline when available
+    - generate a targeted code patch for the failing path
+    - run existing affected tests/checks
+    - enter fix loop for test failures OR execution/path/collection errors
+    - review and merge only after checks pass
 
 triggers:
-  - ci_failure_detected
+  - issue_created
+  - manual_trigger
   - scheduled_trigger
 
 steps:
+  - name: rag_initializer
+    agent: rag_initializer
+    description: Initialize RAG with repository data
+    input:
+      repository: "{{repository}}"
+    output: "{{rag_index}}"
+    on_failure: continue
 
-  - name: ci_failure_analyzer
+  - name: memory_retrieval
+    agent: memory_agent
+    description: Retrieve similar repair tasks from memory
+    input:
+      query: "{{issue.title}} {{issue.body}}"
+    output: "{{memory_context}}"
+    on_failure: continue
+
+  - name: ci_failure_analysis
     agent: ci_failure_analyzer
-    description: Analyze failed CI run and detect root cause
+    description: Normalize existing CI failure details from issue / handoff
+    depends_on:
+      - rag_initializer
+      - memory_retrieval
+    depends_on_explicit: true
     input:
+      issue: "{{issue}}"
       repository: "{{repository}}"
-      ci_run: "{{ci_run}}"
-    output: "{{failure_analysis}}"
+      memory_context: "{{memory_context}}"
+    output: "{{ci_failure_context}}"
+    on_failure: continue
+
+  - name: specification_passthrough
+    agent: specification_writer
+    description: Ensure specification is available in context
+    depends_on:
+      - ci_failure_analysis
+    depends_on_explicit: true
+    input:
+      spec: "{{spec}}"
+      dod: "{{dod}}"
+      issue: "{{issue}}"
+      require_llm: true
+    output: "{{spec}}"
+    on_failure: continue
+
+  - name: subtasks_passthrough
+    agent: task_decomposer
+    description: Ensure repair subtasks are available in context
+    depends_on:
+      - specification_passthrough
+    depends_on_explicit: true
+    input:
+      spec: "{{spec}}"
+      dod: "{{dod}}"
+      subtasks: "{{subtasks}}"
+      issue: "{{issue}}"
+      require_llm: true
+    output: "{{subtasks}}"
+    on_failure: continue
+
+  - name: bdd_passthrough
+    agent: bdd_generator
+    description: Ensure repair BDD / scenarios are available in context
+    depends_on:
+      - specification_passthrough
+    depends_on_explicit: true
+    input:
+      spec: "{{spec}}"
+      bdd_specification: "{{bdd_specification}}"
+      issue: "{{issue}}"
+      require_llm: true
+    output: "{{bdd_specification}}"
+    on_failure: continue
+
+  - name: code_generator
+    agent: code_generator
+    description: Implement a targeted fix for the failing path
+    depends_on:
+      - ci_failure_analysis
+      - specification_passthrough
+      - subtasks_passthrough
+      - bdd_passthrough
+    depends_on_explicit: true
+    input:
+      issue: "{{issue}}"
+      repository: "{{repository}}"
+      memory_context: "{{memory_context}}"
+      ci_failure_context: "{{ci_failure_context}}"
+      require_llm: true
+      publish_pr_in_code_generator: false
+    output:
+      code_patch: "{{code_patch}}"
+      final_code_patch: "{{final_code_patch}}"
+    on_failure: retry_step
+    retry_limit: 2
+
+  - name: test_runner
+    agent: test_runner
+    description: Run existing affected tests/checks against the generated patch
+    depends_on:
+      - code_generator
+    depends_on_explicit: true
+    input:
+      code_patch: "{{ fixed_code_patch | default(final_code_patch) }}"
+      tests: "{{tests}}"
+      ci_failure_context: "{{ci_failure_context}}"
+      memory_context: "{{memory_context}}"
+      mock_test_execution: false
+      isolate_test_environment: true
+      require_llm: true
+    output: "{{test_results}}"
+    on_failure: trigger_fix_loop
+
+  - name: fix_agent
+    agent: fix_agent
+    description: Iteratively repair remaining failing checks until they pass
+    depends_on:
+      - test_runner
+    depends_on_explicit: true
+    condition: "{{ (test_results.failed | default(0)) > 0 or (test_results.exit_code | default(0)) != 0 }}"
+    input:
+      code_patch: "{{final_code_patch}}"
+      test_results: "{{ test_results }}"
+      ci_failure_context: "{{ ci_failure_context }}"
+      require_llm: true
+    output: "{{fixed_code_patch}}"
+    retry_limit: 5
     on_failure: create_issue_for_human
 
-  - name: ci_incident_handoff
-    agent: ci_incident_handoff
-    description: Create triage issue and mark it agent:opened for downstream scanner/planning
-    condition: "{{ ci_run.conclusion == 'failure' or ci_run.status == 'failed' }}"
+  - name: review_agent
+    agent: review_agent
+    description: Review the final repair patch after checks converge
+    depends_on:
+      - test_runner
+    depends_on_explicit: true
     input:
+      fixed_code_patch: "{{ fixed_code_patch | default(final_code_patch) }}"
       repository: "{{repository}}"
-      ci_run: "{{ci_run}}"
-      failure_analysis: "{{failure_analysis}}"
-      source_pipeline: "ci_fix_pipeline"
-      github_token: "{{github_token}}"
-    output: "{{ci_issue}}"
+      memory_context: "{{memory_context}}"
+      ci_failure_context: "{{ci_failure_context}}"
+      require_llm: true
+    output: "{{review_result}}"
     on_failure: create_issue_for_human
+
+  - name: memory_writer
+    agent: memory_agent
+    description: Save successful repair result to memory
+    depends_on:
+      - review_agent
+    depends_on_explicit: true
+    input:
+      task_description: "{{issue.title}}"
+      result: "{{review_result}}"
+      code_patch: "{{ fixed_code_patch | default(final_code_patch) }}"
+      repository: "{{repository}}"
+      pipeline: "ci_fix_pipeline"
+    output: "{{memory_write_result}}"
+    on_failure: continue
+
+  - name: pr_merge_agent
+    agent: pr_merge_agent
+    description: Merge PR only when review is approved and tests/checks passed
+    depends_on:
+      - review_agent
+      - memory_writer
+    depends_on_explicit: true
+    input:
+      review_result: "{{review_result}}"
+      test_results: "{{test_results}}"
+      code_patch: "{{ fixed_code_patch | default(final_code_patch) }}"
+      repository: "{{repository}}"
+      publish_pr_in_merge_agent: true
+      live_merge: false
+    output: "{{merge_status}}"
+    on_failure: create_issue_for_human
+
+loops:
+  - condition: "{{ (test_results.failed | default(0)) > 0 or (test_results.exit_code | default(0)) != 0 }}"
+    steps:
+      - fix_agent
+      - test_runner
 
 logging:
   level: INFO
   log_decisions: true
   log_artifacts: true
   post_to_github: true
-
-# Notes:
-# - This pipeline intentionally does not modify code or merge PRs.
-# - It only performs deterministic triage and handoff to issue-solving pipeline.
-# - Downstream scanner should pick issues by `agent:opened` label.

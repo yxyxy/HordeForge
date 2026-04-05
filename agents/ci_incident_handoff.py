@@ -21,6 +21,28 @@ def _extract_repository_full_name(context: dict[str, Any]) -> str | None:
     return None
 
 
+def _normalize_string_list(value: Any, *, limit: int = 20) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        normalized = item.strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        result.append(normalized)
+        seen.add(key)
+        if len(result) >= limit:
+            break
+    return result
+
+
 class CiIncidentHandoff(BaseAgent):
     name = "ci_incident_handoff"
     description = "Creates CI incident issue with triage payload and agent:opened label."
@@ -51,7 +73,10 @@ class CiIncidentHandoff(BaseAgent):
             )
             or {}
         )
-        source_pipeline = str(context.get("source_pipeline") or "ci_fix_pipeline").strip()
+        if not isinstance(failure_analysis, dict):
+            failure_analysis = {}
+
+        source_pipeline = str(context.get("source_pipeline") or "ci_scanner_pipeline").strip()
 
         issue_title = (
             f"[CI Incident] {repository_full_name} "
@@ -64,7 +89,7 @@ class CiIncidentHandoff(BaseAgent):
             ci_run=ci_run,
             failure_analysis=failure_analysis,
         )
-        issue_labels = ["agent:opened", "source:ci_fix_pipeline", "kind:ci-incident"]
+        issue_labels = ["agent:opened", "source:ci_scanner_pipeline", "kind:ci-incident"]
 
         mock_mode = bool(context.get("mock_mode"))
         if mock_mode:
@@ -78,6 +103,8 @@ class CiIncidentHandoff(BaseAgent):
                 "html_url": f"https://github.com/{repository_full_name}/issues/0",
                 "source_pipeline": source_pipeline,
                 "ci_run_id": ci_run.get("id"),
+                "files": _normalize_string_list(failure_analysis.get("files")),
+                "test_targets": _normalize_string_list(failure_analysis.get("test_targets")),
             }
             return build_agent_result(
                 status="SUCCESS",
@@ -135,6 +162,7 @@ class CiIncidentHandoff(BaseAgent):
                         comment_added = True
                     except Exception as exc:  # noqa: BLE001
                         comment_error = str(exc)
+
                 return build_agent_result(
                     status="SUCCESS",
                     artifact_type="ci_issue",
@@ -151,6 +179,8 @@ class CiIncidentHandoff(BaseAgent):
                         "html_url": html_url,
                         "source_pipeline": source_pipeline,
                         "ci_run_id": ci_run.get("id"),
+                        "files": _normalize_string_list(failure_analysis.get("files")),
+                        "test_targets": _normalize_string_list(failure_analysis.get("test_targets")),
                     },
                     reason=(
                         "CI incident already exists; enriched existing handoff issue."
@@ -186,6 +216,8 @@ class CiIncidentHandoff(BaseAgent):
                 "html_url": html_url,
                 "source_pipeline": source_pipeline,
                 "ci_run_id": ci_run.get("id"),
+                "files": _normalize_string_list(failure_analysis.get("files")),
+                "test_targets": _normalize_string_list(failure_analysis.get("test_targets")),
             }
             return build_agent_result(
                 status="SUCCESS",
@@ -224,13 +256,13 @@ class CiIncidentHandoff(BaseAgent):
         expected_prefix = f"[CI Incident] {repository_full_name} "
         target_token = (
             f"run#{ci_run_id}"
-            if isinstance(ci_run_id, int | str) and str(ci_run_id).strip()
+            if isinstance(ci_run_id, (int, str)) and str(ci_run_id).strip()
             else None
         )
 
         issues = client.list_issues(
             state="open",
-            labels="source:ci_fix_pipeline,kind:ci-incident",
+            labels="source:ci_scanner_pipeline,kind:ci-incident",
             page=1,
             per_page=50,
         )
@@ -268,9 +300,29 @@ class CiIncidentHandoff(BaseAgent):
                 logs = item.get("logs", "")
                 detail_lines.append(f"{idx}. **{name}**: {reason}")
                 if isinstance(logs, str) and logs.strip():
-                    detail_lines.append(f"   - logs: `{logs[:200]}`")
+                    detail_lines.append(f"   - logs: `{logs[:400]}`")
             if detail_lines:
                 details_section = "\n".join(detail_lines)
+
+        files = _normalize_string_list(failure_analysis.get("files"))
+        files_section = "\n".join(f"- `{item}`" for item in files[:15]) or "- no candidate files extracted"
+
+        test_targets = _normalize_string_list(failure_analysis.get("test_targets"))
+        test_targets_section = "\n".join(f"- `{item}`" for item in test_targets[:15]) or "- no test targets extracted"
+
+        per_job_analysis = failure_analysis.get("per_job_analysis")
+        per_job_lines: list[str] = []
+        if isinstance(per_job_analysis, list):
+            for item in per_job_analysis[:10]:
+                if not isinstance(item, dict):
+                    continue
+                per_job_lines.append(
+                    f"- `{item.get('job_name', 'unknown')}`: "
+                    f"classification=`{item.get('classification', 'unknown')}`, "
+                    f"severity=`{item.get('severity', 'unknown')}`, "
+                    f"language=`{item.get('language', 'unknown')}`"
+                )
+        per_job_section = "\n".join(per_job_lines) or "- no per-job analysis available"
 
         return "\n".join(
             [
@@ -291,10 +343,20 @@ class CiIncidentHandoff(BaseAgent):
                 f"- classification: `{failure_analysis.get('classification', 'unknown')}`",
                 f"- severity: `{failure_analysis.get('severity', 'unknown')}`",
                 f"- language: `{failure_analysis.get('language', 'unknown')}`",
+                f"- dominant_language: `{failure_analysis.get('dominant_language', failure_analysis.get('language', 'unknown'))}`",
                 f"- fingerprint: `{failure_analysis.get('fingerprint', 'unknown')}`",
                 f"- parsed_errors_count: `{len(failure_analysis.get('parsed_errors', [])) if isinstance(failure_analysis.get('parsed_errors'), list) else 0}`",
                 f"- flaky_tests_count: `{len(failure_analysis.get('flaky_tests', [])) if isinstance(failure_analysis.get('flaky_tests'), list) else 0}`",
                 f"- infra_errors_count: `{len(failure_analysis.get('infra_errors', [])) if isinstance(failure_analysis.get('infra_errors'), list) else 0}`",
+                "",
+                "### Candidate Files",
+                files_section,
+                "",
+                "### Test Targets",
+                test_targets_section,
+                "",
+                "### Per-Job Analysis",
+                per_job_section,
                 "",
                 "### Failed Jobs / Details",
                 details_section or "- no detailed jobs parsed",
@@ -324,6 +386,12 @@ class CiIncidentHandoff(BaseAgent):
                 if isinstance(logs, str) and logs.strip():
                     detail_lines.append(f"   - logs: `{logs[:300]}`")
 
+        files = _normalize_string_list(failure_analysis.get("files"))
+        files_section = "\n".join(f"- `{item}`" for item in files[:10]) or "- no candidate files extracted"
+
+        test_targets = _normalize_string_list(failure_analysis.get("test_targets"))
+        test_targets_section = "\n".join(f"- `{item}`" for item in test_targets[:10]) or "- no test targets extracted"
+
         return "\n".join(
             [
                 CiIncidentHandoff.UPDATE_COMMENT_MARKER,
@@ -343,6 +411,12 @@ class CiIncidentHandoff(BaseAgent):
                 f"- severity: `{failure_analysis.get('severity', 'unknown')}`",
                 f"- language: `{failure_analysis.get('language', 'unknown')}`",
                 f"- fingerprint: `{failure_analysis.get('fingerprint', 'unknown')}`",
+                "",
+                "### Candidate Files",
+                files_section,
+                "",
+                "### Test Targets",
+                test_targets_section,
                 "",
                 "### Failed Jobs / Details",
                 "\n".join(detail_lines) if detail_lines else "- no detailed jobs parsed",

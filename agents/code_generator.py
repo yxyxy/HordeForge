@@ -10,7 +10,7 @@ from uuid import uuid4
 from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
 from agents.github_client import GitHubClient
-from agents.llm_wrapper import build_code_prompt, get_llm_wrapper
+from agents.llm_wrapper import build_code_prompt, get_llm_wrapper, parse_code_output
 from agents.llm_wrapper_backward_compatibility import (
     get_legacy_llm_wrapper,
     legacy_build_code_prompt,
@@ -21,8 +21,6 @@ logger = logging.getLogger("hordeforge.code_generator")
 
 
 class EnhancedCodeGenerator(BaseAgent):
-    """Production-ready code generator with optional LLM synthesis."""
-
     name: str = "code_generator"
     description: str = "Generates code patch from specification, tests and subtasks."
     OPENED_LABEL = "agent:opened"
@@ -30,8 +28,10 @@ class EnhancedCodeGenerator(BaseAgent):
     READY_LABEL = "agent:ready"
     FIXED_LABEL = "agent:fixed"
 
+    PLAN_JSON_START = "<!-- hordeforge:plan-json:start -->"
+    PLAN_JSON_END = "<!-- hordeforge:plan-json:end -->"
+
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
-        """Main agent entrypoint."""
         spec: dict[str, Any] = (
             get_artifact_from_context(
                 context,
@@ -40,6 +40,8 @@ class EnhancedCodeGenerator(BaseAgent):
             )
             or {}
         )
+        if not isinstance(spec, dict):
+            spec = {}
 
         tests: dict[str, Any] = (
             get_artifact_from_context(
@@ -49,6 +51,8 @@ class EnhancedCodeGenerator(BaseAgent):
             )
             or {}
         )
+        if not isinstance(tests, dict):
+            tests = {}
 
         subtasks: dict[str, Any] = (
             get_artifact_from_context(
@@ -58,6 +62,8 @@ class EnhancedCodeGenerator(BaseAgent):
             )
             or {}
         )
+        if not isinstance(subtasks, dict):
+            subtasks = {}
 
         rag_context: dict[str, Any] = (
             get_artifact_from_context(
@@ -67,8 +73,20 @@ class EnhancedCodeGenerator(BaseAgent):
             )
             or {}
         )
+        if not isinstance(rag_context, dict):
+            rag_context = {}
 
-        # Get memory context if available
+        ci_failure_context: dict[str, Any] = (
+            get_artifact_from_context(
+                context,
+                "ci_failure_context",
+                preferred_steps=["ci_failure_analysis"],
+            )
+            or {}
+        )
+        if not isinstance(ci_failure_context, dict):
+            ci_failure_context = {}
+
         memory_context = context.get("memory_context", "")
         memory_context_text = self._format_memory_context(memory_context)
         issue_context_text = self._format_issue_context(context.get("issue"))
@@ -82,24 +100,21 @@ class EnhancedCodeGenerator(BaseAgent):
         subtask_items: list[dict[str, Any]] = subtasks.get("items", []) or []
         rag_sources: list[Any] = rag_context.get("sources", []) or []
         rules_documents: dict[str, Any] = rules_payload.get("documents", {}) or {}
-
         rules_version: str = str(rules_payload.get("version", "")).strip()
-
-        test_count: int = len(test_cases)
-        subtask_count: int = len(subtask_items)
-        rag_source_count: int = len(rag_sources)
-        rule_doc_count: int = len(rules_documents)
-
-        llm_patch: dict[str, Any] | None = None
-        llm_error: str | None = None
-        llm_prompt_excerpt: str | None = None
-        llm_response_excerpt: str | None = None
-        llm_response_parsed = False
 
         use_llm: bool = bool(context.get("use_llm", True))
         require_llm: bool = bool(context.get("require_llm", False))
+        publish_pr_in_code_generator: bool = bool(context.get("publish_pr_in_code_generator", True))
 
         github_client, github_client_reason = self._resolve_github_client(context)
+
+        candidate_files = self._collect_candidate_files(
+            spec=spec,
+            tests=tests,
+            rag_context=rag_context,
+            ci_failure_context=ci_failure_context,
+        )
+        allow_new_files = self._allow_new_files(candidate_files, ci_failure_context, spec)
 
         input_log = self._build_input_log(
             context=context,
@@ -109,154 +124,85 @@ class EnhancedCodeGenerator(BaseAgent):
             rag_context=rag_context,
             github_client=github_client,
             github_client_reason=github_client_reason,
+            candidate_files=candidate_files,
+            allow_new_files=allow_new_files,
         )
         logger.info("code_generator_input %s", input_log)
 
-        if use_llm and spec:
+        llm_patch: dict[str, Any] | None = None
+        llm_error: str | None = None
+        llm_prompt_excerpt: str | None = None
+        llm_response_excerpt: str | None = None
+        llm_response_parsed = False
+
+        if use_llm and (spec or candidate_files):
             llm = None
             try:
-                # Try to use the new LLM wrapper first, fall back to legacy if needed
                 llm = get_llm_wrapper()
                 if llm is None:
-                    # Try legacy wrapper for backward compatibility
                     llm = get_legacy_llm_wrapper()
 
                 if llm is not None:
-                    repo_context: dict[str, Any] = {
-                        "subtasks_count": subtask_count,
-                        "test_cases_count": test_count,
-                        "rag_sources_count": rag_source_count,
-                        "rules_documents": list(rules_documents.keys()),
-                    }
+                    repo_context: dict[str, Any] = self._build_repo_context(
+                        spec=spec,
+                        tests=tests,
+                        subtasks=subtasks,
+                        rag_context=rag_context,
+                        rules_payload=rules_payload,
+                        ci_failure_context=ci_failure_context,
+                        candidate_files=candidate_files,
+                        allow_new_files=allow_new_files,
+                    )
 
-                    # Try new prompt building first, fall back to legacy if needed
                     try:
-                        # Build enhanced prompt with memory context if available
                         prompt: str = build_code_prompt(spec, test_cases, repo_context)
                     except AttributeError:
-                        # Fall back to legacy prompt building
-                        prompt: str = legacy_build_code_prompt(spec, test_cases, repo_context)
+                        prompt = legacy_build_code_prompt(spec, test_cases, repo_context)
 
-                    # Add runtime context to the prompt if available
-                    context_blocks: list[str] = []
-                    if issue_context_text:
-                        context_blocks.append(f"Issue context:\n{issue_context_text}")
-                    if memory_context_text:
-                        context_blocks.append(f"Memory/RAG context:\n{memory_context_text}")
-                    if task_description:
-                        context_blocks.append(f"Task: {task_description}")
-                    if context_blocks:
-                        prompt = f"{prompt}\n\n" + "\n\n".join(context_blocks)
+                    self._ci_failure_context = ci_failure_context
+
+                    prompt = self._append_compact_context(
+                        prompt=prompt,
+                        task_description=task_description,
+                        issue_context_text=issue_context_text,
+                        memory_context_text=memory_context_text,
+                        candidate_files=candidate_files,
+                        allow_new_files=allow_new_files,
+                    )
                     llm_prompt_excerpt = prompt[:1200]
 
                     response: str = llm.complete(prompt)
                     llm_response_excerpt = response[:1200]
 
-                    # Clean up the response to handle potential formatting issues
-                    cleaned_response = response.strip()
+                    llm_patch = self._parse_llm_patch_response(response)
+                    llm_response_parsed = llm_patch is not None
 
-                    # Try to extract JSON from the response using a simple approach first
-                    try:
-                        # Direct parsing attempt
-                        parsed = json.loads(cleaned_response)
-                        if isinstance(parsed, dict):
-                            llm_patch = parsed
-                            llm_response_parsed = True
-                    except json.JSONDecodeError:
-                        # If direct parsing fails, try to extract JSON object by braces
-                        # Find JSON object by matching braces
-                        brace_count = 0
-                        start_pos = -1
+                    if not llm_response_parsed and isinstance(response, str) and response.strip():
+                        repaired_response = self._repair_llm_output_with_llm(
+                            llm=llm,
+                            raw_response=response,
+                        )
+                        if repaired_response:
+                            llm_response_excerpt = repaired_response[:1200]
+                            llm_patch = self._parse_llm_patch_response(repaired_response)
+                            llm_response_parsed = llm_patch is not None
 
-                        for i, char in enumerate(cleaned_response):
-                            if char == "{":
-                                if brace_count == 0:
-                                    start_pos = i
-                                brace_count += 1
-                            elif char == "}":
-                                brace_count -= 1
-                                if brace_count == 0 and start_pos != -1:
-                                    # Found a complete JSON object
-                                    json_candidate = cleaned_response[start_pos : i + 1]
+                    if not llm_response_parsed:
+                        llm_error = "missing/invalid llm output"
 
-                                    # Try to fix common quote issues in the JSON string before parsing
-                                    # Handle the specific case from the test: unescaped quotes in content
-
-                                    # First, try parsing as-is
-                                    try:
-                                        parsed = json.loads(json_candidate)
-                                        if isinstance(parsed, dict):
-                                            llm_patch = parsed
-                                            llm_response_parsed = True
-                                            break
-                                    except json.JSONDecodeError:
-                                        # Try to fix common issues - handle the specific case in the test
-                                        # The issue is with "content" field containing "return \"test\"" which has unescaped quotes
-
-                                        # Replace the problematic pattern in content field
-                                        import re
-
-                                        # This handles the specific case: "content": "...return "test"..." -> "content": "...return \"test\"..."
-                                        fixed_candidate = re.sub(
-                                            r'("content":\s*"[^"]*)\\"([^"]*")',
-                                            r"\1\\\"\2",
-                                            json_candidate,
-                                        )
-
-                                        # Try another approach - fix quotes in content field more generally
-                                        fixed_candidate = re.sub(
-                                            r'("content":\s*"[^"]*)"([^"]+)"([^"]*")',
-                                            r"\1\"\2\"\3",
-                                            fixed_candidate,
-                                        )
-
-                                        # Try to fix the specific case mentioned in the test
-                                        fixed_candidate = re.sub(
-                                            r'"return "test""',
-                                            r'"return \"test\""',
-                                            fixed_candidate,
-                                        )
-
-                                        try:
-                                            parsed = json.loads(fixed_candidate)
-                                            if isinstance(parsed, dict):
-                                                llm_patch = parsed
-                                                llm_response_parsed = True
-                                                break
-                                        except json.JSONDecodeError:
-                                            # Last resort: try to manually fix the JSON by replacing problematic quotes
-                                            try:
-                                                # Replace any remaining problematic quote combinations
-                                                fixed_candidate = json_candidate.replace(
-                                                    '""', '"'
-                                                ).replace('""', '"')
-
-                                                # Try to fix the specific case in the test content
-                                                fixed_candidate = fixed_candidate.replace(
-                                                    'return "test"', 'return "test"'
-                                                )
-
-                                                parsed = json.loads(fixed_candidate)
-                                                if isinstance(parsed, dict):
-                                                    llm_patch = parsed
-                                                    llm_response_parsed = True
-                                                    break
-                                            except json.JSONDecodeError:
-                                                pass  # Continue to look for another JSON object
                     logger.info(
                         "code_generator_llm_response parsed=%s prompt_excerpt=%s response_excerpt=%s",
                         llm_response_parsed,
                         (llm_prompt_excerpt or "")[:500],
                         (llm_response_excerpt or "")[:500],
                     )
-
             except Exception as exc:  # noqa: BLE001
                 llm_error = self._normalize_llm_error(exc)
             finally:
                 if llm is not None:
                     try:
                         llm.close()
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
         if use_llm and require_llm and not llm_patch:
@@ -269,7 +215,7 @@ class EnhancedCodeGenerator(BaseAgent):
                 status="FAILED",
                 artifact_type="code_patch",
                 artifact_content={
-                    "schema_version": "1.0",
+                    "schema_version": "2.0",
                     "files": [],
                     "llm_required": True,
                     "llm_error": llm_error,
@@ -287,49 +233,64 @@ class EnhancedCodeGenerator(BaseAgent):
             )
 
         if llm_patch:
+            filtered_files, grounding_notes = self._filter_patch_files(
+                llm_patch.get("files", []),
+                candidate_files=candidate_files,
+                allow_new_files=allow_new_files,
+            )
             patch: dict[str, Any] = {
                 "schema_version": "2.0",
-                "files": llm_patch.get("files", []),
+                "files": filtered_files,
                 "decisions": llm_patch.get("decisions", []),
                 "test_changes": llm_patch.get("test_changes", []),
                 "dry_run": False,
                 "expected_failures": int(llm_patch.get("expected_failures", 1) or 0),
                 "llm_enhanced": True,
+                "selected_target_files": self._build_selected_target_files(
+                    filtered_files, candidate_files
+                ),
+                "allow_new_files": allow_new_files,
             }
-
+            if grounding_notes:
+                patch.setdefault("notes", [])
+                patch["notes"].extend(grounding_notes)
             reason: str = "Code patch generated with LLM synthesis."
             confidence: float = 0.92
-
         else:
             patch = self._build_deterministic_patch(
                 spec=spec,
-                test_cases=test_cases,
-                subtask_count=subtask_count,
-                rag_source_count=rag_source_count,
-                rule_doc_count=rule_doc_count,
+                tests=tests,
+                subtask_count=len(subtask_items),
+                rag_source_count=len(rag_sources),
+                rule_doc_count=len(rules_documents),
                 rules_version=rules_version,
                 issue_context_text=issue_context_text,
+                candidate_files=candidate_files,
+                allow_new_files=allow_new_files,
+                ci_failure_context=ci_failure_context,
             )
-
             reason = (
                 "Deterministic patch generated (LLM unavailable)."
                 if llm_error
                 else "Code patch generated from spec."
             )
-
             confidence = 0.87
 
         if llm_error:
             patch.setdefault("notes", [])
             patch["notes"].append(f"llm_error={llm_error[:120]}")
 
+        if not patch.get("files"):
+            patch["blocked"] = True
+            patch.setdefault("notes", [])
+            patch["notes"].append("no_grounded_files_selected")
+
         pr_url: str | None = None
         pr_number: int | None = None
 
-        if github_client and patch.get("files"):
+        if publish_pr_in_code_generator and github_client and patch.get("files"):
             try:
                 pr_title: str = (spec.get("summary") or "HordeForge Generated Feature")[:100]
-
                 pr_body: str = self._build_pr_body(spec, patch)
 
                 branch_name: str | None = context.get("branch_name")
@@ -339,7 +300,6 @@ class EnhancedCodeGenerator(BaseAgent):
                     branch_name = branch_name.strip()
 
                 orchestrator = PatchWorkflowOrchestrator(github_client)
-
                 file_changes = create_patch_from_code_result(patch)
 
                 result = orchestrator.apply_patch(
@@ -368,7 +328,6 @@ class EnhancedCodeGenerator(BaseAgent):
                 if result.success:
                     pr_url = result.pr_url
                     pr_number = result.pr_number
-
                     patch["pr_url"] = pr_url
                     patch["pr_number"] = pr_number
                     patch["branch_name"] = result.branch_name
@@ -387,7 +346,6 @@ class EnhancedCodeGenerator(BaseAgent):
                         str(result.error)[:500],
                         result.rollback_performed,
                     )
-
             except Exception as exc:  # noqa: BLE001
                 patch["apply_error"] = str(exc)
                 logger.exception("code_generator_apply_exception: %s", str(exc)[:500])
@@ -397,6 +355,9 @@ class EnhancedCodeGenerator(BaseAgent):
         ]
         logs.append(f"Code generator input: {input_log}")
         logs.append(f"LLM enabled: {use_llm}")
+        logs.append(f"PR publish in code_generator: {publish_pr_in_code_generator}")
+        logs.append(f"candidate_files_count={len(candidate_files)}")
+        logs.append(f"allow_new_files={allow_new_files}")
         if llm_prompt_excerpt:
             logs.append(f"LLM prompt excerpt: {llm_prompt_excerpt}")
         if llm_response_excerpt:
@@ -431,6 +392,454 @@ class EnhancedCodeGenerator(BaseAgent):
             logs=logs,
             next_actions=["test_runner", "fix_agent"],
         )
+
+    @staticmethod
+    def _normalize_path(value: str) -> str:
+        normalized = str(value or "").strip().replace("\\", "/")
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        for prefix in ("workspace/repo/", "/workspace/repo/", "workspace/", "/workspace/", "repo/"):
+            if normalized.startswith(prefix):
+                normalized = normalized[len(prefix) :]
+                break
+        return normalized
+
+    def _collect_candidate_files(
+        self,
+        *,
+        spec: dict[str, Any],
+        tests: dict[str, Any],
+        rag_context: dict[str, Any],
+        ci_failure_context: dict[str, Any],
+    ) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+
+        def add(path: Any) -> None:
+            if not isinstance(path, str):
+                return
+            normalized = self._normalize_path(path)
+            if not normalized:
+                return
+            if "::" in normalized:
+                normalized = normalized.split("::", 1)[0]
+            if normalized.startswith("/") or ".." in normalized.split("/"):
+                return
+            if normalized in seen:
+                return
+            seen.add(normalized)
+            result.append(normalized)
+
+        file_change_plan = spec.get("file_change_plan", {}) or {}
+        for path in file_change_plan.get("files_to_modify", []) or []:
+            add(path)
+
+        for change in spec.get("file_changes", []) or []:
+            if isinstance(change, dict):
+                add(change.get("path"))
+
+        for case in tests.get("test_cases", []) or []:
+            if isinstance(case, dict):
+                add(case.get("file_path"))
+
+        for path in ci_failure_context.get("files", []) or []:
+            add(path)
+
+        for target in ci_failure_context.get("test_targets", []) or []:
+            add(target)
+
+        for job in ci_failure_context.get("per_job_analysis", []) or []:
+            if not isinstance(job, dict):
+                continue
+            for target in job.get("test_targets", []) or []:
+                add(target)
+            for location in job.get("locations", []) or []:
+                if isinstance(location, dict):
+                    add(location.get("file"))
+
+        for source in rag_context.get("sources", []) or []:
+            if isinstance(source, dict):
+                add(source.get("path"))
+
+        return result[:20]
+
+    @staticmethod
+    def _allow_new_files(
+        candidate_files: list[str],
+        ci_failure_context: dict[str, Any],
+        spec: dict[str, Any],
+    ) -> bool:
+        if candidate_files:
+            return False
+        if ci_failure_context.get("classification") in {"path_error", "collection_error", "test_failure"}:
+            return False
+        file_changes = spec.get("file_changes", []) or []
+        if file_changes:
+            for change in file_changes:
+                if isinstance(change, dict) and str(change.get("change_type", "")).lower() == "create":
+                    return True
+        return True
+
+    def _build_repo_context(
+        self,
+        *,
+        spec: dict[str, Any],
+        tests: dict[str, Any],
+        subtasks: dict[str, Any],
+        rag_context: dict[str, Any],
+        rules_payload: dict[str, Any],
+        ci_failure_context: dict[str, Any] | None = None,
+        candidate_files: list[str] | None = None,
+        allow_new_files: bool = True,
+    ) -> dict[str, Any]:
+        test_cases = tests.get("test_cases", []) or []
+        acceptance_criteria = spec.get("acceptance_criteria", []) or []
+        file_change_plan = spec.get("file_change_plan", {}) or {}
+        files_to_modify = file_change_plan.get("files_to_modify", []) or []
+        items = subtasks.get("items", []) or []
+        rag_sources = rag_context.get("sources", []) or []
+        rule_documents = rules_payload.get("documents", {}) or {}
+
+        ci_failing_jobs: list[str] = []
+        ci_failure_details: list[dict[str, Any]] = []
+        ci_files: list[str] = []
+        ci_test_targets: list[str] = []
+        if ci_failure_context and isinstance(ci_failure_context, dict):
+            ci_failing_jobs = [
+                str(job.get("job_name", ""))
+                for job in ci_failure_context.get("per_job_analysis", [])
+                if isinstance(job, dict) and job.get("job_name")
+            ][:5]
+            ci_failure_details = ci_failure_context.get("details", []) or []
+            ci_files = [str(item) for item in ci_failure_context.get("files", []) if str(item).strip()][:8]
+            ci_test_targets = [
+                str(item) for item in ci_failure_context.get("test_targets", []) if str(item).strip()
+            ][:8]
+
+        return {
+            "spec_summary": str(spec.get("summary", "")).strip()[:300],
+            "acceptance_criteria": [
+                str(item).strip()[:180] for item in acceptance_criteria[:6] if str(item).strip()
+            ],
+            "test_case_names": [
+                str(case.get("name", "")).strip()[:120]
+                for case in test_cases[:8]
+                if isinstance(case, dict) and str(case.get("name", "")).strip()
+            ],
+            "test_case_files": [
+                str(case.get("file_path", "")).strip()
+                for case in test_cases[:8]
+                if isinstance(case, dict) and str(case.get("file_path", "")).strip()
+            ],
+            "files_to_modify": [
+                str(path).strip() for path in files_to_modify[:8] if str(path).strip()
+            ],
+            "candidate_files": candidate_files[:10] if candidate_files else [],
+            "allow_new_files": allow_new_files,
+            "subtasks": [
+                str(item.get("title") or item.get("name") or "").strip()[:140]
+                for item in items[:6]
+                if isinstance(item, dict)
+                and str(item.get("title") or item.get("name") or "").strip()
+            ],
+            "rag_sources": [
+                str(source.get("path", "")).strip()[:160]
+                for source in rag_sources[:6]
+                if isinstance(source, dict) and str(source.get("path", "")).strip()
+            ],
+            "rules_documents": list(rule_documents.keys())[:6],
+            "ci_failing_jobs": ci_failing_jobs,
+            "ci_files": ci_files,
+            "ci_test_targets": ci_test_targets,
+            "ci_failure_details": [
+                {
+                    "job_name": str(detail.get("name", ""))[:120],
+                    "error_excerpt": str(detail.get("logs", ""))[:500],
+                }
+                for detail in ci_failure_details[:5]
+                if isinstance(detail, dict)
+            ],
+        }
+
+    def _append_compact_context(
+        self,
+        *,
+        prompt: str,
+        task_description: Any,
+        issue_context_text: str,
+        memory_context_text: str,
+        candidate_files: list[str],
+        allow_new_files: bool,
+    ) -> str:
+        context_blocks: list[str] = []
+        if isinstance(task_description, str) and task_description.strip():
+            context_blocks.append(f"Task:\n{task_description.strip()[:500]}")
+        if issue_context_text:
+            context_blocks.append(f"Issue context:\n{issue_context_text[:2200]}")
+        if memory_context_text:
+            context_blocks.append(f"Memory/RAG context:\n{memory_context_text[:1800]}")
+
+        ci_failure_context = getattr(self, "_ci_failure_context", None)
+        if ci_failure_context and isinstance(ci_failure_context, dict):
+            ci_blocks = []
+            failing_jobs = [
+                str(item.get("job_name", ""))
+                for item in ci_failure_context.get("per_job_analysis", [])
+                if isinstance(item, dict) and item.get("job_name")
+            ]
+            if failing_jobs:
+                ci_blocks.append(f"Failing CI jobs: {', '.join(failing_jobs[:5])}")
+            ci_files = [
+                str(item).strip()
+                for item in ci_failure_context.get("files", [])
+                if isinstance(item, str) and item.strip()
+            ]
+            if ci_files:
+                ci_blocks.append(f"Candidate files from CI: {', '.join(ci_files[:10])}")
+            ci_targets = [
+                str(item).strip()
+                for item in ci_failure_context.get("test_targets", [])
+                if isinstance(item, str) and item.strip()
+            ]
+            if ci_targets:
+                ci_blocks.append(f"Test targets from CI: {', '.join(ci_targets[:10])}")
+            if ci_blocks:
+                context_blocks.append("## CI Failure Context\n" + "\n".join(ci_blocks))
+
+        if candidate_files:
+            context_blocks.append(
+                "## Grounded file targets\n"
+                + "\n".join(f"- {item}" for item in candidate_files[:15])
+            )
+
+        if not context_blocks:
+            return prompt
+
+        instruction = (
+            "\n\n## Important Rules:\n"
+            "1. Prefer MODIFYING existing files over creating new ones.\n"
+            "2. If candidate files are provided, you MUST restrict code changes to those files.\n"
+            "3. If tests are failing, fix the test files or source files they test.\n"
+            f"4. New files are {'ALLOWED' if allow_new_files else 'NOT ALLOWED'} for this task.\n"
+            "5. DO NOT create stub functions with 'return True' — implement real logic.\n"
+            "6. Every function must have meaningful implementation, not just placeholders.\n"
+            "7. If you cannot determine the correct implementation, prefer a minimal grounded patch "
+            "to an invented new module."
+        )
+
+        return (
+            f"{prompt}\n\n## Compact execution context\n"
+            + "\n\n".join(context_blocks)
+            + instruction
+        )
+
+    def _repair_llm_output_with_llm(self, *, llm: Any, raw_response: str) -> str | None:
+        if not isinstance(raw_response, str) or not raw_response.strip():
+            return None
+
+        repair_prompt = (
+            "Convert the following assistant output into valid JSON only.\n"
+            "Return exactly one JSON object with this schema:\n"
+            "{"
+            '"files":[{"path":"relative/path","change_type":"create|modify|delete","content":"full file content"}],'
+            '"decisions":[{"description":"...", "rationale":"..."}],'
+            '"test_changes":[{"path":"tests/file.py","change_type":"create|modify","content":"full file content"}]'
+            "}\n"
+            "Rules:\n"
+            "- No markdown fences.\n"
+            "- No explanatory text.\n"
+            "- Preserve code content exactly as much as possible.\n"
+            "- If a field is missing, use an empty list for decisions/test_changes.\n\n"
+            "Assistant output to repair:\n"
+            f"{raw_response[:12000]}"
+        )
+        try:
+            repaired = llm.complete(repair_prompt, temperature=0.0)
+        except Exception:
+            return None
+        return repaired if isinstance(repaired, str) and repaired.strip() else None
+
+    @classmethod
+    def _parse_llm_patch_response(cls, response: str) -> dict[str, Any] | None:
+        if not isinstance(response, str) or not response.strip():
+            return None
+
+        candidates = [response, cls._strip_code_fences(response)]
+        for candidate in candidates:
+            if not candidate or not candidate.strip():
+                continue
+
+            parsed = cls._try_shared_code_parser(candidate)
+            if parsed is not None:
+                return parsed
+
+            parsed = cls._try_balanced_json_parse(candidate)
+            if parsed is not None:
+                return parsed
+
+            parsed = cls._try_loose_patch_extraction(candidate)
+            if parsed is not None:
+                return parsed
+
+        return None
+
+    @staticmethod
+    def _strip_code_fences(text: str) -> str:
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+        return cleaned.strip()
+
+    @staticmethod
+    def _try_shared_code_parser(text: str) -> dict[str, Any] | None:
+        try:
+            parsed = parse_code_output(text)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    @classmethod
+    def _try_balanced_json_parse(cls, text: str) -> dict[str, Any] | None:
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(text):
+            if char != "{":
+                continue
+            try:
+                parsed, _ = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            if cls._is_valid_llm_patch(parsed):
+                return parsed
+        return None
+
+    @staticmethod
+    def _is_valid_llm_patch(payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        files = payload.get("files")
+        if not isinstance(files, list) or not files:
+            return False
+        for item in files:
+            if not isinstance(item, dict):
+                return False
+            if not isinstance(item.get("path"), str) or not item.get("path", "").strip():
+                return False
+            if (
+                not isinstance(item.get("change_type"), str)
+                or not item.get("change_type", "").strip()
+            ):
+                return False
+            if not isinstance(item.get("content"), str):
+                return False
+        return True
+
+    @classmethod
+    def _try_loose_patch_extraction(cls, text: str) -> dict[str, Any] | None:
+        pattern = re.compile(
+            r'"path"\s*:\s*"(?P<path>[^"]+)"[\s\S]*?'
+            r'"change_type"\s*:\s*"(?P<change_type>[^"]+)"[\s\S]*?'
+            r'"content"\s*:\s*"(?P<content>[\s\S]*?)"\s*"?\s*}',
+            re.IGNORECASE,
+        )
+        files: list[dict[str, str]] = []
+        for match in pattern.finditer(text):
+            path = match.group("path").strip()
+            change_type = match.group("change_type").strip()
+            content = match.group("content")
+            if not path or not change_type:
+                continue
+            try:
+                content = bytes(content, "utf-8").decode("unicode_escape")
+            except Exception:
+                content = content.replace("\\n", "\n")
+            files.append(
+                {
+                    "path": path,
+                    "change_type": change_type,
+                    "content": content,
+                }
+            )
+
+        if not files:
+            return None
+
+        payload: dict[str, Any] = {
+            "files": files,
+            "decisions": [],
+            "test_changes": [],
+        }
+        return payload if cls._is_valid_llm_patch(payload) else None
+
+    def _filter_patch_files(
+        self,
+        files: Any,
+        *,
+        candidate_files: list[str],
+        allow_new_files: bool,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        if not isinstance(files, list):
+            return [], ["patch_files_not_a_list"]
+
+        normalized_candidates = {self._normalize_path(item) for item in candidate_files if item}
+        filtered: list[dict[str, Any]] = []
+        notes: list[str] = []
+
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path")
+            content = item.get("content")
+            change_type = str(item.get("change_type", "modify")).strip().lower() or "modify"
+            if not isinstance(path, str) or not path.strip() or not isinstance(content, str):
+                continue
+
+            normalized_path = self._normalize_path(path)
+            file_item = {
+                "path": normalized_path,
+                "change_type": change_type,
+                "content": content,
+            }
+
+            if normalized_candidates:
+                if normalized_path in normalized_candidates:
+                    filtered.append(file_item)
+                elif allow_new_files:
+                    filtered.append(file_item)
+                    notes.append(f"new_or_non_candidate_file_allowed={normalized_path}")
+                else:
+                    notes.append(f"filtered_non_candidate_file={normalized_path}")
+            else:
+                if allow_new_files:
+                    filtered.append(file_item)
+                else:
+                    notes.append(f"filtered_file_without_grounding={normalized_path}")
+
+        deduped: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in filtered:
+            key = item["path"]
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+
+        return deduped, notes
+
+    def _build_selected_target_files(
+        self,
+        files: list[dict[str, Any]],
+        candidate_files: list[str],
+    ) -> list[dict[str, str]]:
+        candidate_set = {self._normalize_path(item) for item in candidate_files}
+        selected: list[dict[str, str]] = []
+        for item in files:
+            path = self._normalize_path(item.get("path", ""))
+            if not path:
+                continue
+            reason = "candidate_file_match" if path in candidate_set else "fallback_selection"
+            selected.append({"path": path, "reason": reason})
+        return selected
 
     def _mark_issue_as_fixed(
         self,
@@ -504,6 +913,8 @@ class EnhancedCodeGenerator(BaseAgent):
         rag_context: dict[str, Any],
         github_client: Any | None,
         github_client_reason: str,
+        candidate_files: list[str],
+        allow_new_files: bool,
     ) -> str:
         issue = context.get("issue")
         issue_number = issue.get("number") if isinstance(issue, dict) else None
@@ -536,6 +947,8 @@ class EnhancedCodeGenerator(BaseAgent):
             "has_github_token": bool(
                 str(context.get("github_token") or context.get("token") or "").strip()
             ),
+            "candidate_files": candidate_files[:10],
+            "allow_new_files": allow_new_files,
         }
         return json.dumps(payload, ensure_ascii=False)
 
@@ -611,69 +1024,99 @@ class EnhancedCodeGenerator(BaseAgent):
 
     def _build_deterministic_patch(
         self,
+        *,
         spec: dict[str, Any],
-        test_cases: list[dict[str, Any]],
+        tests: dict[str, Any],
         subtask_count: int,
         rag_source_count: int,
         rule_doc_count: int,
         rules_version: str,
         issue_context_text: str,
+        candidate_files: list[str],
+        allow_new_files: bool,
+        ci_failure_context: dict[str, Any],
     ) -> dict[str, Any]:
-        """Fallback deterministic patch builder."""
         ci_patch = self._build_ci_permissions_patch_from_local_workflow(issue_context_text)
         if ci_patch:
             return ci_patch
 
         files: list[dict[str, Any]] = []
-
-        file_changes: list[dict[str, Any]] = spec.get("file_changes", []) or []
-
-        if file_changes:
-            for change in file_changes:
-                path: str = change.get("path", "")
-                change_type: str = change.get("change_type", "modify")
-                description: str = change.get("description", "")
-
-                content: str = self._generate_basic_content(path, description)
-
-                files.append(
-                    {
-                        "path": path,
-                        "change_type": change_type,
-                        "content": content,
-                    }
-                )
-        else:
-            files.append(
-                {
-                    "path": "src/feature_impl.py",
-                    "change_type": "create",
-                    "content": self._generate_basic_content(
-                        "src/feature_impl.py",
-                        "Feature implementation",
-                    ),
-                }
-            )
-
-        if test_cases:
-            files.append(
-                {
-                    "path": "tests/test_feature.py",
-                    "change_type": "create",
-                    "content": self._generate_test_content(test_cases),
-                }
-            )
-
         decisions: list[str] = [
             f"subtasks={subtask_count}",
-            f"tests={len(test_cases)}",
+            f"tests={len(tests.get('test_cases', []) or [])}",
             f"rag_sources={rag_source_count}",
             f"rules_documents={rule_doc_count}",
             f"rules_version={rules_version or 'none'}",
             "deterministic_patch=true",
         ]
 
-        return {
+        if candidate_files:
+            target_path = candidate_files[0]
+            description = "Grounded deterministic patch target from CI/spec context"
+            files.append(
+                {
+                    "path": target_path,
+                    "change_type": "modify",
+                    "content": self._generate_basic_content(target_path, description),
+                }
+            )
+            decisions.append(f"grounded_target={target_path}")
+        else:
+            file_changes: list[dict[str, Any]] = spec.get("file_changes", []) or []
+            if file_changes:
+                for change in file_changes:
+                    path: str = str(change.get("path", "")).strip()
+                    if not path:
+                        continue
+                    change_type: str = str(change.get("change_type", "modify") or "modify")
+                    description: str = str(change.get("description", "") or "deterministic patch")
+                    files.append(
+                        {
+                            "path": self._normalize_path(path),
+                            "change_type": change_type,
+                            "content": self._generate_basic_content(path, description),
+                        }
+                    )
+            elif allow_new_files:
+                files.append(
+                    {
+                        "path": "src/feature_impl.py",
+                        "change_type": "create",
+                        "content": self._generate_basic_content(
+                            "src/feature_impl.py",
+                            "Feature implementation",
+                        ),
+                    }
+                )
+                decisions.append("fallback_new_file_created=src/feature_impl.py")
+            else:
+                decisions.append("no_grounded_targets_available")
+
+        test_cases: list[dict[str, Any]] = tests.get("test_cases", []) or []
+        existing_paths = {item["path"] for item in files}
+        for test_case in test_cases:
+            if not isinstance(test_case, dict):
+                continue
+            test_path = str(test_case.get("file_path") or "").strip()
+            content = test_case.get("content")
+            if (
+                test_path
+                and isinstance(content, str)
+                and content.strip()
+                and self._normalize_path(test_path) in set(candidate_files)
+                and self._normalize_path(test_path) not in existing_paths
+            ):
+                normalized_test_path = self._normalize_path(test_path)
+                files.append(
+                    {
+                        "path": normalized_test_path,
+                        "change_type": "modify",
+                        "content": content,
+                    }
+                )
+                existing_paths.add(normalized_test_path)
+
+        patch = {
             "schema_version": "2.0",
             "files": files,
             "decisions": decisions,
@@ -681,7 +1124,12 @@ class EnhancedCodeGenerator(BaseAgent):
             "dry_run": False,
             "expected_failures": 1,
             "llm_enhanced": False,
+            "selected_target_files": self._build_selected_target_files(files, candidate_files),
+            "allow_new_files": allow_new_files,
         }
+        if not files and ci_failure_context:
+            patch["blocked"] = True
+        return patch
 
     def _build_ci_permissions_patch_from_local_workflow(
         self, issue_context_text: str
@@ -723,15 +1171,39 @@ class EnhancedCodeGenerator(BaseAgent):
             "dry_run": False,
             "expected_failures": 0,
             "llm_enhanced": False,
+            "selected_target_files": [
+                {"path": ".github/workflows/ci.yml", "reason": "ci_permissions_fix"}
+            ],
+            "allow_new_files": False,
         }
 
     @staticmethod
     def _should_apply_ghcr_permissions_fix(issue_context_text: str) -> bool:
         text = issue_context_text.lower()
-        has_ghcr_push_signal = "ghcr.io" in text and "failed to push" in text and "denied" in text
+
+        has_ghcr_registry = "ghcr.io" in text
+        has_push_failure = (
+            "failed to push" in text
+            or "push ghcr.io" in text
+            or "docker push" in text
+            or "image push" in text
+        )
+        has_denied_signal = "denied" in text
         has_permission_phrase = "installation not allowed" in text
-        has_package_phrase = "organization package" in text or "to creat" in text
-        return has_ghcr_push_signal and has_permission_phrase and has_package_phrase
+        has_package_phrase = (
+            "organization package" in text
+            or "to creat" in text
+            or "to create" in text
+            or "create organization package" in text
+        )
+
+        return (
+            has_ghcr_registry
+            and has_push_failure
+            and has_denied_signal
+            and has_permission_phrase
+            and has_package_phrase
+        )
 
     @staticmethod
     def _ensure_ghcr_permissions_in_workflow(workflow_content: str) -> str:
@@ -747,7 +1219,6 @@ class EnhancedCodeGenerator(BaseAgent):
         return permissions_block + workflow_content
 
     def _build_pr_body(self, spec: dict[str, Any], patch: dict[str, Any]) -> str:
-        """Build pull request body."""
         lines: list[str] = [
             "## Summary",
             spec.get("summary", "Generated by HordeForge"),
@@ -780,71 +1251,205 @@ class EnhancedCodeGenerator(BaseAgent):
                     lines.append(f"- {note.strip()}")
 
         lines.extend(["", "## Changes"])
-
         for fc in patch.get("files", []):
             path: str = fc.get("path", "")
             change_type: str = fc.get("change_type", "modified")
-
             lines.append(f"- `{change_type}`: {path}")
 
         lines.extend(["", "---", "*Generated by HordeForge AI*"])
-
         return "\n".join(lines)
 
     def _format_memory_context(self, memory_context: Any) -> str:
         if isinstance(memory_context, str):
-            return memory_context.strip()
+            return memory_context.strip()[:1200]
+
         if isinstance(memory_context, dict):
             lines: list[str] = []
-            query = memory_context.get("query")
-            if isinstance(query, str) and query.strip():
-                lines.append(f"Query: {query.strip()}")
+
             matches = memory_context.get("matches")
-            if isinstance(matches, list):
-                lines.append("Top matches:")
-                for item in matches[:8]:
+            if isinstance(matches, list) and matches:
+                lines.append("Top memory matches:")
+                for item in matches[:6]:
                     if not isinstance(item, dict):
                         continue
                     path = str(item.get("path") or "unknown").strip()
                     summary = str(item.get("summary") or "").strip()
                     score = item.get("score")
+                    summary = re.sub(r"\s+", " ", summary)[:220]
                     if isinstance(score, (int, float)):
                         lines.append(f"- {path} (score={float(score):.3f}): {summary}")
                     else:
                         lines.append(f"- {path}: {summary}")
-            return "\n".join(lines).strip()
-        return str(memory_context).strip() if memory_context is not None else ""
+
+            quality = memory_context.get("quality_signals")
+            if isinstance(quality, dict):
+                strategy = str(quality.get("retrieval_strategy") or "").strip()
+                confidence = str(quality.get("retrieval_confidence") or "").strip()
+                if strategy or confidence:
+                    lines.append(
+                        "Retrieval: "
+                        + ", ".join(
+                            part
+                            for part in [
+                                f"strategy={strategy}" if strategy else "",
+                                f"confidence={confidence}" if confidence else "",
+                            ]
+                            if part
+                        )
+                    )
+
+            return "\n".join(lines).strip()[:1800]
+
+        return str(memory_context).strip()[:1200] if memory_context is not None else ""
 
     def _format_issue_context(self, issue: Any) -> str:
         if not isinstance(issue, dict):
             return ""
+
         lines: list[str] = []
         title = issue.get("title")
         body = issue.get("body")
-        comments_context = issue.get("comments_context")
-        comments = issue.get("comments")
 
         if isinstance(title, str) and title.strip():
             lines.append(f"Title: {title.strip()}")
-        if isinstance(body, str) and body.strip():
-            lines.append(f"Body:\n{body.strip()[:3000]}")
-        if isinstance(comments_context, str) and comments_context.strip():
-            lines.append(f"Comments context:\n{comments_context.strip()[:2000]}")
-        elif isinstance(comments, list):
-            comment_lines: list[str] = []
-            for item in comments[:10]:
-                if not isinstance(item, dict):
-                    continue
-                text = item.get("body")
-                if isinstance(text, str) and text.strip():
-                    comment_lines.append(f"- {text.strip()}")
-            if comment_lines:
-                lines.append("Comments:\n" + "\n".join(comment_lines))
 
-        return "\n\n".join(lines).strip()
+        body_text = str(body or "").strip()
+        if body_text:
+            lines.extend(self._summarize_issue_body(body_text, issue))
+
+        comments_context = issue.get("comments_context")
+        if isinstance(comments_context, str) and comments_context.strip():
+            lines.append(f"Comments context:\n{comments_context.strip()[:1200]}")
+
+        plan_summary = self._extract_plan_summary(issue)
+        if plan_summary:
+            lines.append(plan_summary)
+
+        return "\n\n".join(part for part in lines if part).strip()[:2600]
+
+    def _summarize_issue_body(self, body_text: str, issue: dict[str, Any]) -> list[str]:
+        lines: list[str] = []
+        failed_jobs = self._extract_failed_job_lines(body_text)
+        if failed_jobs:
+            lines.append("Failed jobs:")
+            lines.extend(f"- {item}" for item in failed_jobs[:6])
+
+        ci_run_id = self._extract_bullet_value(body_text, "ci_run.id")
+        ci_branch = self._extract_bullet_value(body_text, "ci_run.head_branch")
+        ci_sha = self._extract_bullet_value(body_text, "ci_run.head_sha")
+        ci_meta = []
+        if ci_run_id:
+            ci_meta.append(f"run_id={ci_run_id}")
+        if ci_branch:
+            ci_meta.append(f"branch={ci_branch}")
+        if ci_sha:
+            ci_meta.append(f"sha={ci_sha[:12]}")
+        if ci_meta:
+            lines.append("CI metadata: " + ", ".join(ci_meta))
+
+        issue_url = issue.get("html_url")
+        if isinstance(issue_url, str) and issue_url.strip():
+            lines.append(f"Issue URL: {issue_url.strip()}")
+
+        return lines
+
+    @staticmethod
+    def _extract_failed_job_lines(body_text: str) -> list[str]:
+        result: list[str] = []
+        for match in re.finditer(
+            r"\d+\.\s+\*\*(?P<name>[^*]+)\*\*:\s*(?P<reason>[^\n]+)",
+            body_text,
+            flags=re.IGNORECASE,
+        ):
+            name = match.group("name").strip()
+            reason = match.group("reason").strip()
+            result.append(f"{name}: {reason}")
+        return result
+
+    @staticmethod
+    def _extract_bullet_value(body_text: str, key: str) -> str:
+        pattern = rf"-\s+{re.escape(key)}:\s+`([^`]+)`"
+        match = re.search(pattern, body_text)
+        return match.group(1).strip() if match else ""
+
+    def _extract_plan_summary(self, issue: dict[str, Any]) -> str:
+        payload = self._extract_plan_payload(issue)
+        if not isinstance(payload, dict):
+            return ""
+
+        dod = payload.get("dod")
+        spec = payload.get("spec")
+        tests = payload.get("tests")
+        subtasks = payload.get("subtasks")
+
+        lines: list[str] = ["Planning summary:"]
+        if isinstance(spec, dict):
+            summary = str(spec.get("summary") or "").strip()
+            if summary:
+                lines.append(f"- spec: {summary[:220]}")
+            acceptance = spec.get("acceptance_criteria")
+            if isinstance(acceptance, list) and acceptance:
+                for item in acceptance[:4]:
+                    text = str(item).strip()
+                    if text:
+                        lines.append(f"- AC: {text[:180]}")
+
+        if isinstance(dod, dict):
+            criteria = dod.get("acceptance_criteria")
+            if isinstance(criteria, list):
+                lines.append(f"- dod_count={len(criteria)}")
+
+        if isinstance(subtasks, dict):
+            items = subtasks.get("items") or subtasks.get("subtasks")
+            if isinstance(items, list) and items:
+                lines.append(f"- subtasks={len(items)}")
+
+        if isinstance(tests, dict):
+            test_cases = tests.get("test_cases")
+            if isinstance(test_cases, list) and test_cases:
+                lines.append(f"- tests={len(test_cases)}")
+                for case in test_cases[:4]:
+                    if not isinstance(case, dict):
+                        continue
+                    path = str(case.get("file_path") or case.get("name") or "").strip()
+                    if path:
+                        lines.append(f"- test: {path[:180]}")
+
+        return "\n".join(lines)
+
+    def _extract_plan_payload(self, issue: dict[str, Any]) -> dict[str, Any] | None:
+        comments = issue.get("comments")
+        if isinstance(comments, list):
+            for comment in comments:
+                if not isinstance(comment, dict):
+                    continue
+                body = comment.get("body")
+                parsed = self._extract_plan_json_from_text(body)
+                if isinstance(parsed, dict):
+                    return parsed
+
+        body = issue.get("body")
+        parsed = self._extract_plan_json_from_text(body)
+        return parsed if isinstance(parsed, dict) else None
+
+    @classmethod
+    def _extract_plan_json_from_text(cls, text: Any) -> dict[str, Any] | None:
+        if not isinstance(text, str) or not text.strip():
+            return None
+        pattern = re.escape(cls.PLAN_JSON_START) + r"\s*(.*?)\s*" + re.escape(cls.PLAN_JSON_END)
+        match = re.search(pattern, text, flags=re.DOTALL)
+        if not match:
+            return None
+        raw_json = match.group(1).strip()
+        if not raw_json:
+            return None
+        try:
+            parsed = json.loads(raw_json)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
     def _generate_basic_content(self, path: str, description: str) -> str:
-        """Generate minimal placeholder content."""
         if "test" in path.lower():
             return (
                 "# Test file placeholder\n"
@@ -854,7 +1459,6 @@ class EnhancedCodeGenerator(BaseAgent):
             )
 
         ext: str = path.split(".")[-1] if "." in path else "py"
-
         base_name: str = path.split("/")[-1].split("\\")[-1].replace(f".{ext}", "")
 
         if ext == "py":
@@ -887,7 +1491,6 @@ class EnhancedCodeGenerator(BaseAgent):
         return f"# Generated file: {path}\n# {description}\n"
 
     def _generate_test_content(self, test_cases: list[dict[str, Any]]) -> str:
-        """Generate placeholder pytest tests."""
         lines: list[str] = [
             '"""Generated tests for feature."""',
             "import pytest",
@@ -896,13 +1499,11 @@ class EnhancedCodeGenerator(BaseAgent):
 
         for idx, tc in enumerate(test_cases, start=1):
             test_name: str = tc.get("name", f"test_case_{idx}")
-
             safe_name = "".join(
                 char if char.isalnum() or char in {"_", "-"} else "_" for char in test_name
             )
-
             lines.append(f"def test_{safe_name}():")
-            lines.append('"""Test case from specification."""')
+            lines.append('    """Test case from specification."""')
             lines.append("    assert True")
             lines.append("")
 
@@ -939,5 +1540,4 @@ class EnhancedCodeGenerator(BaseAgent):
         return lowered.strip("-")[:48]
 
 
-# Backward compatibility alias
 CodeGenerator = EnhancedCodeGenerator
