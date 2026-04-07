@@ -25,6 +25,44 @@ os.environ["TEMP"] = _tmp_root
 tempfile.tempdir = _tmp_root
 
 
+def _force_remove_tree(path: Path) -> None:
+    def _onerror(_func, target, _exc) -> None:
+        try:
+            os.chmod(target, 0o700)
+        except Exception:
+            return
+
+    target = path
+    if os.name == "nt":
+        target = Path("\\\\?\\" + str(path.resolve()))
+    shutil.rmtree(target, ignore_errors=False, onerror=_onerror)
+
+
+def _cleanup_workspace_tmp_root() -> None:
+    if not _workspace_tmp_root.exists():
+        return
+    removable_prefixes = (
+        "test_runner_isolated_",
+        "test_runner_proc_",
+        "pip-build-tracker-",
+        "pip-ephem-wheel-cache-",
+        "pip-install-",
+        "pip-unpack-",
+        "tmp_path_",
+        "tmp",
+    )
+    for entry in _workspace_tmp_root.iterdir():
+        if not entry.name.startswith(removable_prefixes):
+            continue
+        try:
+            if entry.is_dir():
+                _force_remove_tree(entry)
+            else:
+                entry.unlink(missing_ok=True)
+        except Exception:
+            continue
+
+
 def _workspace_mkdtemp(
     suffix: str | None = None, prefix: str | None = None, dir: str | None = None
 ) -> str:
@@ -61,6 +99,26 @@ class _WorkspaceTemporaryDirectory:
 # Ensure stdlib tempfile helpers create writable directories inside workspace.
 tempfile.mkdtemp = _workspace_mkdtemp  # type: ignore[assignment]
 tempfile.TemporaryDirectory = _WorkspaceTemporaryDirectory  # type: ignore[assignment]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_workspace_tmp_root() -> Iterator[None]:
+    """Optional cleanup for .pytest_tmp_runtime (disabled by default for speed)."""
+    if os.getenv("HORDEFORGE_PYTEST_CLEANUP_ON_START", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        _cleanup_workspace_tmp_root()
+    yield
+    if os.getenv("HORDEFORGE_PYTEST_CLEANUP_ON_EXIT", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        _cleanup_workspace_tmp_root()
 
 
 @pytest.fixture

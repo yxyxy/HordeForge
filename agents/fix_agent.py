@@ -297,9 +297,7 @@ class FixAgent(BaseAgent):
                             except json.JSONDecodeError:
                                 candidate_files = self._extract_candidate_files(context)
                                 fallback_path = (
-                                    candidate_files[0]
-                                    if candidate_files
-                                    else "tests/test_placeholder.py"
+                                    candidate_files[0] if candidate_files else "src/feature_impl.py"
                                 )
                                 llm_fix_result = {
                                     "files": [
@@ -349,7 +347,7 @@ class FixAgent(BaseAgent):
             confidence = 0.92
         else:
             candidate_files = self._extract_candidate_files(context)
-            fallback_path = candidate_files[0] if candidate_files else "tests/test_placeholder.py"
+            fallback_path = candidate_files[0] if candidate_files else "src/feature_impl.py"
             files = [
                 {
                     "path": fallback_path,

@@ -31,3 +31,11 @@ def test_feature_pipeline_fix_loop_matches_fix_agent_condition() -> None:
 
     assert loop["condition"] == fix_condition
     assert loop["steps"] == ["fix_agent", "test_runner"]
+
+
+def test_feature_pipeline_memory_writer_uses_fixed_patch_with_code_patch_fallback() -> None:
+    pipeline = _load_pipeline()
+    steps_by_name = {step["name"]: step for step in pipeline["steps"]}
+    memory_writer_input = steps_by_name["memory_writer"]["input"]
+
+    assert memory_writer_input["code_patch"] == "{{ fixed_code_patch | default(code_patch) }}"

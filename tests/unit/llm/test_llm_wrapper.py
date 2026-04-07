@@ -282,6 +282,15 @@ def test_anthropic_wrapper_no_api_key():
         wrapper.complete("test prompt")
 
 
+def test_anthropic_model_info_has_consistent_token_limits():
+    wrapper = AnthropicWrapper(api_key="test-key")
+    _, model_info = wrapper.get_model()
+
+    assert isinstance(model_info.max_tokens, int)
+    assert isinstance(model_info.context_window, int)
+    assert model_info.context_window >= model_info.max_tokens
+
+
 def test_google_wrapper_no_api_key():
     """Test Google wrapper without API key."""
     wrapper = GoogleGenAIWrapper(api_key="")

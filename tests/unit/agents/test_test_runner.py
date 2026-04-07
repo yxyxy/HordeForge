@@ -88,6 +88,33 @@ class TestMultiFrameworkExecution:
         assert result["artifact_content"]["execution_mode"] == "real"
         assert result["artifact_content"].get("mock") is not True
 
+    def test_infers_mock_execution_for_patch_only_context(self, monkeypatch):
+        def _fail_run_pytest(_self, _project_path, _context):
+            raise AssertionError("real pytest execution must not run in inferred mock mode")
+
+        monkeypatch.setattr(TestRunner, "_run_pytest", _fail_run_pytest)
+
+        result = TestRunner().run(
+            {
+                "code_generator": {
+                    "status": "SUCCESS",
+                    "artifacts": [
+                        {
+                            "type": "code_patch",
+                            "content": {
+                                "files": [{"path": "src/app.py", "diff": "+print('x')"}],
+                                "expected_failures": 1,
+                            },
+                        }
+                    ],
+                }
+            }
+        )
+
+        assert result["artifact_content"]["framework"] == "mock"
+        assert result["artifact_content"]["failed"] == 1
+        assert result["status"] == "PARTIAL_SUCCESS"
+
     def test_normalize_workspace_test_targets(self):
         result = TestRunner._extract_ci_test_paths(
             {
@@ -178,3 +205,55 @@ class TestCoverageAndClassification:
                 {"project_metadata": {"language": "python", "test_framework": "pytest"}}
             )
         assert result["status"] == "BLOCKED"
+
+
+class TestDependencyLifecycle:
+    def test_shared_sandbox_bootstrap_happens_once(self, tmp_path, monkeypatch):
+        requirements = tmp_path / "requirements.txt"
+        requirements.write_text("pytest\n", encoding="utf-8")
+
+        calls: list[list[str]] = []
+
+        def _fake_run(cmd, **kwargs):
+            calls.append([str(part) for part in cmd])
+            return MagicMock(returncode=0, stdout="ok", stderr="")
+
+        monkeypatch.setattr("subprocess.run", _fake_run)
+
+        runner = TestRunner()
+        context = {
+            "python_dependency_mode": "shared_sandbox",
+            "bootstrap_test_env": True,
+            "sandbox_dependency_root": str(tmp_path / "dep_root"),
+        }
+        logs1, py1 = runner._prepare_python_env(str(tmp_path), context, {})
+        logs2, py2 = runner._prepare_python_env(str(tmp_path), context, {})
+
+        assert py1 == py2
+        assert any("bootstrap completed" in item for item in logs1)
+        assert any("shared env up-to-date" in item for item in logs2)
+        pip_installs = [
+            item for item in calls if len(item) >= 4 and item[2:4] == ["pip", "install"]
+        ]
+        assert len(pip_installs) == 2
+
+    def test_shared_sandbox_without_bootstrap_only_checks(self, tmp_path, monkeypatch):
+        calls: list[list[str]] = []
+
+        def _fake_run(cmd, **kwargs):
+            calls.append([str(part) for part in cmd])
+            return MagicMock(returncode=0, stdout="pytest 8.0.0", stderr="")
+
+        monkeypatch.setattr("subprocess.run", _fake_run)
+
+        runner = TestRunner()
+        context = {
+            "python_dependency_mode": "shared_sandbox",
+            "bootstrap_test_env": False,
+            "sandbox_dependency_root": str(tmp_path / "dep_root"),
+        }
+        logs, _ = runner._prepare_python_env(str(tmp_path), context, {})
+
+        assert any("bootstrap skipped" in item for item in logs)
+        assert any("dependency check passed" in item for item in logs)
+        assert all("install" not in item for command in calls for item in command)

@@ -33,6 +33,7 @@ class RedisTaskQueue(TaskQueueBackend):
             "HORDEFORGE_REDIS_URL", "redis://localhost:6379/0"
         )
         self._queue_name = queue_name
+        self._processing_queue_name = f"{queue_name}:processing"
         self._result_ttl_seconds = result_ttl_seconds
         self._pool_size = pool_size
         self._pool_max_overflow = pool_max_overflow
@@ -41,6 +42,7 @@ class RedisTaskQueue(TaskQueueBackend):
         self._redis = None
         self._last_health_check: datetime | None = None
         self._ensure_connection()
+        self._requeue_processing_tasks()
 
     def _ensure_connection(self) -> None:
         if self._redis is not None:
@@ -130,6 +132,50 @@ class RedisTaskQueue(TaskQueueBackend):
     def _utc_now_iso() -> str:
         return datetime.now(timezone.utc).isoformat()
 
+    def _task_payload_key(self, task_id: str) -> str:
+        return f"{self._queue_name}:task:{task_id}"
+
+    def _move_to_processing(self):
+        if hasattr(self._redis, "lmove"):
+            return self._redis.lmove(self._queue_name, self._processing_queue_name, "LEFT", "RIGHT")
+        task_json = self._redis.lpop(self._queue_name)
+        if task_json is None:
+            return None
+        self._redis.rpush(self._processing_queue_name, task_json)
+        return task_json
+
+    def _move_processing_back_to_queue(self):
+        if hasattr(self._redis, "lmove"):
+            return self._redis.lmove(self._processing_queue_name, self._queue_name, "RIGHT", "LEFT")
+        task_json = self._redis.lpop(self._processing_queue_name)
+        if task_json is None:
+            return None
+        self._redis.lpush(self._queue_name, task_json)
+        return task_json
+
+    def _ack_processing_task(self, task_id: str) -> None:
+        task_json = self._redis.get(self._task_payload_key(task_id))
+        if task_json is not None:
+            try:
+                self._redis.lrem(self._processing_queue_name, 1, task_json)
+            except Exception:  # noqa: BLE001
+                pass
+        self._redis.delete(self._task_payload_key(task_id))
+
+    def _requeue_processing_tasks(self) -> None:
+        moved = 0
+        while True:
+            task_json = self._move_processing_back_to_queue()
+            if task_json is None:
+                break
+            moved += 1
+        if moved:
+            logger.warning(
+                "Recovered %s in-flight Redis queue task(s) back to '%s'.",
+                moved,
+                self._queue_name,
+            )
+
     def enqueue(self, request: QueueTaskRequest) -> QueueTask:
         # Import at runtime to avoid circular dependency
         from scheduler.task_queue import QueueTask  # noqa: E402
@@ -157,6 +203,18 @@ class RedisTaskQueue(TaskQueueBackend):
         # Use sorted JSON for consistent hashing
         task_json = json.dumps(task_dict, sort_keys=True, ensure_ascii=False)
         self._redis.rpush(self._queue_name, task_json)
+        self._redis.set(self._task_payload_key(task_id), task_json)
+        self._redis.setex(
+            f"{self._queue_name}:status:{task_id}",
+            self._result_ttl_seconds,
+            json.dumps(
+                {
+                    "status": "QUEUED",
+                    "created_at": task.created_at,
+                },
+                ensure_ascii=False,
+            ),
+        )
         return task
 
     def claim_next(self, *, max_items: int = 1) -> list[QueueTask]:
@@ -168,12 +226,12 @@ class RedisTaskQueue(TaskQueueBackend):
         target = max(1, int(max_items))
 
         for _ in range(target):
-            # Atomic pop from left (blocking would require BLPOP)
-            task_json = self._redis.lpop(self._queue_name)
+            task_json = self._move_to_processing()
             if task_json is None:
                 break
             try:
                 data = json.loads(task_json)
+                started_at = self._utc_now_iso()
                 task = QueueTask(
                     task_id=data["task_id"],
                     pipeline_name=data["pipeline_name"],
@@ -185,7 +243,18 @@ class RedisTaskQueue(TaskQueueBackend):
                     idempotency_key=data.get("idempotency_key"),
                     status="RUNNING",
                     created_at=data["created_at"],
-                    started_at=self._utc_now_iso(),
+                    started_at=started_at,
+                )
+                self._redis.setex(
+                    f"{self._queue_name}:status:{task.task_id}",
+                    self._result_ttl_seconds,
+                    json.dumps(
+                        {
+                            "status": "RUNNING",
+                            "started_at": started_at,
+                        },
+                        ensure_ascii=False,
+                    ),
                 )
                 claimed.append(task)
             except (json.JSONDecodeError, KeyError):
@@ -198,6 +267,7 @@ class RedisTaskQueue(TaskQueueBackend):
 
         self._ensure_connection()
         self._check_connection()
+        self._ack_processing_task(task_id)
         key = f"{self._queue_name}:result:{task_id}"
         result_json = json.dumps(result, ensure_ascii=False)
         self._redis.setex(key, self._result_ttl_seconds, result_json)
@@ -235,6 +305,7 @@ class RedisTaskQueue(TaskQueueBackend):
 
         self._ensure_connection()
         self._check_connection()
+        self._ack_processing_task(task_id)
         status_key = f"{self._queue_name}:status:{task_id}"
         status_data = json.dumps(
             {

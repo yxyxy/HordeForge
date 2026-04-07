@@ -57,6 +57,8 @@ class StepLogRepository:
                     finished_at=record.finished_at,
                     error=record.error,
                     retry_count=record.retry_count,
+                    step_input_hash=record.step_input_hash,
+                    artifact_ids=list(record.artifact_ids),
                 )
             )
         self._save(items)
@@ -86,6 +88,8 @@ class StepLogRepository:
                     finished_at=record.finished_at,
                     error=record.error,
                     retry_count=record.retry_count,
+                    step_input_hash=record.step_input_hash,
+                    artifact_ids=list(record.artifact_ids),
                 )
             )
         self._save(items)

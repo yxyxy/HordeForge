@@ -12,7 +12,7 @@ Issue → DoD → Spec → Tasks → Tests → Code → Fix Loop → Review → 
 
 ### Основные технологии
 
-- **Язык**: Python 3.10+
+- **Язык**: Python 3.11+
 - **Веб-фреймворк**: FastAPI
 - **Оркестрация**: собственное решение в `orchestrator/`
 - **Контейнеризация**: Docker + docker-compose

@@ -1,79 +1,111 @@
 from typing import Any
 
+from orchestrator.memory_policy import MemoryPromotionPolicy
 from orchestrator.status import StepStatus
 from rag.memory_collections import MemoryType, create_memory_entry
 from rag.memory_store import MemoryStore
 
 
 class MemoryHook:
-    """
-    Хук для автоматической записи памяти после успешного выполнения шагов pipeline
-    """
+    """Hook for memory capture and optional deferred promotion."""
 
-    def __init__(self, memory_store: MemoryStore):
+    SHORT_TERM_KEY = "__short_term_memory_entries"
+    PROMOTION_MODE_KEY = "__memory_promotion_mode"
+
+    def __init__(self, memory_store: MemoryStore, policy: MemoryPromotionPolicy | None = None):
         self.memory_store = memory_store
+        self.policy = policy or MemoryPromotionPolicy()
 
     def after_step(
         self, step_name: str, step_result: dict[str, Any], context: dict[str, Any]
     ) -> None:
-        """
-        Вызывается после выполнения шага pipeline
-
-        Args:
-            step_name: Название шага
-            step_result: Результат выполнения шага
-            context: Контекст выполнения pipeline
-        """
-        # Проверяем статус результата - записываем только успешные шаги
-        status = step_result.get("status", "")
-
-        if status not in [StepStatus.SUCCESS.value, "SUCCESS", "MERGED"]:
-            # Не записываем в память, если шаг завершился неуспешно
+        status = str(step_result.get("status", "")).strip().upper()
+        if status not in {StepStatus.SUCCESS.value, "SUCCESS", "MERGED", "PARTIAL_SUCCESS"}:
             return
 
-        # Определяем тип записи в зависимости от шага и наличия артефактов
         memory_entry = self._create_memory_entry(step_name, step_result, context)
+        if not memory_entry:
+            return
 
-        if memory_entry:
-            # Сохраняем запись в память
+        short_term_entries = context.setdefault(self.SHORT_TERM_KEY, [])
+        if isinstance(short_term_entries, list):
+            short_term_entries.append(
+                {
+                    "step_name": step_name,
+                    "step_result": dict(step_result),
+                    "entry": memory_entry.to_dict(),
+                    "task_description": memory_entry.task_description,
+                }
+            )
+
+        promotion_mode = str(context.get(self.PROMOTION_MODE_KEY, "immediate")).strip().lower()
+        if promotion_mode == "deferred":
+            return
+
+        try:
+            self.memory_store.add_memory(
+                memory_entry.task_description, payload=memory_entry.to_dict()
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"Error saving memory entry: {e}")
+
+    def promote_short_term(self, *, context: dict[str, Any], run_status: str) -> int:
+        entries = context.get(self.SHORT_TERM_KEY)
+        if not isinstance(entries, list) or not entries:
+            return 0
+
+        promoted = 0
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            step_result = item.get("step_result")
+            payload = item.get("entry")
+            task_description = str(item.get("task_description") or "").strip()
+            if not isinstance(step_result, dict) or not isinstance(payload, dict):
+                continue
+            if not task_description:
+                continue
+            if not self.policy.should_promote(
+                run_status=run_status,
+                step_result=step_result,
+                entry_payload=payload,
+            ):
+                continue
+
             try:
-                self.memory_store.add_memory(
-                    memory_entry.task_description, payload=memory_entry.to_dict()
-                )
-            except Exception as e:
-                # Логируем ошибку, но не прерываем выполнение pipeline
-                print(f"Error saving memory entry: {e}")
+                self.memory_store.add_memory(task_description, payload=payload)
+                promoted += 1
+            except Exception:
+                continue
+
+        context[self.SHORT_TERM_KEY] = []
+        return promoted
 
     def _create_memory_entry(
         self, step_name: str, step_result: dict[str, Any], context: dict[str, Any]
     ):
-        """
-        Создает memory entry на основе результата шага и контекста
-        """
-        # Получаем основную информацию из контекста
         task_description = context.get("task_description")
         if not task_description:
             issue = context.get("issue", "")
             if isinstance(issue, str):
                 task_description = issue[:100]
             elif isinstance(issue, dict):
-                # Если issue - это словарь, берем заголовок или преобразуем в строку
                 task_description = issue.get("title", str(issue)[:100])
             else:
                 task_description = str(issue)[:100]
-        agents_used = context.get("agents_used", [])
 
-        # Если текущий агент еще не добавлен в список, добавляем его
+        agents_used = context.get("agents_used", [])
+        if not isinstance(agents_used, list):
+            agents_used = []
+            context["agents_used"] = agents_used
+
         if step_name not in agents_used:
             agents_used.append(step_name)
 
         result_status = step_result.get("status", "UNKNOWN")
-
-        # Проверяем наличие артефактов, чтобы определить тип записи
         artifacts = step_result.get("artifacts", [])
 
-        # Если есть артефакты с типом patch, создаем PatchEntry
-        patch_artifacts = [a for a in artifacts if a.get("type") == "patch"]
+        patch_artifacts = [a for a in artifacts if isinstance(a, dict) and a.get("type") == "patch"]
         if patch_artifacts:
             patch_data = patch_artifacts[0].get("content", {})
             return create_memory_entry(
@@ -86,7 +118,6 @@ class MemoryHook:
                 result_status=result_status,
             )
 
-        # Для шагов review_agent, если результат содержит информацию о мердже
         if step_name == "review_agent":
             review_result = step_result.get("result", {})
             if isinstance(review_result, dict) and review_result.get("action") == "MERGE_APPROVED":
@@ -100,7 +131,6 @@ class MemoryHook:
                     result_status="MERGED",
                 )
 
-        # Для других случаев создаем TaskEntry
         return create_memory_entry(
             entry_type=MemoryType.TASK,
             task_description=task_description,
@@ -110,25 +140,28 @@ class MemoryHook:
         )
 
 
-# Глобальная переменная для хранения хука, если он активирован
 _active_memory_hook: MemoryHook | None = None
 
 
 def register_memory_hook(hook: MemoryHook) -> None:
-    """Регистрирует глобальный memory hook"""
     global _active_memory_hook
     _active_memory_hook = hook
 
 
 def get_memory_hook() -> MemoryHook | None:
-    """Возвращает зарегистрированный memory hook"""
     return _active_memory_hook
 
 
 def trigger_memory_hook(
     step_name: str, step_result: dict[str, Any], context: dict[str, Any]
 ) -> None:
-    """Вызывает memory hook после выполнения шага"""
     hook = get_memory_hook()
     if hook:
         hook.after_step(step_name, step_result, context)
+
+
+def trigger_memory_promotion(context: dict[str, Any], run_status: str) -> int:
+    hook = get_memory_hook()
+    if hook is None:
+        return 0
+    return hook.promote_short_term(context=context, run_status=run_status)

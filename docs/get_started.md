@@ -15,7 +15,7 @@
 
 ## 2. Предварительные требования
 
-1. Python 3.10+
+1. Python 3.11+
 2. Docker Desktop (для docker-ready запуска)
 3. Доступ к GitHub token (для ручных тестов интеграции)
 4. Установленные зависимости из `requirements-dev.txt`

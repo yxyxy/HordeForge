@@ -83,3 +83,37 @@ class TestMemoryAgentModes:
         artifact = result["artifacts"][0]["content"]
         assert artifact["quality_signals"]["memory_mode"] == "write"
         assert artifact["quality_signals"]["write_persisted"] is True
+
+    def test_retrieve_mode_includes_persisted_memory_store_matches(self, tmp_path):
+        setup_memory({"type": "json", "file_path": str(tmp_path / "memory.json")})
+        assert (
+            store_context(
+                {
+                    "task_description": "Fix auth token validation in login endpoint",
+                    "result": {"status": "SUCCESS"},
+                    "code_patch": {"files": [{"path": "auth.py", "diff": "..."}]},
+                    "entry_type": "task",
+                }
+            )["status"]
+            == "success"
+        )
+
+        result = MemoryAgent().run({"query": "auth token validation"})
+        assert result["status"] in {"SUCCESS", "PARTIAL_SUCCESS"}
+
+        matches = result["artifacts"][0]["content"]["matches"]
+        assert any(item.get("source") == "memory_store" for item in matches)
+
+    def test_write_mode_with_fallback_patch_does_not_persist(self, tmp_path):
+        setup_memory({"type": "json", "file_path": str(tmp_path / "memory.json")})
+        result = MemoryAgent().run(
+            {
+                "task_description": "Fix flaky test",
+                "result": {"status": "SUCCESS"},
+            }
+        )
+
+        assert result["status"] in {"PARTIAL_SUCCESS", "BLOCKED"}
+        artifact = result["artifacts"][0]["content"]
+        assert artifact["quality_signals"]["memory_mode"] == "write"
+        assert artifact["quality_signals"]["write_persisted"] is False

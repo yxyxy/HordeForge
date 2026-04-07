@@ -21,6 +21,7 @@ class StepRunState:
     finished_at: str | None = None
     error: str | None = None
     output: dict[str, Any] | None = None
+    input_hash: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -36,6 +37,7 @@ class StepRunState:
             "finished_at": self.finished_at,
             "error": self.error,
             "output": self.output,
+            "input_hash": self.input_hash,
         }
 
     @classmethod
@@ -53,6 +55,7 @@ class StepRunState:
             finished_at=payload.get("finished_at"),
             error=payload.get("error"),
             output=payload.get("output"),
+            input_hash=payload.get("input_hash"),
         )
 
 
@@ -106,6 +109,7 @@ class PipelineRunState:
         trace_id: str | None = None,
         span_id: str | None = None,
         parent_span_id: str | None = None,
+        input_hash: str | None = None,
     ) -> StepRunState:
         with self._lock:
             step = self.get_step(step_name)
@@ -136,6 +140,8 @@ class PipelineRunState:
                 step.span_id = span_id
             if parent_span_id is not None:
                 step.parent_span_id = parent_span_id
+            if input_hash is not None:
+                step.input_hash = input_hash
 
             if next_status in {StepStatus.FAILED, StepStatus.BLOCKED}:
                 self.run_status = next_status.value

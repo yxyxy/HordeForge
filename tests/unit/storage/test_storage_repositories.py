@@ -74,6 +74,8 @@ def test_step_log_repository_replace_and_lookup_by_run():
             status="FAILED",
             started_at="2026-03-07T10:00:02+00:00",
             retry_count=1,
+            step_input_hash="h123",
+            artifact_ids=["a1", "a2"],
         ),
         StepLogRecord(
             run_id="r1",
@@ -89,6 +91,8 @@ def test_step_log_repository_replace_and_lookup_by_run():
         assert len(loaded) == 2
         assert loaded[0].step_name == "s1"
         assert loaded[1].retry_count == 1
+        assert loaded[1].step_input_hash == "h123"
+        assert loaded[1].artifact_ids == ["a1", "a2"]
     finally:
         _cleanup_tmp_dir(tmp_dir)
 

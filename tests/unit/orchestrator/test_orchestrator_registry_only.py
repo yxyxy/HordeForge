@@ -11,6 +11,14 @@ pipeline_name: stub_pipeline
 steps:
   - name: stub_step
     agent: test_runner
+    input:
+      mock_test_execution: true
+      code_patch:
+        files:
+          - path: src/mock_file.py
+            content: "print('mock')"
+            change_type: modify
+        expected_failures: 0
     on_failure: stop_pipeline
 """.strip(),
         encoding="utf-8",

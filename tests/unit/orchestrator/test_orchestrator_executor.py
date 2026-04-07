@@ -211,3 +211,39 @@ def test_coerce_code_patch_preserves_pr_metadata_fields():
     assert normalized["rollback_performed"] is False
     assert normalized["llm_enhanced"] is True
     assert normalized["notes"] == ["n1", "n2"]
+
+
+def test_step_executor_persists_step_input_hash_and_artifact_ids():
+    class _ArtifactAgent(BaseAgent):
+        def run(self, _context):
+            return {
+                "status": "SUCCESS",
+                "artifacts": [
+                    {
+                        "type": "spec",
+                        "content": {"schema_version": "1.0", "summary": "x", "requirements": ["r"]},
+                    }
+                ],
+                "decisions": [],
+                "logs": [],
+                "next_actions": [],
+            }
+
+    registry = AgentRegistry()
+    registry.register(AgentMetadata(name="artifact_step", agent_class=_ArtifactAgent))
+
+    context = ExecutionContext(run_id="run-hash-1", pipeline_name="pipe-hash-1", inputs={"k": "v"})
+    run_state = PipelineRunState.from_steps(
+        "run-hash-1", "pipe-hash-1", [("artifact_step", "artifact_step")]
+    )
+    step = StepDefinition(name="artifact_step", agent="artifact_step")
+
+    executor = StepExecutor(agent_registry=registry)
+    result = executor.execute_step(step, context, run_state)
+
+    assert result["status"] == "SUCCESS"
+    step_state = run_state.get_step("artifact_step")
+    assert isinstance(step_state.input_hash, str) and step_state.input_hash
+    metadata = result["artifacts"][0].get("metadata", {})
+    assert isinstance(metadata.get("artifact_id"), str)
+    assert metadata.get("step_input_hash") == step_state.input_hash

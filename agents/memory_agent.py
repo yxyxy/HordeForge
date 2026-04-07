@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -61,7 +62,14 @@ class MemoryAgent(BaseAgent):
     def _detect_memory_mode(self, context: dict[str, Any]) -> str:
         if context.get("memory_mode") in {"retrieve", "write", "seed"}:
             return str(context["memory_mode"])
-        if all([context.get("task_description"), context.get("result"), context.get("code_patch")]):
+        write_intent = (
+            context.get("task_description") is not None
+            or context.get("result") is not None
+            or context.get("code_patch") is not None
+            or context.get("final_code_patch") is not None
+            or context.get("fixed_code_patch") is not None
+        )
+        if write_intent:
             return "write"
         if self._resolve_query(context.get("query"), context).strip():
             return "retrieve"
@@ -201,6 +209,47 @@ class MemoryAgent(BaseAgent):
                 logs=["Write mode requires task_description, result, and code_patch."],
                 next_actions=["provide_memory_write_payload"],
             )
+        fallback_result = (
+            isinstance(result_payload, dict)
+            and str(result_payload.get("source", "")).strip() == "memory_agent_fallback"
+        )
+        fallback_patch = (
+            isinstance(code_patch, dict)
+            and str(code_patch.get("note", "")).strip() == "fallback_empty_patch"
+        )
+        files = code_patch.get("files") if isinstance(code_patch, dict) else None
+        patch_has_files = isinstance(files, list) and len(files) > 0
+        if fallback_result or fallback_patch or not patch_has_files:
+            return build_agent_result(
+                status="PARTIAL_SUCCESS",
+                artifact_type="memory_write_result",
+                artifact_content={
+                    "schema_version": "1.1",
+                    "task_description": task_description,
+                    "result": result_payload,
+                    "code_patch": code_patch,
+                    "event_type": "memory_write",
+                    "context_id": None,
+                    "quality_signals": {
+                        "memory_mode": "write",
+                        "write_persisted": False,
+                        "semantic_store_available": self._get_semantic_store(
+                            mode=self._resolve_vector_store_mode()
+                        )
+                        is not None,
+                    },
+                    "plan_provenance": {"source": "write_request", "rebuilt": True},
+                },
+                reason="Memory write skipped because payload is incomplete or fallback-generated.",
+                confidence=0.9,
+                logs=[
+                    "Memory write skipped: incomplete payload.",
+                    f"Fallback result used: {fallback_result}.",
+                    f"Fallback patch used: {fallback_patch}.",
+                    f"Patch has files: {patch_has_files}.",
+                ],
+                next_actions=["provide_memory_write_payload"],
+            )
         payload = {
             "task_description": task_description,
             "repository": repository_metadata.get("full_name", "unknown"),
@@ -273,6 +322,7 @@ class MemoryAgent(BaseAgent):
         return "\n".join(parts)
 
     def _build_memory_context(self, query: str, rag_index: dict[str, Any]) -> dict[str, Any]:
+        persisted_memory_matches = self._memory_store_search(query=query, limit=8)
         semantic_matches = self._semantic_search(query=query, rag_index=rag_index, limit=8)
         docs = rag_index.get("documents") if isinstance(rag_index, dict) else []
         if not isinstance(docs, list):
@@ -297,21 +347,30 @@ class MemoryAgent(BaseAgent):
                 )
         lexical_matches.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
         merged = {}
-        for item in semantic_matches + lexical_matches:
+        for item in persisted_memory_matches + semantic_matches + lexical_matches:
             key = f"{item.get('path')}|{item.get('summary')}"
             if key not in merged or float(item.get("score", 0.0)) > float(
                 merged[key].get("score", 0.0)
             ):
                 merged[key] = item
         ranked = sorted(merged.values(), key=lambda x: float(x.get("score", 0.0)), reverse=True)
-        strategy = (
-            "hybrid"
-            if semantic_matches and lexical_matches
-            else "semantic"
-            if semantic_matches
-            else "lexical_fallback"
+        if persisted_memory_matches and (semantic_matches or lexical_matches):
+            strategy = "hybrid_with_memory"
+        elif persisted_memory_matches:
+            strategy = "memory_store"
+        elif semantic_matches and lexical_matches:
+            strategy = "hybrid"
+        elif semantic_matches:
+            strategy = "semantic"
+        else:
+            strategy = "lexical_fallback"
+        confidence = (
+            "high"
+            if persisted_memory_matches or semantic_matches
+            else "medium"
+            if lexical_matches
+            else "low"
         )
-        confidence = "high" if semantic_matches else "medium" if lexical_matches else "low"
         collection = (
             str(rag_index.get("collection_name") or "repo_chunks")
             if isinstance(rag_index, dict)
@@ -332,6 +391,7 @@ class MemoryAgent(BaseAgent):
                     mode=self._resolve_vector_store_mode()
                 )
                 is not None,
+                "memory_store_matches_count": len(persisted_memory_matches),
                 "semantic_matches_count": len(semantic_matches),
                 "lexical_matches_count": len(lexical_matches),
                 "documents_count_source": "rag_index_or_store",
@@ -340,6 +400,57 @@ class MemoryAgent(BaseAgent):
             },
             "plan_provenance": {"source": "query_and_rag_index", "rebuilt": False},
         }
+
+    def _memory_store_search(self, *, query: str, limit: int) -> list[dict[str, Any]]:
+        if not query.strip():
+            return []
+        if MemoryAgent.storage is None:
+            backend_type = str(os.getenv("HORDEFORGE_STORAGE_BACKEND", "json") or "json").strip()
+            if setup_memory({"type": backend_type}).get("status") != "ready":
+                return []
+        if MemoryAgent.storage is None:
+            return []
+        query_tokens = self._tokenize(query)
+        if not query_tokens:
+            return []
+
+        matches: list[dict[str, Any]] = []
+        try:
+            for item in MemoryAgent.storage.read_all():
+                if not isinstance(item, dict):
+                    continue
+                task_description = str(item.get("task_description", "")).strip()
+                result_payload = item.get("result")
+                code_patch = item.get("code_patch")
+                searchable_blob = " ".join(
+                    [
+                        task_description,
+                        str(item.get("repository", "")),
+                        json.dumps(result_payload, ensure_ascii=False, default=str),
+                        json.dumps(code_patch, ensure_ascii=False, default=str),
+                    ]
+                )
+                score = self._overlap_score(query_tokens, self._tokenize(searchable_blob))
+                if score <= 0:
+                    continue
+                context_id = str(item.get("context_id", "")).strip()
+                summary = task_description or str(result_payload)[:220]
+                path = f"memory://{context_id}" if context_id else "memory://entry"
+                matches.append(
+                    {
+                        "path": path,
+                        "summary": summary[:220],
+                        "score": float(score),
+                        "source": "memory_store",
+                        "context_id": context_id or None,
+                    }
+                )
+        except Exception as error:
+            logger.warning("memory_store_search_failed error=%s", error)
+            return []
+
+        matches.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
+        return matches[: max(1, int(limit))]
 
     def _semantic_search(self, *, query: str, rag_index: dict[str, Any], limit: int):
         if QdrantStore is None:
@@ -543,7 +654,11 @@ def setup_memory(config: dict[str, Any]) -> dict[str, Any]:
 
 def retrieve_context(context_id: str) -> dict[str, Any]:
     try:
-        if MemoryAgent.storage is None and setup_memory({"type": "json"}).get("status") != "ready":
+        backend_type = str(os.getenv("HORDEFORGE_STORAGE_BACKEND", "json") or "json").strip()
+        if (
+            MemoryAgent.storage is None
+            and setup_memory({"type": backend_type}).get("status") != "ready"
+        ):
             return {"status": "not_found", "error": "Failed to initialize storage"}
         for item in MemoryAgent.storage.read_all():
             if item.get("context_id") == context_id:
@@ -557,7 +672,11 @@ def store_context(context: dict[str, Any]) -> dict[str, Any]:
     try:
         if not context:
             return {"status": "failed", "error": "Empty context provided"}
-        if MemoryAgent.storage is None and setup_memory({"type": "json"}).get("status") != "ready":
+        backend_type = str(os.getenv("HORDEFORGE_STORAGE_BACKEND", "json") or "json").strip()
+        if (
+            MemoryAgent.storage is None
+            and setup_memory({"type": backend_type}).get("status") != "ready"
+        ):
             return {"status": "failed", "error": "Failed to initialize storage"}
         import uuid
 

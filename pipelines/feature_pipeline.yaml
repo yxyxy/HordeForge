@@ -145,7 +145,7 @@ steps:
     input:
       task_description: "{{issue.title}}"
       result: "{{review_result}}"
-      code_patch: "{{fixed_code_patch}}"
+      code_patch: "{{ fixed_code_patch | default(code_patch) }}"
     output: "{{memory_write_result}}"
     on_failure: continue
 

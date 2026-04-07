@@ -20,6 +20,7 @@ class RunRecord:
     inputs: dict[str, Any] = field(default_factory=dict)
     idempotency_key: str | None = None
     override_state: str | None = None
+    checkpoint_state: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -43,6 +44,11 @@ class RunRecord:
             inputs=payload.get("inputs", {}) if isinstance(payload.get("inputs"), dict) else {},
             idempotency_key=payload.get("idempotency_key"),
             override_state=payload.get("override_state"),
+            checkpoint_state=(
+                payload.get("checkpoint_state")
+                if isinstance(payload.get("checkpoint_state"), dict)
+                else None
+            ),
         )
 
 
@@ -56,6 +62,8 @@ class StepLogRecord:
     finished_at: str | None = None
     error: str | None = None
     retry_count: int = 0
+    step_input_hash: str | None = None
+    artifact_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -71,6 +79,16 @@ class StepLogRecord:
             finished_at=payload.get("finished_at"),
             error=payload.get("error"),
             retry_count=int(payload.get("retry_count", 0)),
+            step_input_hash=(
+                str(payload.get("step_input_hash")).strip()
+                if payload.get("step_input_hash") is not None
+                else None
+            ),
+            artifact_ids=(
+                [str(item) for item in payload.get("artifact_ids", [])]
+                if isinstance(payload.get("artifact_ids"), list)
+                else []
+            ),
         )
 
 

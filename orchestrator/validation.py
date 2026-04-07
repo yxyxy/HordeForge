@@ -104,6 +104,7 @@ def _validate_against_schema(
 
 class RuntimeSchemaValidator:
     AGENT_RESULT_SCHEMA_NAME = "agent_result.v1.schema.json"
+    PIPELINE_STATE_SCHEMA_NAME = "pipeline_state.v1.schema.json"
 
     CONTEXT_SCHEMA_BY_ARTIFACT: dict[str, str] = {
         "dod": "context.dod.v1.schema.json",
@@ -123,7 +124,7 @@ class RuntimeSchemaValidator:
 
         schemas: dict[str, dict[str, Any]] = {}
         for file_path in self.schema_dir.glob("*.json"):
-            with file_path.open("r", encoding="utf-8") as handle:
+            with file_path.open("r", encoding="utf-8-sig") as handle:
                 schemas[file_path.name] = json.load(handle)
         if self.AGENT_RESULT_SCHEMA_NAME not in schemas:
             raise FileNotFoundError(
@@ -175,6 +176,16 @@ class RuntimeSchemaValidator:
                     )
                 )
 
+        if errors and self.strict_mode:
+            raise SchemaValidationError(f"Schema validation failed: {'; '.join(errors)}")
+        return errors
+
+    def validate_pipeline_state(self, payload: dict[str, Any]) -> list[str]:
+        errors = self._validate_schema(
+            self.PIPELINE_STATE_SCHEMA_NAME,
+            payload,
+            path="pipeline_state",
+        )
         if errors and self.strict_mode:
             raise SchemaValidationError(f"Schema validation failed: {'; '.join(errors)}")
         return errors

@@ -1127,6 +1127,23 @@ class EnhancedCodeGenerator(BaseAgent):
                 )
                 existing_paths.add(normalized_test_path)
 
+        if (
+            test_cases
+            and allow_new_files
+            and not any("test" in path.lower() for path in existing_paths)
+        ):
+            generated_test_path = "tests/test_feature_impl.py"
+            if generated_test_path not in existing_paths:
+                files.append(
+                    {
+                        "path": generated_test_path,
+                        "change_type": "create",
+                        "content": self._generate_test_content(test_cases),
+                    }
+                )
+                existing_paths.add(generated_test_path)
+                decisions.append(f"fallback_test_file_created={generated_test_path}")
+
         patch = {
             "schema_version": "2.0",
             "files": files,

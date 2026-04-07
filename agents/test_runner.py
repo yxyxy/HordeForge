@@ -5,7 +5,9 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,20 @@ class TestRunner(BaseAgent):
     name = "test_runner"
     description = (
         "Runs tests for multiple frameworks (pytest, jest, go test) with isolation and coverage."
+    )
+    _RUNNER_TMP_PREFIX = "test_runner_proc_"
+    _DEFAULT_COPY_IGNORES = (
+        ".git",
+        ".venv",
+        "venv",
+        ".pytest_tmp_runtime",
+        ".hordeforge_data",
+        "__pycache__",
+        ".ruff_cache",
+        ".mypy_cache",
+        "node_modules",
+        ".pytest_cache",
+        ".coverage",
     )
 
     def _detect_test_framework(self, context: dict[str, Any]) -> tuple[str, str]:
@@ -75,8 +91,146 @@ class TestRunner(BaseAgent):
     def _create_isolated_environment(self, source_path: str) -> str:
         temp_dir = tempfile.mkdtemp(prefix="test_runner_isolated_")
         dest_path = os.path.join(temp_dir, os.path.basename(source_path.rstrip("/\\")) or "repo")
-        shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
+        shutil.copytree(
+            source_path,
+            dest_path,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(*self._DEFAULT_COPY_IGNORES),
+        )
         return dest_path
+
+    @staticmethod
+    def _build_subprocess_env(project_path: str, runner_tmp_dir: str) -> dict[str, str]:
+        env = os.environ.copy()
+        env["TMPDIR"] = runner_tmp_dir
+        env["TMP"] = runner_tmp_dir
+        env["TEMP"] = runner_tmp_dir
+        env.setdefault("PIP_NO_CACHE_DIR", "1")
+        env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+        env.setdefault("PIP_PROGRESS_BAR", "off")
+        env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+        env["HF_TEST_PROJECT_PATH"] = project_path
+        return env
+
+    @staticmethod
+    def _resolve_python_dependency_mode(context: dict[str, Any]) -> str:
+        raw_mode = context.get(
+            "python_dependency_mode",
+            os.getenv("HORDEFORGE_TEST_RUNNER_DEP_MODE", "shared_sandbox"),
+        )
+        return str(raw_mode).strip().lower() or "shared_sandbox"
+
+    @staticmethod
+    def _resolve_bootstrap_enabled(context: dict[str, Any]) -> bool:
+        raw_value = context.get(
+            "bootstrap_test_env",
+            os.getenv("HORDEFORGE_TEST_RUNNER_BOOTSTRAP", "0"),
+        )
+        return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _resolve_shared_env_root(context: dict[str, Any]) -> Path:
+        raw_root = context.get(
+            "sandbox_dependency_root",
+            os.getenv("HORDEFORGE_TEST_SANDBOX_DEP_ROOT", ".hordeforge_data/test_runner_envs"),
+        )
+        return Path(str(raw_root)).resolve()
+
+    @staticmethod
+    def _resolve_venv_python(env_dir: Path) -> Path:
+        scripts_dir = "Scripts" if os.name == "nt" else "bin"
+        python_name = "python.exe" if os.name == "nt" else "python"
+        return env_dir / scripts_dir / python_name
+
+    @staticmethod
+    def _requirements_hash(project_path: str) -> str:
+        req_path = Path(project_path) / "requirements.txt"
+        payload = "pytest,pytest-json-report"
+        if req_path.exists():
+            try:
+                payload = req_path.read_text(encoding="utf-8") + "\n" + payload
+            except Exception:
+                pass
+        return sha256(payload.encode("utf-8")).hexdigest()
+
+    def _prepare_shared_python_env(
+        self, project_path: str, context: dict[str, Any], command_env: dict[str, str]
+    ) -> tuple[list[str], str]:
+        logs: list[str] = []
+        root = self._resolve_shared_env_root(context)
+        version_tag = f"py{sys.version_info.major}{sys.version_info.minor}"
+        env_dir = root / version_tag
+        marker_file = env_dir / ".hf_requirements_hash"
+        python_bin = self._resolve_venv_python(env_dir)
+        required_hash = self._requirements_hash(project_path)
+        bootstrap_enabled = self._resolve_bootstrap_enabled(context)
+        selected_python = str(python_bin)
+
+        root.mkdir(parents=True, exist_ok=True)
+        if not python_bin.exists():
+            if bootstrap_enabled:
+                subprocess.run(
+                    ["python", "-m", "venv", str(env_dir)],
+                    cwd=project_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    env=command_env,
+                )
+                logs.append(f"shared env created at {env_dir}")
+            else:
+                logs.append("shared env missing and bootstrap skipped")
+                selected_python = "python"
+
+        current_hash = (
+            marker_file.read_text(encoding="utf-8").strip() if marker_file.exists() else ""
+        )
+        needs_install = current_hash != required_hash
+        if needs_install and bootstrap_enabled:
+            req_txt = Path(project_path) / "requirements.txt"
+            if req_txt.exists():
+                subprocess.run(
+                    [str(python_bin), "-m", "pip", "install", "-r", str(req_txt)],
+                    cwd=project_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    env=command_env,
+                )
+            subprocess.run(
+                [str(python_bin), "-m", "pip", "install", "pytest", "pytest-json-report"],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                env=command_env,
+            )
+            marker_file.parent.mkdir(parents=True, exist_ok=True)
+            marker_file.write_text(required_hash, encoding="utf-8")
+            logs.append("shared env dependency bootstrap completed")
+        elif needs_install:
+            logs.append("shared env dependency bootstrap skipped")
+        else:
+            logs.append("shared env up-to-date")
+
+        try:
+            check_result = subprocess.run(
+                [selected_python, "-m", "pytest", "--version"],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=command_env,
+            )
+            if check_result.returncode == 0:
+                logs.append("dependency check passed")
+            else:
+                logs.append(f"dependency check failed exit_code={check_result.returncode}")
+        except subprocess.TimeoutExpired:
+            logs.append("dependency check failed timeout")
+        except Exception as exc:
+            logs.append(f"dependency check failed: {type(exc).__name__}: {exc}")
+        return logs, selected_python
 
     def _validate_code_patch(
         self, code_patch: dict[str, Any] | None
@@ -259,8 +413,22 @@ class TestRunner(BaseAgent):
 
         return applied
 
-    def _prepare_python_env(self, project_path: str) -> list[str]:
+    def _prepare_python_env(
+        self, project_path: str, context: dict[str, Any], command_env: dict[str, str]
+    ) -> tuple[list[str], str]:
+        dependency_mode = self._resolve_python_dependency_mode(context)
+        if dependency_mode == "shared_sandbox":
+            return self._prepare_shared_python_env(project_path, context, command_env)
+
         logs: list[str] = []
+        auto_install_raw = context.get(
+            "auto_install_test_deps",
+            os.getenv("HORDEFORGE_TEST_RUNNER_AUTO_INSTALL", "0"),
+        )
+        auto_install = str(auto_install_raw).strip().lower() in {"1", "true", "yes", "on"}
+        if not auto_install:
+            logs.append("auto dependency install skipped")
+            return logs, "python"
 
         req_txt = os.path.join(project_path, "requirements.txt")
         if os.path.exists(req_txt):
@@ -271,6 +439,7 @@ class TestRunner(BaseAgent):
                     capture_output=True,
                     text=True,
                     timeout=300,
+                    env=command_env,
                 )
                 logs.append(f"pip install -r requirements.txt exit_code={result.returncode}")
             except Exception as exc:
@@ -283,17 +452,26 @@ class TestRunner(BaseAgent):
                 capture_output=True,
                 text=True,
                 timeout=300,
+                env=command_env,
             )
             logs.append(f"pip install pytest pytest-json-report exit_code={result.returncode}")
         except Exception as exc:
             logs.append(f"pytest install failed: {type(exc).__name__}: {exc}")
 
-        return logs
+        return logs, "python"
+
+    def _make_runner_tmp_dir(self, project_path: str) -> str:
+        """Create a temporary directory inside .pytest_tmp_runtime to avoid polluting project root."""
+        tmp_root = os.path.join(project_path, ".pytest_tmp_runtime")
+        os.makedirs(tmp_root, exist_ok=True)
+        return tempfile.mkdtemp(prefix=self._RUNNER_TMP_PREFIX, dir=tmp_root)
 
     def _run_pytest(self, project_path: str, context: dict[str, Any]) -> dict[str, Any]:
-        prep_logs = self._prepare_python_env(project_path)
+        runner_tmp_dir = self._make_runner_tmp_dir(project_path)
+        command_env = self._build_subprocess_env(project_path, runner_tmp_dir)
+        prep_logs, python_bin = self._prepare_python_env(project_path, context, command_env)
 
-        cmd = ["python", "-m", "pytest"]
+        cmd = [python_bin, "-m", "pytest"]
         if context.get("coverage_enabled", False):
             cmd.extend(["--cov", "--cov-report", "json", "--cov-report", "html"])
 
@@ -343,6 +521,7 @@ class TestRunner(BaseAgent):
                 capture_output=True,
                 text=True,
                 timeout=300,
+                env=command_env,
             )
             payload = {
                 "framework": "pytest",
@@ -391,6 +570,8 @@ class TestRunner(BaseAgent):
                 "command": " ".join(cmd),
                 "preparation_logs": prep_logs,
             }
+        finally:
+            shutil.rmtree(runner_tmp_dir, ignore_errors=True)
 
     def _extract_pytest_coverage(self, project_path: str) -> dict[str, Any] | None:
         cov_json_path = os.path.join(project_path, ".coverage.json")
@@ -425,6 +606,8 @@ class TestRunner(BaseAgent):
         return None
 
     def _run_jest(self, project_path: str, context: dict[str, Any]) -> dict[str, Any]:
+        runner_tmp_dir = self._make_runner_tmp_dir(project_path)
+        command_env = self._build_subprocess_env(project_path, runner_tmp_dir)
         cmd = ["npx", "jest"]
         if context.get("coverage_enabled", False):
             cmd.extend(["--coverage", "--coverageReporters", "json", "html"])
@@ -440,6 +623,7 @@ class TestRunner(BaseAgent):
                 capture_output=True,
                 text=True,
                 timeout=300,
+                env=command_env,
             )
             payload = {
                 "framework": "jest",
@@ -469,6 +653,8 @@ class TestRunner(BaseAgent):
                 "stderr": str(exc),
                 "command": " ".join(cmd),
             }
+        finally:
+            shutil.rmtree(runner_tmp_dir, ignore_errors=True)
 
     def _extract_jest_coverage(self, project_path: str) -> dict[str, Any] | None:
         summary_path = os.path.join(project_path, "coverage", "coverage-summary.json")
@@ -481,6 +667,8 @@ class TestRunner(BaseAgent):
         return None
 
     def _run_go_test(self, project_path: str, context: dict[str, Any]) -> dict[str, Any]:
+        runner_tmp_dir = self._make_runner_tmp_dir(project_path)
+        command_env = self._build_subprocess_env(project_path, runner_tmp_dir)
         cmd = ["go", "test"]
         if context.get("coverage_enabled", False):
             cmd.extend(["-cover", "-coverprofile=coverage.out", "-covermode=atomic"])
@@ -497,6 +685,7 @@ class TestRunner(BaseAgent):
                 capture_output=True,
                 text=True,
                 timeout=300,
+                env=command_env,
             )
             payload = {
                 "framework": "go_test",
@@ -526,6 +715,8 @@ class TestRunner(BaseAgent):
                 "stderr": str(exc),
                 "command": " ".join(cmd),
             }
+        finally:
+            shutil.rmtree(runner_tmp_dir, ignore_errors=True)
 
     def _extract_go_coverage(self, project_path: str) -> dict[str, Any] | None:
         coverage_file = os.path.join(project_path, "coverage.out")
@@ -653,9 +844,43 @@ class TestRunner(BaseAgent):
 
         return None
 
+    @staticmethod
+    def _infer_mock_execution(
+        context: dict[str, Any], latest_code_patch: dict[str, Any] | None
+    ) -> bool:
+        if "mock_test_execution" in context or "mock_mode" in context:
+            return False
+
+        if not isinstance(latest_code_patch, dict):
+            return False
+
+        if (
+            "expected_failures" not in latest_code_patch
+            and "remaining_failures" not in latest_code_patch
+        ):
+            return False
+
+        execution_hints = {
+            "project_path",
+            "project_metadata",
+            "pytest_args",
+            "jest_args",
+            "go_test_args",
+            "ci_failure_context",
+            "coverage_enabled",
+            "isolate_test_environment",
+            "python_dependency_mode",
+            "auto_install_test_deps",
+            "bootstrap_test_env",
+            "sandbox_dependency_root",
+        }
+        return not any(key in context for key in execution_hints)
+
     def run(self, context: dict[str, Any]) -> dict:
         latest_code_patch = self._resolve_latest_code_patch(context)
         use_mock = bool(context.get("mock_test_execution", context.get("mock_mode", False)))
+        if not use_mock:
+            use_mock = self._infer_mock_execution(context, latest_code_patch)
 
         valid, reason = self._validate_execution_input(context, latest_code_patch)
         if not valid and not use_mock:
@@ -732,7 +957,7 @@ class TestRunner(BaseAgent):
 
         framework, detected_from = self._detect_test_framework(context)
         source_path, path_source = self._resolve_project_path(context)
-        requested_isolation = bool(context.get("isolate_test_environment", True))
+        requested_isolation = bool(context.get("isolate_test_environment", False))
         use_isolation = requested_isolation
         execution_path = source_path
         if requested_isolation:
@@ -846,6 +1071,7 @@ class TestRunner(BaseAgent):
         finally:
             if use_isolation:
                 try:
-                    shutil.rmtree(execution_path)
+                    sandbox_root = str(Path(execution_path).parent)
+                    shutil.rmtree(sandbox_root, ignore_errors=True)
                 except Exception:
                     pass

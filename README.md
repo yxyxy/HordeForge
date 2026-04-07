@@ -307,7 +307,7 @@ code_generator -> test_runner -> fix_agent -> review_agent
 ## Development
 
 ### Requirements
-- Python 3.10+
+- Python 3.11+
 - Docker and docker-compose
 - Git
 

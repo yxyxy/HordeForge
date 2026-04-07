@@ -423,12 +423,12 @@ class OpenAIWrapper(LLMWrapper, ApiHandler):
         """Get current model info."""
         model_info = ModelInfo(
             name=self._model,
-            max_tokens=4096,
-            context_window=128000,
-            supports_images=True,
-            supports_prompt_cache=False,
-            input_price=2.5,
-            output_price=10.0,
+            maxTokens=4096,
+            contextWindow=128000,
+            supportsImages=True,
+            supportsPromptCache=False,
+            inputPrice=2.5,
+            outputPrice=10.0,
             temperature=0.7,
         )
         return self._model, model_info
@@ -595,15 +595,15 @@ class AnthropicWrapper(LLMWrapper, ApiHandler):
         """Get current model info."""
         model_info = ModelInfo(
             name=self._model,
-            max_tokens=6400,
-            context_window=2000,
-            supports_images=True,
-            supports_prompt_cache=True,
-            supports_reasoning=True,
-            input_price=3.0,
-            output_price=15.0,
-            cache_writes_price=3.75,
-            cache_reads_price=0.3,
+            maxTokens=6400,
+            contextWindow=200000,
+            supportsImages=True,
+            supportsPromptCache=True,
+            supportsReasoning=True,
+            inputPrice=3.0,
+            outputPrice=15.0,
+            cacheWritesPrice=3.75,
+            cacheReadsPrice=0.3,
             temperature=1.0,
         )
         return self._model, model_info
@@ -734,17 +734,17 @@ class GoogleGenAIWrapper(LLMWrapper, ApiHandler):
         """Get current model info."""
         model_info = ModelInfo(
             name=self._model,
-            max_tokens=8192,
-            context_window=1048576,
-            supports_images=True,
-            supports_prompt_cache=True,
-            supports_reasoning=True,
-            input_price=0.15,
-            output_price=0.6,
-            cache_writes_price=1.0,
-            cache_reads_price=0.025,
+            maxTokens=8192,
+            contextWindow=1048576,
+            supportsImages=True,
+            supportsPromptCache=True,
+            supportsReasoning=True,
+            inputPrice=0.15,
+            outputPrice=0.6,
+            cacheWritesPrice=1.0,
+            cacheReadsPrice=0.025,
             temperature=1.0,
-            supports_global_endpoint=True,
+            supportsGlobalEndpoint=True,
         )
         return self._model, model_info
 

@@ -637,3 +637,220 @@ loops:
 
     assert result["status"] == "SUCCESS"
     assert result["steps"]["review_agent"]["status"] == "SUCCESS"
+
+
+def test_engine_emits_checkpoint_payload_with_context_snapshot():
+    pipeline_path = Path("tests/unit/_tmp_checkpoint_pipeline.yaml")
+    pipeline_path.write_text(
+        """
+pipeline_name: checkpoint_pipeline
+steps:
+  - name: first_step
+    agent: success_agent
+    on_failure: stop_pipeline
+""".strip(),
+        encoding="utf-8",
+    )
+
+    checkpoint_payloads: list[dict[str, object]] = []
+
+    def _agent_factory(agent_name: str):
+        if agent_name == "success_agent":
+            return SuccessAgent()
+        raise RuntimeError(f"unknown agent: {agent_name}")
+
+    engine = OrchestratorEngine(
+        pipelines_dir="pipelines",
+        step_executor=StepExecutor(agent_factory=_agent_factory),
+    )
+
+    def _on_checkpoint(payload: dict[str, object]) -> None:
+        checkpoint_payloads.append(payload)
+
+    try:
+        result = engine.run(
+            str(pipeline_path),
+            {"issue": "checkpoint-test"},
+            run_id="run-checkpoint-payload",
+            metadata={"__checkpoint_callback": _on_checkpoint},
+        )
+    finally:
+        if pipeline_path.exists():
+            pipeline_path.unlink()
+
+    assert result["status"] == "SUCCESS"
+    assert checkpoint_payloads
+    last_payload = checkpoint_payloads[-1]
+    checkpoint = last_payload.get("checkpoint")
+    assert isinstance(checkpoint, dict)
+    assert isinstance(checkpoint.get("context_snapshot"), dict)
+    assert checkpoint.get("step_cursor") == 1
+
+
+def test_engine_resume_skips_step_replay_when_input_hash_matches():
+    pipeline_path = Path("tests/unit/_tmp_resume_skip_pipeline.yaml")
+    pipeline_path.write_text(
+        """
+pipeline_name: resume_skip_pipeline
+steps:
+  - name: step_a
+    agent: counted_a
+    on_failure: stop_pipeline
+  - name: step_b
+    agent: counted_b
+    on_failure: stop_pipeline
+""".strip(),
+        encoding="utf-8",
+    )
+
+    calls = {"a": 0, "b": 0}
+
+    class CountedAgent:
+        def __init__(self, key: str):
+            self.key = key
+
+        def run(self, _context):
+            calls[self.key] += 1
+            return {
+                "status": "SUCCESS",
+                "artifacts": [],
+                "decisions": [],
+                "logs": [],
+                "next_actions": [],
+            }
+
+    def _agent_factory(agent_name: str):
+        if agent_name == "counted_a":
+            return CountedAgent("a")
+        if agent_name == "counted_b":
+            return CountedAgent("b")
+        raise RuntimeError(f"unknown agent: {agent_name}")
+
+    engine = OrchestratorEngine(
+        pipelines_dir="pipelines",
+        step_executor=StepExecutor(agent_factory=_agent_factory),
+    )
+
+    try:
+        first = engine.run(
+            str(pipeline_path),
+            {"issue": "resume-hash"},
+            run_id="run-resume-hash",
+        )
+
+        resumed_state = dict(first["run_state"])
+        resumed_state["current_step_index"] = 0
+
+        second = engine.run(
+            str(pipeline_path),
+            {"issue": "resume-hash"},
+            run_id="run-resume-hash",
+            resume_run_state=resumed_state,
+            resume_step_results=first["steps"],
+        )
+    finally:
+        if pipeline_path.exists():
+            pipeline_path.unlink()
+
+    assert first["status"] == "SUCCESS"
+    assert second["status"] == "SUCCESS"
+    assert calls == {"a": 1, "b": 1}
+
+
+def test_engine_resume_rejects_invalid_pipeline_state_payload():
+    pipeline_path = Path("tests/unit/_tmp_resume_invalid_pipeline_state.yaml")
+    pipeline_path.write_text(
+        """
+pipeline_name: resume_invalid_pipeline_state
+steps:
+  - name: step_a
+    agent: success_agent
+    on_failure: stop_pipeline
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def _agent_factory(agent_name: str):
+        if agent_name == "success_agent":
+            return SuccessAgent()
+        raise RuntimeError(f"unknown agent: {agent_name}")
+
+    engine = OrchestratorEngine(
+        pipelines_dir="pipelines",
+        step_executor=StepExecutor(agent_factory=_agent_factory),
+    )
+
+    try:
+        with pytest.raises(ValueError, match="pipeline_state"):
+            engine.run(
+                str(pipeline_path),
+                {},
+                run_id="run-invalid-pipeline-state",
+                resume_run_state={
+                    "run_id": "run-invalid-pipeline-state",
+                    "pipeline_name": "resume_invalid_pipeline_state",
+                    "steps": [{"name": "step_a", "agent": "success_agent", "status": "PENDING"}],
+                    "current_step_index": 0,
+                    "run_status": "PENDING",
+                    "pipeline_state": {
+                        "run_id": "run-invalid-pipeline-state",
+                        "pipeline_name": "resume_invalid_pipeline_state",
+                        "artifacts": {},
+                        "pending_steps": [],
+                        "failed_steps": [],
+                        "locks": [],
+                        "retry_state": {},
+                    },
+                },
+                resume_step_results={},
+            )
+    finally:
+        if pipeline_path.exists():
+            pipeline_path.unlink()
+
+
+def test_engine_resume_preserves_retry_metadata_between_runs():
+    pipeline_path = Path("tests/unit/_tmp_resume_retry_state_pipeline.yaml")
+    pipeline_path.write_text(
+        """
+pipeline_name: resume_retry_state_pipeline
+steps:
+  - name: retrying_step
+    agent: always_fail_agent
+    on_failure: retry_step
+    retry_limit: 2
+""".strip(),
+        encoding="utf-8",
+    )
+
+    fail_state = {"attempts": 0}
+
+    def _agent_factory(agent_name: str):
+        if agent_name == "always_fail_agent":
+            return AlwaysFailAgent(fail_state)
+        raise RuntimeError(f"unknown agent: {agent_name}")
+
+    engine = OrchestratorEngine(
+        pipelines_dir="pipelines",
+        step_executor=StepExecutor(agent_factory=_agent_factory),
+        retry_policy=RetryPolicy(retry_limit=2, backoff_seconds=0.0),
+    )
+
+    try:
+        first = engine.run(str(pipeline_path), {}, run_id="run-retry-state")
+        assert first["status"] == "BLOCKED"
+        assert fail_state["attempts"] == 3
+
+        second = engine.run(
+            str(pipeline_path),
+            {},
+            run_id="run-retry-state",
+            resume_run_state=first["run_state"],
+            resume_step_results=first["steps"],
+        )
+    finally:
+        if pipeline_path.exists():
+            pipeline_path.unlink()
+
+    assert second["status"] == "BLOCKED"
+    assert fail_state["attempts"] == 4

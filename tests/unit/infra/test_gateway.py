@@ -245,6 +245,34 @@ def test_drain_queue_once_executes_queued_task():
     assert completed_task.json()["status"] == "SUCCEEDED"
 
 
+def test_startup_queue_autodrain_worker_starts_non_daemon_thread(monkeypatch):
+    class DummyThread:
+        def __init__(self, *, target, name, daemon):
+            self.target = target
+            self.name = name
+            self.daemon = daemon
+            self._alive = False
+
+        def start(self):
+            self._alive = True
+
+        def is_alive(self):
+            return self._alive
+
+        def join(self, timeout=None):
+            self._alive = False
+
+    monkeypatch.setattr(gateway, "_queue_autodrain_enabled", lambda: True)
+    monkeypatch.setattr(gateway, "STORAGE_BACKEND_REQUESTED", "memory")
+    monkeypatch.setattr(gateway.threading, "Thread", DummyThread)
+    gateway.QUEUE_AUTODRAIN_THREAD = None
+
+    gateway.startup_queue_autodrain_worker()
+
+    assert gateway.QUEUE_AUTODRAIN_THREAD is not None
+    assert gateway.QUEUE_AUTODRAIN_THREAD.daemon is False
+
+
 def test_queue_drain_requires_permissions():
     client = TestClient(app)
     client.post(

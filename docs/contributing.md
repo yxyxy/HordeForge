@@ -19,7 +19,7 @@ This document explains how to contribute to the HordeForge project. We welcome c
 
 ### Prerequisites
 
-- Python 3.10 or higher
+- Python 3.11 or higher
 - Docker and Docker Compose
 - Git
 - A GitHub account

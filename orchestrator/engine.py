@@ -8,21 +8,24 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import sha256
+from threading import RLock
 from typing import Any
 from uuid import uuid4
 
 from logging_utils import redact_mapping
 from orchestrator.context import ExecutionContext
 from orchestrator.executor import StepExecutor
-from orchestrator.hooks import trigger_memory_hook
+from orchestrator.hooks import MemoryHook, trigger_memory_hook, trigger_memory_promotion
 from orchestrator.loader import LoopDefinition, PipelineDefinition, PipelineLoader, StepDefinition
 from orchestrator.override import RUN_OVERRIDE_REGISTRY
 from orchestrator.parallel import build_step_dependency_graph, select_lock_aware_batch
+from orchestrator.pipeline_state import PipelineState
 from orchestrator.pipeline_validator import PipelineValidationError, PipelineValidator
 from orchestrator.retry import RetryPolicy
 from orchestrator.state import PipelineRunState
 from orchestrator.status import StepStatus
 from orchestrator.summary import RunSummaryBuilder
+from orchestrator.validation import RuntimeSchemaValidator, SchemaValidationError
 from registry.bootstrap import init_registries
 from registry.runtime_adapter import RuntimeRegistryAdapter
 from rules.loader import DEFAULT_RULE_SET_VERSION, RulePackLoader
@@ -110,7 +113,11 @@ class OrchestratorEngine:
                 self._pipeline_validator = PipelineValidator()
         else:
             self._pipeline_validator = None
+        self._state_validator = RuntimeSchemaValidator(
+            strict_mode=strict_schema_validation,
+        )
         self.logger = logging.getLogger("hordeforge.orchestrator.engine")
+        self._checkpoint_lock = RLock()
 
     @staticmethod
     def _now_iso() -> str:
@@ -285,14 +292,29 @@ class OrchestratorEngine:
         if isinstance(step.condition, str) and step.condition.strip():
             condition_matched = self._evaluate_loop_condition(step.condition, context.state)
             if not condition_matched:
+                skipped_output = {
+                    "status": "SKIPPED",
+                    "artifacts": [],
+                    "decisions": [
+                        {
+                            "reason": f"Condition not met: {step.condition}",
+                            "confidence": 1.0,
+                        }
+                    ],
+                    "logs": [f"Step skipped: condition not met ({step.condition})."],
+                    "next_actions": [],
+                }
                 finished_at = self._now_iso()
                 run_state.mark_step_status(
                     step.name,
                     StepStatus.SKIPPED,
                     finished_at=finished_at,
                     error=f"Step condition not met: {step.condition}",
+                    output=skipped_output,
                 )
+                context.record_step_result(step.name, skipped_output)
                 run_state.advance_index()
+                self._emit_checkpoint(context=context, run_state=run_state)
                 self._log_event(
                     logging.INFO,
                     context.run_id,
@@ -301,31 +323,27 @@ class OrchestratorEngine:
                     condition=step.condition,
                     correlation_id=context.metadata.get("correlation_id"),
                 )
-                return (
-                    {
-                        "status": "SKIPPED",
-                        "artifacts": [],
-                        "decisions": [
-                            {
-                                "reason": f"Condition not met: {step.condition}",
-                                "confidence": 1.0,
-                            }
-                        ],
-                        "logs": [f"Step skipped: condition not met ({step.condition})."],
-                        "next_actions": [],
-                    },
-                    False,
-                )
+                return skipped_output, False
 
         override_request = RUN_OVERRIDE_REGISTRY.get(context.run_id)
         if override_request is not None and override_request.action == "stop":
+            blocked_output = {
+                "status": "BLOCKED",
+                "artifacts": [],
+                "decisions": [],
+                "logs": ["Run stopped by operator override."],
+                "next_actions": [],
+            }
             run_state.set_run_status(StepStatus.BLOCKED)
             run_state.mark_step_status(
                 step.name,
                 StepStatus.SKIPPED,
                 finished_at=self._now_iso(),
                 error=f"Run stopped by override: {override_request.reason or 'no reason provided'}",
+                output=blocked_output,
             )
+            context.record_step_result(step.name, blocked_output)
+            self._emit_checkpoint(context=context, run_state=run_state)
             self._log_event(
                 logging.WARNING,
                 context.run_id,
@@ -335,19 +353,19 @@ class OrchestratorEngine:
                 reason=override_request.reason,
                 correlation_id=context.metadata.get("correlation_id"),
             )
-            return {
-                "status": "BLOCKED",
-                "artifacts": [],
-                "decisions": [],
-                "logs": ["Run stopped by operator override."],
-                "next_actions": [],
-            }, True
+            return blocked_output, True
 
-        retry_attempt = 0
+        try:
+            existing_step_state = run_state.get_step(step.name)
+            retry_attempt = max(0, int(existing_step_state.attempts) - 1)
+        except Exception:
+            retry_attempt = 0
         while True:
             output = self.step_executor.execute_step(step, context, run_state)
+            context.record_step_result(step.name, output)
             if self._is_step_success(output):
                 run_state.advance_index()
+                self._emit_checkpoint(context=context, run_state=run_state)
                 return output, False
 
             action = self._resolve_policy_action(step.on_failure)
@@ -380,13 +398,16 @@ class OrchestratorEngine:
                     error=f"Step failed but continued by policy: {step.on_failure}",
                 )
                 run_state.advance_index()
+                self._emit_checkpoint(context=context, run_state=run_state)
                 return output, False
 
             if action == "block":
                 run_state.set_run_status(StepStatus.BLOCKED)
+                self._emit_checkpoint(context=context, run_state=run_state)
                 return output, True
 
             run_state.set_run_status(StepStatus.FAILED)
+            self._emit_checkpoint(context=context, run_state=run_state)
             return output, True
 
     def _execute_loop(
@@ -559,6 +580,75 @@ class OrchestratorEngine:
             return "PARTIAL_SUCCESS"
         return StepStatus.SUCCESS.value
 
+    def _sync_and_validate_pipeline_state(
+        self,
+        *,
+        context: ExecutionContext,
+        run_state: PipelineRunState,
+    ) -> None:
+        context.sync_pipeline_state_from_run_state(run_state)
+        payload = context.pipeline_state.model_dump(mode="json")
+        try:
+            errors = self._state_validator.validate_pipeline_state(payload)
+        except SchemaValidationError as exc:
+            raise ValueError(f"Invalid pipeline_state payload: {exc}") from exc
+
+        if errors:
+            raise ValueError("Invalid pipeline_state payload: " + "; ".join(errors))
+
+    def _build_checkpoint_payload(
+        self,
+        *,
+        context: ExecutionContext,
+        run_state: PipelineRunState,
+        status: str,
+    ) -> dict[str, Any]:
+        retry_metadata: dict[str, dict[str, Any]] = {}
+        for step in run_state.steps:
+            retry_metadata[step.name] = {
+                "attempts": step.attempts,
+                "status": step.status.value,
+                "input_hash": step.input_hash,
+                "error": step.error,
+            }
+
+        return {
+            "run_id": context.run_id,
+            "pipeline_name": context.pipeline_name,
+            "status": status,
+            "steps": deepcopy(context.step_results),
+            "run_state": run_state.to_dict(),
+            "checkpoint": {
+                "step_cursor": run_state.current_step_index,
+                "run_status": run_state.run_status,
+                "context_snapshot": deepcopy(context.state),
+                "step_results_snapshot": deepcopy(context.step_results),
+                "run_state_snapshot": run_state.to_dict(),
+                "retry_metadata": retry_metadata,
+            },
+        }
+
+    def _emit_checkpoint(
+        self,
+        *,
+        context: ExecutionContext,
+        run_state: PipelineRunState,
+        status: str | None = None,
+    ) -> None:
+        self._sync_and_validate_pipeline_state(context=context, run_state=run_state)
+        callback = context.metadata.get("__checkpoint_callback")
+        if not callable(callback):
+            return
+
+        checkpoint_status = status or run_state.run_status or StepStatus.RUNNING.value
+        payload = self._build_checkpoint_payload(
+            context=context,
+            run_state=run_state,
+            status=checkpoint_status,
+        )
+        with self._checkpoint_lock:
+            callback(payload)
+
     def run(
         self,
         pipeline_name: str,
@@ -619,6 +709,25 @@ class OrchestratorEngine:
             inputs=runtime_inputs,
             metadata=raw_metadata,
         )
+        context.set_state_value(MemoryHook.PROMOTION_MODE_KEY, "deferred")
+
+        resume_pipeline_state_payload = (
+            resumed_state_payload.get("pipeline_state")
+            if isinstance(resumed_state_payload, dict)
+            else None
+        )
+        if resume_pipeline_state_payload is not None:
+            if not isinstance(resume_pipeline_state_payload, dict):
+                raise ValueError("Resume pipeline_state payload must be an object")
+            try:
+                errors = self._state_validator.validate_pipeline_state(
+                    resume_pipeline_state_payload
+                )
+            except SchemaValidationError as exc:
+                raise ValueError(f"Invalid resume pipeline_state payload: {exc}") from exc
+            if errors:
+                raise ValueError("Invalid resume pipeline_state payload: " + "; ".join(errors))
+            context.pipeline_state = PipelineState.model_validate(resume_pipeline_state_payload)
         if resumed_state_payload is None:
             run_state = PipelineRunState.from_steps(
                 run_id=run_id,
@@ -656,6 +765,7 @@ class OrchestratorEngine:
             start_step_index = max(0, min(len(pipeline.steps), raw_step_index))
             run_state.current_step_index = start_step_index
 
+        self._sync_and_validate_pipeline_state(context=context, run_state=run_state)
         steps_to_execute = pipeline.steps[start_step_index:]
         self._log_event(
             logging.INFO,
@@ -674,13 +784,49 @@ class OrchestratorEngine:
         if resumed_state_payload is not None:
             for idx, step in enumerate(steps_to_execute):
                 has_next = idx < len(steps_to_execute) - 1
+                absolute_step_index = start_step_index + idx
+                try:
+                    step_state = run_state.get_step(step.name)
+                except KeyError:
+                    step_state = None
+
+                replay_state = dict(context.state)
+                for future_step in pipeline.steps[absolute_step_index:]:
+                    replay_state.pop(future_step.name, None)
+                step_input_hash = self.step_executor.calculate_step_input_hash(step, replay_state)
+                if (
+                    step_state is not None
+                    and step_state.status
+                    in {
+                        StepStatus.SUCCESS,
+                        StepStatus.PARTIAL_SUCCESS,
+                        StepStatus.SKIPPED,
+                    }
+                    and isinstance(step_state.input_hash, str)
+                    and step_state.input_hash == step_input_hash
+                    and step.name in context.step_results
+                ):
+                    run_state.current_step_index = max(
+                        run_state.current_step_index,
+                        absolute_step_index + 1,
+                    )
+                    self._emit_checkpoint(context=context, run_state=run_state)
+                    self._log_event(
+                        logging.INFO,
+                        run_id,
+                        "step_replay_skipped",
+                        step_name=step.name,
+                        input_hash=step_input_hash,
+                        correlation_id=correlation_id,
+                    )
+                    continue
+
                 output, should_stop = self._execute_step_with_policy(
                     step, context, run_state, has_next_step=has_next
                 )
                 step_results[step.name] = output
                 if should_stop:
                     break
-                # Вызываем memory hook после успешного выполнения шага
                 trigger_memory_hook(step.name, output, context.state)
         else:
             executed_step_names: set[str] = set()
@@ -758,6 +904,21 @@ class OrchestratorEngine:
 
         final_status = self._derive_final_status(run_state, step_results)
         run_state.run_status = final_status
+        promoted_entries = trigger_memory_promotion(context.state, run_status=final_status)
+        if promoted_entries:
+            self._log_event(
+                logging.INFO,
+                run_id,
+                "memory_promotion_completed",
+                promoted_entries=promoted_entries,
+                correlation_id=correlation_id,
+            )
+
+        self._emit_checkpoint(
+            context=context,
+            run_state=run_state,
+            status=final_status,
+        )
         summary = self.summary_builder.build(run_state, step_results)
         self._log_event(
             logging.INFO if final_status not in {"FAILED", "BLOCKED"} else logging.ERROR,

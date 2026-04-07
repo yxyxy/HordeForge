@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import api.main as webhook_api
 import scheduler.gateway as gateway
+from agents.context_utils import build_agent_result
 from api.security import compute_github_signature
 from hordeforge_config import RunConfig
 from scheduler.idempotency import IdempotencyStore
@@ -71,6 +72,48 @@ def _clean_runtime_state(monkeypatch):
 
     monkeypatch.setenv("HORDEFORGE_WEBHOOK_SECRET", "test-webhook-secret")
     monkeypatch.setattr(webhook_api, "config", RunConfig.from_env())
+
+    def _fast_rag_initializer_run(self, _context):
+        return build_agent_result(
+            status="SUCCESS",
+            artifact_type="rag_index",
+            artifact_content={
+                "index_id": "it-fast-rag-index",
+                "indexed_files_count": 1,
+                "total_symbols_count": 1,
+                "source_repo": "acme/hordeforge",
+                "vector_store_status": False,
+                "keyword_index_status": True,
+                "collection_name": "repo_chunks",
+                "rag_working": True,
+                "reused_existing_index": True,
+            },
+            reason="Fast integration test stub for RAG initializer.",
+            confidence=1.0,
+            logs=["RAG initializer fast stub used in integration tests."],
+            next_actions=["memory_agent"],
+        )
+
+    def _fast_test_runner_run(self, _context):
+        return build_agent_result(
+            status="SUCCESS",
+            artifact_type="test_results",
+            artifact_content={
+                "exit_code": 0,
+                "passed": 1,
+                "failed": 0,
+                "framework": "pytest",
+                "summary": "Fast integration test stub.",
+            },
+            reason="Fast integration test stub for test runner.",
+            confidence=1.0,
+            logs=["Test runner fast stub used in integration tests."],
+            next_actions=["review_agent"],
+        )
+
+    monkeypatch.setattr("agents.rag_initializer.RagInitializer.run", _fast_rag_initializer_run)
+    monkeypatch.setattr("agents.test_runner.TestRunner.run", _fast_test_runner_run)
+
     yield
     shutil.rmtree(storage_dir, ignore_errors=True)
 
