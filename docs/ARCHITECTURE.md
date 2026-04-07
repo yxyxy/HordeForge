@@ -60,6 +60,7 @@ HordeForge — автономная pipeline-ориентированная си
 - `agents/registry/` — Agent registry (runtime)
 - `agents/ci_monitor_agent/` — CI Monitor Agent (мониторинг CI/CD процессов)
 - `agents/dependency_checker_agent/` — Dependency Checker Agent (проверка зависимостей на уязвимости и устаревание)
+- `agents/ci_incident_handoff.py` — CI Incident Handoff (создание инцидентов CI с триажем и меткой agent:opened)
 - `agents/memory_agent.py` — Memory management
 - `agents/rag_initializer.py` — RAG initialization
 - `agents/repo_connector.py` — Repository connector

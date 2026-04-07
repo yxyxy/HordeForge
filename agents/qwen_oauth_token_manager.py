@@ -22,7 +22,8 @@ class QwenOAuthTokenManager:
     _TOKEN_ENDPOINT = "https://chat.qwen.ai/api/v1/oauth2/token"
     _CLIENT_ID = "f0304373b74a44d2b584a3fb70ca9e56"
     _TOKEN_REFRESH_BUFFER_MS = 30_000
-    _LOCK_TIMEOUT_MS = 10_000
+    _LOCK_TIMEOUT_MS = 35_000
+    _LOCK_STALE_MS = 120_000
     _CACHE_CHECK_INTERVAL_MS = 5_000
 
     _refresh_locks: dict[str, Lock] = {}
@@ -163,28 +164,30 @@ class QwenOAuthTokenManager:
                 lock_acquired = True
                 break
             except FileExistsError:
+                self._maybe_break_stale_file_lock()
                 time.sleep(0.05 + random.random() * 0.05)
             except Exception:
                 time.sleep(0.05 + random.random() * 0.05)
 
         if not lock_acquired:
-            raise RuntimeError("Failed to acquire lock for Qwen OAuth token refresh")
+            self._maybe_break_stale_file_lock(force=True)
+            try:
+                lock_fd = os.open(
+                    str(self._lock_path),
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                )
+                os.write(lock_fd, str(os.getpid()).encode("utf-8"))
+                lock_acquired = True
+            except Exception as exc:
+                logger.warning(
+                    "qwen_oauth_refresh_without_file_lock reason=%s",
+                    str(exc)[:300],
+                )
+                self._refresh_without_file_lock()
+                return
 
         try:
-            self._reload_if_changed(force=True)
-            if self._is_token_valid(self._credentials):
-                return
-            refreshed = self._refresh_access_token()
-            self._credentials = refreshed
-            self._save_credentials(refreshed)
-            self._persist_secret(refreshed)
-            self._memory_cache[self._key] = {
-                "credentials": dict(refreshed),
-                "file_mtime": self._credentials_path.stat().st_mtime
-                if self._credentials_path.exists()
-                else 0.0,
-                "last_check_ms": int(time.time() * 1000),
-            }
+            self._refresh_and_persist_if_needed()
         finally:
             try:
                 if lock_fd is not None:
@@ -195,6 +198,54 @@ class QwenOAuthTokenManager:
                 self._lock_path.unlink(missing_ok=True)
             except Exception:
                 pass
+
+    def _refresh_without_file_lock(self) -> None:
+        self._refresh_and_persist_if_needed()
+
+    def _refresh_and_persist_if_needed(self) -> None:
+        self._reload_if_changed(force=True)
+        if self._is_token_valid(self._credentials):
+            return
+        refreshed = self._refresh_access_token()
+        self._credentials = refreshed
+        try:
+            self._save_credentials(refreshed)
+        except Exception as exc:
+            logger.warning("qwen_oauth_save_credentials_failed error=%s", str(exc)[:300])
+        try:
+            self._persist_secret(refreshed)
+        except Exception as exc:
+            logger.warning("qwen_oauth_persist_secret_failed error=%s", str(exc)[:300])
+        self._memory_cache[self._key] = {
+            "credentials": dict(refreshed),
+            "file_mtime": self._credentials_path.stat().st_mtime
+            if self._credentials_path.exists()
+            else 0.0,
+            "last_check_ms": int(time.time() * 1000),
+        }
+
+    def _maybe_break_stale_file_lock(self, *, force: bool = False) -> None:
+        try:
+            stat = self._lock_path.stat()
+        except FileNotFoundError:
+            return
+        except Exception:
+            return
+
+        age_ms = (time.time() - stat.st_mtime) * 1000
+        if not force and age_ms < self._LOCK_STALE_MS:
+            return
+
+        try:
+            self._lock_path.unlink(missing_ok=True)
+            logger.warning(
+                "qwen_oauth_stale_lock_removed path=%s age_ms=%.0f force=%s",
+                self._lock_path,
+                age_ms,
+                force,
+            )
+        except Exception:
+            return
 
     def _refresh_access_token(self) -> dict[str, Any]:
         refresh_token = self._credentials.get("refresh_token")

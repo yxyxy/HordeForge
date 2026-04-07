@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 
-from storage.backends import StorageBackend, get_storage_backend
+from storage.backends import StorageBackend, get_current_log_path, get_storage_backend
 from storage.models import StepLogRecord
 
 _DEFAULT_TABLE_NAME = "hordeforge_step_logs"
@@ -22,7 +21,7 @@ class StepLogRepository:
         if backend is None:
             resolved_type = backend_type or os.getenv("HORDEFORGE_STORAGE_BACKEND", "json")
             if resolved_type == "json":
-                path = Path(storage_dir) / "step_logs.json"
+                path = get_current_log_path(storage_dir, "step_logs.json")
                 backend = get_storage_backend("json", file_path=path)
             else:
                 backend = get_storage_backend(
@@ -58,6 +57,8 @@ class StepLogRepository:
                     finished_at=record.finished_at,
                     error=record.error,
                     retry_count=record.retry_count,
+                    step_input_hash=record.step_input_hash,
+                    artifact_ids=list(record.artifact_ids),
                 )
             )
         self._save(items)
@@ -87,6 +88,8 @@ class StepLogRepository:
                     finished_at=record.finished_at,
                     error=record.error,
                     retry_count=record.retry_count,
+                    step_input_hash=record.step_input_hash,
+                    artifact_ids=list(record.artifact_ids),
                 )
             )
         self._save(items)

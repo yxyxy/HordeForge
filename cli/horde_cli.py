@@ -298,12 +298,12 @@ Examples:
         "--branch",
         type=str,
         default="main",
-        help="Branch for CI context (ci_fix_pipeline, default: main)",
+        help="Branch for CI context (ci_scanner_pipeline, default: main)",
     )
     pipeline_run_parser.add_argument(
         "--head-sha",
         type=str,
-        help="Commit SHA for CI context (ci_fix_pipeline, defaults to local HEAD)",
+        help="Commit SHA for CI context (ci_scanner_pipeline, defaults to local HEAD)",
     )
     pipeline_run_parser.add_argument(
         "--inputs", type=str, default="{}", help="JSON object with pipeline inputs"
@@ -748,8 +748,8 @@ def run_pipeline(
             if not token and isinstance(token_ref, str) and token_ref.strip():
                 token = _get_secret_value(token_ref.strip())
 
-        if resolved_pipeline_name == "ci_fix_pipeline":
-            _apply_ci_fix_defaults(
+        if resolved_pipeline_name == "ci_scanner_pipeline":
+            _apply_ci_scanner_defaults(
                 inputs=inputs,
                 repo_id=resolved_repo_id,
                 branch=branch,
@@ -1088,7 +1088,7 @@ def _extract_log_error_excerpt(text: str) -> str:
     return lines[-1][:240]
 
 
-def _apply_ci_fix_defaults(
+def _apply_ci_scanner_defaults(
     inputs: dict[str, object],
     repo_id: str | None,
     branch: str | None,

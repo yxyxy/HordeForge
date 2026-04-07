@@ -235,6 +235,8 @@ class PipelineValidator:
             "repo_url",
             "github_token",
             "repository",
+            "mock_mode",
+            "token",
             "issue",
             "dependency",
             "issue_body",

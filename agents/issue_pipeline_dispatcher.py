@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 from agents.base import BaseAgent
@@ -70,12 +71,51 @@ def _resolve_github_token(context: dict[str, Any], repository_full_name: str) ->
 
 class IssuePipelineDispatcher(BaseAgent):
     name = "issue_pipeline_dispatcher"
-    description = "Prepares plan artifacts for each scanned issue and dispatches feature pipeline."
+    description = (
+        "Prepares plan artifacts for each scanned issue and dispatches execution pipelines."
+    )
+
     PLANNING_COMMENT_MARKER = "<!-- hordeforge:planning-update -->"
+    PLAN_JSON_START = "<!-- hordeforge:plan-json:start -->"
+    PLAN_JSON_END = "<!-- hordeforge:plan-json:end -->"
+
     OPENED_LABEL = "agent:opened"
     PLANNING_LABEL = "agent:planning"
     READY_LABEL = "agent:ready"
     FIXED_LABEL = "agent:fixed"
+    CI_INCIDENT_LABEL = "kind:ci-incident"
+
+    REQUIRED_PLAN_KEYS = ("dod", "spec", "subtasks", "bdd_specification")
+    _SPEC_TRANSIENT_MARKERS = (
+        "timeout",
+        "timed out",
+        "connection",
+        "network",
+        "temporar",
+        "rate limit",
+        "max retries exceeded",
+        "service unavailable",
+        "gateway",
+        "502",
+        "503",
+        "504",
+        "429",
+    )
+    _SPEC_NON_TRANSIENT_MARKERS = (
+        "invalid_parameter_error",
+        "bad request",
+        "missing_or_invalid_spec_output",
+        "no json found",
+        "invalid json",
+        "jsondecodeerror",
+        "schema",
+        "validation",
+        "authentication failed",
+        "invalid_api_key",
+        "unauthorized",
+        "401",
+        "403",
+    )
 
     def run(self, context: dict[str, Any]) -> dict:
         scan_artifact = (
@@ -107,7 +147,8 @@ class IssuePipelineDispatcher(BaseAgent):
         token = (
             _resolve_github_token(context, repository_full_name) if repository_full_name else None
         )
-        target_pipeline = str(context.get("target_pipeline") or "feature_pipeline").strip()
+        default_target_pipeline = str(context.get("target_pipeline") or "feature_pipeline").strip()
+        ci_incident_pipeline = str(context.get("ci_incident_pipeline") or "ci_fix_pipeline").strip()
         use_llm = bool(context.get("use_llm", True))
         require_llm = bool(context.get("require_llm", True))
         mock_mode = bool(context.get("mock_mode"))
@@ -117,7 +158,8 @@ class IssuePipelineDispatcher(BaseAgent):
                 status="FAILED",
                 artifact_type="dispatch_report",
                 artifact_content={
-                    "target_pipeline": target_pipeline,
+                    "target_pipeline": default_target_pipeline,
+                    "ci_incident_pipeline": ci_incident_pipeline,
                     "dispatched_count": 0,
                     "failed_count": 0,
                     "reason": "missing_repository_full_name",
@@ -133,7 +175,8 @@ class IssuePipelineDispatcher(BaseAgent):
                 status="FAILED",
                 artifact_type="dispatch_report",
                 artifact_content={
-                    "target_pipeline": target_pipeline,
+                    "target_pipeline": default_target_pipeline,
+                    "ci_incident_pipeline": ci_incident_pipeline,
                     "repository": repository_full_name,
                     "dispatched_count": 0,
                     "failed_count": 0,
@@ -161,6 +204,7 @@ class IssuePipelineDispatcher(BaseAgent):
         for item in classified_issues:
             if not isinstance(item, dict):
                 continue
+
             issue_number = item.get("number")
             if not isinstance(issue_number, int) or issue_number <= 0:
                 continue
@@ -174,6 +218,7 @@ class IssuePipelineDispatcher(BaseAgent):
                 "html_url": item.get("url"),
             }
             labels_before = self._extract_label_names(issue_payload)
+
             if self.FIXED_LABEL in set(labels_before):
                 fixed_result = self._process_fixed_issue(
                     repository_full_name=repository_full_name,
@@ -189,28 +234,34 @@ class IssuePipelineDispatcher(BaseAgent):
                     failed.append(
                         {
                             "issue_number": issue_number,
-                            "pipeline": target_pipeline,
+                            "pipeline": default_target_pipeline,
                             "stage": "fixed_validation",
                             "error": reason or "fixed_issue_not_closed",
                         }
                     )
                 continue
+
             started_from_ready = self.READY_LABEL in set(labels_before)
+
             issue_payload = self._enrich_issue_payload_with_comments(
                 issue_payload=issue_payload,
                 repository_full_name=repository_full_name,
                 token=token,
             )
+
+            effective_target_pipeline = self._resolve_target_pipeline(
+                issue_payload=issue_payload,
+                classified_issue=item,
+                default_target_pipeline=default_target_pipeline,
+                ci_incident_pipeline=ci_incident_pipeline,
+            )
+
+            is_ci_incident = effective_target_pipeline == ci_incident_pipeline
+
             moved_to_planning = False
-            plan_bundle: dict[str, Any] = {
-                "status": "ok",
-                "dod": {},
-                "spec": {},
-                "subtasks": {},
-                "bdd_specification": {},
-                "tests": {},
-                "comment_posted": False,
-            }
+            rebuilt_plan = False
+            plan_source = "generated"
+
             if not started_from_ready:
                 moved_to_planning = self._update_issue_stage_label(
                     repository_full_name=repository_full_name,
@@ -219,7 +270,6 @@ class IssuePipelineDispatcher(BaseAgent):
                     labels_before=labels_before,
                     target_label=self.PLANNING_LABEL,
                 )
-
                 plan_bundle = self._build_issue_plan(
                     issue=issue_payload,
                     repository_full_name=repository_full_name,
@@ -228,17 +278,56 @@ class IssuePipelineDispatcher(BaseAgent):
                     require_llm=require_llm,
                     mock_mode=mock_mode,
                     rules=context.get("rules") if isinstance(context.get("rules"), dict) else None,
+                    ci_mode=is_ci_incident,
                 )
-                if plan_bundle.get("status") == "failed":
-                    failed.append(
-                        {
-                            "issue_number": issue_number,
-                            "pipeline": target_pipeline,
-                            "stage": "planning",
-                            "error": plan_bundle.get("error"),
-                        }
+                plan_source = "generated"
+            else:
+                plan_bundle = self._load_plan_from_issue(issue_payload)
+                plan_source = "issue"
+                if not self._plan_bundle_is_complete(plan_bundle):
+                    rebuilt_plan = True
+                    plan_bundle = self._build_issue_plan(
+                        issue=issue_payload,
+                        repository_full_name=repository_full_name,
+                        token=token,
+                        use_llm=use_llm,
+                        require_llm=require_llm,
+                        mock_mode=mock_mode,
+                        rules=context.get("rules")
+                        if isinstance(context.get("rules"), dict)
+                        else None,
+                        ci_mode=is_ci_incident,
                     )
-                    continue
+                    plan_source = "regenerated"
+
+            if plan_bundle.get("status") == "failed":
+                failed_item = {
+                    "issue_number": issue_number,
+                    "pipeline": effective_target_pipeline,
+                    "stage": "planning",
+                    "error": plan_bundle.get("error"),
+                    "started_from_ready": started_from_ready,
+                    "plan_source": plan_source,
+                }
+                error_details = plan_bundle.get("error_details")
+                if isinstance(error_details, dict) and error_details:
+                    failed_item["error_details"] = error_details
+                failed.append(failed_item)
+                continue
+
+            missing_plan_keys = self._missing_plan_keys(plan_bundle)
+            if missing_plan_keys:
+                failed.append(
+                    {
+                        "issue_number": issue_number,
+                        "pipeline": effective_target_pipeline,
+                        "stage": "dispatch_precheck",
+                        "error": f"missing_plan_artifacts:{','.join(missing_plan_keys)}",
+                        "started_from_ready": started_from_ready,
+                        "plan_source": plan_source,
+                    }
+                )
+                continue
 
             dispatch_inputs = {
                 "issue": issue_payload,
@@ -256,13 +345,17 @@ class IssuePipelineDispatcher(BaseAgent):
             if isinstance(context.get("rules"), dict):
                 dispatch_inputs["rules"] = context["rules"]
 
+            if is_ci_incident:
+                dispatch_inputs["ci_mode"] = True
+                dispatch_inputs["planning_scope"] = "ci_incident"
+
             idempotency_key = self._build_idempotency_key(
                 repository_full_name=repository_full_name,
                 issue_number=issue_number,
                 issue_payload=issue_payload,
             )
             dispatch_result = self._dispatch_pipeline(
-                pipeline_name=target_pipeline,
+                pipeline_name=effective_target_pipeline,
                 inputs=dispatch_inputs,
                 source="issue_scanner_dispatcher",
                 idempotency_key=idempotency_key,
@@ -272,6 +365,7 @@ class IssuePipelineDispatcher(BaseAgent):
             status = str(dispatch_result.get("status", "error")).strip().lower()
             run_id = dispatch_result.get("run_id")
             task_id = dispatch_result.get("task_id")
+
             if status in {"started", "success", "queued"} or isinstance(run_id, str):
                 self._update_issue_stage_label(
                     repository_full_name=repository_full_name,
@@ -283,7 +377,7 @@ class IssuePipelineDispatcher(BaseAgent):
                 dispatched.append(
                     {
                         "issue_number": issue_number,
-                        "pipeline": target_pipeline,
+                        "pipeline": effective_target_pipeline,
                         "run_id": run_id,
                         "task_id": task_id,
                         "status": dispatch_result.get("status"),
@@ -291,6 +385,8 @@ class IssuePipelineDispatcher(BaseAgent):
                         "planning_comment_posted": plan_bundle.get("comment_posted", False),
                         "moved_to_planning": moved_to_planning,
                         "started_from_ready": started_from_ready,
+                        "plan_source": plan_source,
+                        "rebuilt_plan": rebuilt_plan,
                     }
                 )
             else:
@@ -305,11 +401,12 @@ class IssuePipelineDispatcher(BaseAgent):
                 failed.append(
                     {
                         "issue_number": issue_number,
-                        "pipeline": target_pipeline,
+                        "pipeline": effective_target_pipeline,
                         "stage": "dispatch",
                         "status": dispatch_result.get("status"),
                         "error": dispatch_result.get("error"),
                         "idempotency_key": idempotency_key,
+                        "plan_source": plan_source,
                     }
                 )
 
@@ -320,8 +417,10 @@ class IssuePipelineDispatcher(BaseAgent):
                 if isinstance(item, dict) and isinstance(item.get("number"), int)
             ]
         )
+        next_pipelines = sorted({item["pipeline"] for item in dispatched if "pipeline" in item})
         artifact = {
-            "target_pipeline": target_pipeline,
+            "target_pipeline": default_target_pipeline,
+            "ci_incident_pipeline": ci_incident_pipeline,
             "repository": repository_full_name,
             "total_candidates": total_candidates,
             "dispatched_count": len(dispatched),
@@ -334,7 +433,7 @@ class IssuePipelineDispatcher(BaseAgent):
 
         status = "SUCCESS" if not failed else "PARTIAL_SUCCESS"
         reason = (
-            f"Prepared and dispatched {len(dispatched)} issue(s) to {target_pipeline}."
+            f"Prepared and dispatched {len(dispatched)} issue(s)."
             if not failed
             else f"Prepared/dispatched {len(dispatched)} issue(s), {len(failed)} issue(s) failed."
         )
@@ -344,6 +443,8 @@ class IssuePipelineDispatcher(BaseAgent):
             f"Fixed processed: {len(fixed_processed)}",
             f"Failed: {len(failed)}",
         ]
+        if next_pipelines:
+            logs.append(f"Pipelines used: {', '.join(next_pipelines)}")
         if failed:
             logs.append(f"First failure: {failed[0].get('error')}")
 
@@ -354,7 +455,7 @@ class IssuePipelineDispatcher(BaseAgent):
             reason=reason,
             confidence=0.9 if not failed else 0.75,
             logs=logs,
-            next_actions=[target_pipeline] if dispatched else ["investigate_dispatch_failures"],
+            next_actions=next_pipelines if next_pipelines else ["investigate_dispatch_failures"],
         )
 
     def _process_fixed_issue(
@@ -448,6 +549,25 @@ class IssuePipelineDispatcher(BaseAgent):
 
         return None
 
+    @classmethod
+    def _resolve_target_pipeline(
+        cls,
+        *,
+        issue_payload: dict[str, Any],
+        classified_issue: dict[str, Any],
+        default_target_pipeline: str,
+        ci_incident_pipeline: str,
+    ) -> str:
+        labels = {
+            label.casefold()
+            for label in (
+                cls._extract_label_names(issue_payload) + cls._extract_label_names(classified_issue)
+            )
+        }
+        if cls.CI_INCIDENT_LABEL.casefold() in labels:
+            return ci_incident_pipeline
+        return default_target_pipeline
+
     @staticmethod
     def _enrich_issue_payload_with_comments(
         *,
@@ -498,19 +618,17 @@ class IssuePipelineDispatcher(BaseAgent):
         if not comments:
             return issue_payload
 
-        comments_context = "\n".join(context_lines[:20])[:4000]
-        body = str(issue_payload.get("body") or "").strip()
-        if comments_context and comments_context not in body:
-            if body:
-                body = f"{body}\n\n## Comments Context\n{comments_context}"
-            else:
-                body = f"## Comments Context\n{comments_context}"
+        comments_context = "\n".join(context_lines[:10])[:2000]
 
         enriched = dict(issue_payload)
-        enriched["body"] = body
         enriched["comments"] = comments
         enriched["comments_count"] = len(comments)
         enriched["comments_context"] = comments_context
+        enriched["planning_comment_present"] = any(
+            IssuePipelineDispatcher.PLANNING_COMMENT_MARKER in comment.get("body", "")
+            for comment in comments
+            if isinstance(comment, dict)
+        )
         return enriched
 
     def _build_issue_plan(
@@ -523,6 +641,7 @@ class IssuePipelineDispatcher(BaseAgent):
         require_llm: bool,
         mock_mode: bool,
         rules: dict[str, Any] | None,
+        ci_mode: bool = False,
     ) -> dict[str, Any]:
         from agents.bdd_generator import BDDGenerator
         from agents.dod_extractor import DodExtractor
@@ -537,6 +656,7 @@ class IssuePipelineDispatcher(BaseAgent):
             "use_llm": use_llm,
             "require_llm": require_llm,
             "mock_mode": mock_mode,
+            "ci_mode": ci_mode,
         }
         if rules:
             planning_context["rules"] = rules
@@ -552,7 +672,32 @@ class IssuePipelineDispatcher(BaseAgent):
 
         spec_result = SpecificationWriter().run(planning_context)
         if str(spec_result.get("status", "")).upper() != "SUCCESS":
-            return {"status": "failed", "error": "spec_step_failed"}
+            primary_failure = self._extract_spec_failure_details(spec_result)
+            if self._should_retry_spec_with_relaxed_llm(primary_failure):
+                relaxed_spec_context = dict(planning_context)
+                relaxed_spec_context["require_llm"] = False
+                spec_result = SpecificationWriter().run(relaxed_spec_context)
+                if str(spec_result.get("status", "")).upper() != "SUCCESS":
+                    return {
+                        "status": "failed",
+                        "error": "spec_step_failed",
+                        "error_details": {
+                            "fallback_attempted": True,
+                            "fallback_allowed": True,
+                            "primary": primary_failure,
+                            "fallback": self._extract_spec_failure_details(spec_result),
+                        },
+                    }
+            else:
+                return {
+                    "status": "failed",
+                    "error": "spec_step_failed",
+                    "error_details": {
+                        "fallback_attempted": False,
+                        "fallback_allowed": False,
+                        "primary": primary_failure,
+                    },
+                }
         spec = get_artifact_from_result(spec_result, "spec")
         if not isinstance(spec, dict):
             return {"status": "failed", "error": "spec_generation_failed"}
@@ -579,13 +724,11 @@ class IssuePipelineDispatcher(BaseAgent):
         planning_context["bdd_generator"] = bdd_result
         planning_context["bdd_specification"] = bdd_specification
 
-        # Planning stage does not have generated code yet, so TestGenerator may
-        # fall back to deterministic test planning. Keep strict-LLM checks for
-        # other planning agents but disable them for this step.
         tests_context = dict(planning_context)
         tests_context["require_llm"] = False
         tests_result = TestGenerator().run(tests_context)
-        if str(tests_result.get("status", "")).upper() != "SUCCESS":
+        tests_status = str(tests_result.get("status", "")).upper()
+        if tests_status not in {"SUCCESS", "PARTIAL_SUCCESS", "BLOCKED"}:
             return {"status": "failed", "error": "tests_step_failed"}
         tests = get_artifact_from_result(tests_result, "tests")
         if not isinstance(tests, dict):
@@ -593,11 +736,18 @@ class IssuePipelineDispatcher(BaseAgent):
         planning_context["test_generator"] = tests_result
         planning_context["tests"] = tests
 
+        if ci_mode:
+            bdd_specification = self._sanitize_ci_bdd_specification(bdd_specification)
+            spec = self._sanitize_ci_specification(spec)
+            tests = self._sanitize_ci_tests(tests)
+
         comment_posted = self._post_planning_comment(
             repository_full_name=repository_full_name,
             token=token,
             issue=issue,
             dod=dod,
+            spec=spec,
+            subtasks=subtasks,
             bdd_specification=bdd_specification,
             tests=tests,
         )
@@ -612,6 +762,199 @@ class IssuePipelineDispatcher(BaseAgent):
             "comment_posted": comment_posted,
         }
 
+    @classmethod
+    def _extract_spec_failure_details(cls, spec_result: dict[str, Any]) -> dict[str, Any]:
+        details: dict[str, Any] = {
+            "status": str(spec_result.get("status", "")),
+        }
+        logs = spec_result.get("logs")
+        if isinstance(logs, list):
+            log_lines = [str(item) for item in logs if isinstance(item, str)]
+            if log_lines:
+                details["logs"] = log_lines[:8]
+        decisions = spec_result.get("decisions")
+        if isinstance(decisions, list) and decisions:
+            first = decisions[0]
+            if isinstance(first, dict):
+                reason = first.get("reason")
+                if isinstance(reason, str) and reason.strip():
+                    details["decision_reason"] = reason.strip()
+        artifact = get_artifact_from_result(spec_result, "spec")
+        if isinstance(artifact, dict):
+            llm_error = artifact.get("llm_error")
+            if isinstance(llm_error, str) and llm_error.strip():
+                details["llm_error"] = llm_error.strip()
+            llm_required = artifact.get("llm_required")
+            if isinstance(llm_required, bool):
+                details["llm_required"] = llm_required
+        return details
+
+    @classmethod
+    def _should_retry_spec_with_relaxed_llm(cls, details: dict[str, Any]) -> bool:
+        parts: list[str] = []
+        llm_error = details.get("llm_error")
+        if isinstance(llm_error, str):
+            parts.append(llm_error)
+        decision_reason = details.get("decision_reason")
+        if isinstance(decision_reason, str):
+            parts.append(decision_reason)
+        logs = details.get("logs")
+        if isinstance(logs, list):
+            parts.extend([line for line in logs if isinstance(line, str)])
+        haystack = " ".join(parts).lower()
+        if not haystack:
+            return False
+        if any(marker in haystack for marker in cls._SPEC_NON_TRANSIENT_MARKERS):
+            return False
+        return any(marker in haystack for marker in cls._SPEC_TRANSIENT_MARKERS)
+
+    @classmethod
+    def _load_plan_from_issue(cls, issue_payload: dict[str, Any]) -> dict[str, Any]:
+        comments = issue_payload.get("comments")
+        if not isinstance(comments, list):
+            return {"status": "failed", "error": "comments_missing"}
+
+        for comment in comments:
+            if not isinstance(comment, dict):
+                continue
+            body = comment.get("body")
+            if not isinstance(body, str):
+                continue
+            if cls.PLANNING_COMMENT_MARKER not in body:
+                continue
+
+            plan_payload = cls._extract_plan_json_from_comment(body)
+            if plan_payload is None:
+                return {"status": "failed", "error": "plan_json_missing_or_invalid"}
+
+            return {
+                "status": "ok",
+                "dod": plan_payload.get("dod", {}),
+                "spec": plan_payload.get("spec", {}),
+                "subtasks": plan_payload.get("subtasks", {}),
+                "bdd_specification": plan_payload.get("bdd_specification", {}),
+                "tests": plan_payload.get("tests", {}),
+                "comment_posted": True,
+            }
+
+        return {"status": "failed", "error": "planning_comment_not_found"}
+
+    @classmethod
+    def _extract_plan_json_from_comment(cls, body: str) -> dict[str, Any] | None:
+        if not isinstance(body, str) or not body.strip():
+            return None
+
+        pattern = re.escape(cls.PLAN_JSON_START) + r"\s*(.*?)\s*" + re.escape(cls.PLAN_JSON_END)
+        match = re.search(pattern, body, flags=re.DOTALL)
+        if not match:
+            return None
+
+        raw_json = match.group(1).strip()
+        if not raw_json:
+            return None
+
+        try:
+            parsed = json.loads(raw_json)
+        except Exception:
+            return None
+
+        return parsed if isinstance(parsed, dict) else None
+
+    @classmethod
+    def _missing_plan_keys(cls, plan_bundle: dict[str, Any]) -> list[str]:
+        missing: list[str] = []
+        for key in cls.REQUIRED_PLAN_KEYS:
+            value = plan_bundle.get(key)
+            if not isinstance(value, dict) or not value:
+                missing.append(key)
+        return missing
+
+    @classmethod
+    def _plan_bundle_is_complete(cls, plan_bundle: dict[str, Any]) -> bool:
+        return not cls._missing_plan_keys(plan_bundle)
+
+    @staticmethod
+    def _sanitize_ci_specification(spec: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(spec, dict):
+            return {}
+
+        sanitized = dict(spec)
+        criteria = sanitized.get("acceptance_criteria")
+        if isinstance(criteria, list):
+            filtered = []
+            for item in criteria:
+                text = str(item).strip()
+                lowered = text.lower()
+                if any(
+                    token in lowered
+                    for token in (
+                        "browser",
+                        "responsive",
+                        "accessibility",
+                        "ui renders",
+                        "mobile layout",
+                    )
+                ):
+                    continue
+                filtered.append(text)
+            sanitized["acceptance_criteria"] = filtered
+        return sanitized
+
+    @staticmethod
+    def _sanitize_ci_bdd_specification(bdd_specification: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(bdd_specification, dict):
+            return {}
+
+        sanitized = dict(bdd_specification)
+        feature = sanitized.get("gherkin_feature")
+        if isinstance(feature, str) and feature.strip():
+            lines = feature.splitlines()
+            filtered_lines: list[str] = []
+            for line in lines:
+                lowered = line.strip().lower()
+                if any(
+                    token in lowered
+                    for token in (
+                        "browser",
+                        "responsive",
+                        "accessibility",
+                        "ui",
+                        "screen reader",
+                    )
+                ):
+                    continue
+                filtered_lines.append(line)
+            sanitized["gherkin_feature"] = "\n".join(filtered_lines).strip()
+        return sanitized
+
+    @staticmethod
+    def _sanitize_ci_tests(tests: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(tests, dict):
+            return {}
+
+        sanitized = dict(tests)
+        test_cases = sanitized.get("test_cases")
+        if isinstance(test_cases, list):
+            filtered_cases = []
+            for item in test_cases:
+                if not isinstance(item, dict):
+                    continue
+                description = str(item.get("description") or item.get("name") or "").lower()
+                if any(
+                    token in description
+                    for token in (
+                        "browser",
+                        "responsive",
+                        "accessibility",
+                        "ui",
+                        "visual regression",
+                    )
+                ):
+                    continue
+                filtered_cases.append(item)
+            sanitized["test_cases"] = filtered_cases
+        return sanitized
+
     @staticmethod
     def _post_planning_comment(
         *,
@@ -621,6 +964,8 @@ class IssuePipelineDispatcher(BaseAgent):
         dod: dict[str, Any],
         bdd_specification: dict[str, Any],
         tests: dict[str, Any],
+        spec: dict[str, Any] | None = None,
+        subtasks: dict[str, Any] | None = None,
     ) -> bool:
         issue_number = issue.get("number")
         if not isinstance(issue_number, int) or issue_number <= 0:
@@ -638,6 +983,13 @@ class IssuePipelineDispatcher(BaseAgent):
             acceptance_criteria=acceptance_criteria,
             gherkin_feature=gherkin_feature,
             test_cases=test_cases,
+            plan_payload={
+                "dod": dod,
+                "spec": spec or {},
+                "subtasks": subtasks or {},
+                "bdd_specification": bdd_specification,
+                "tests": tests,
+            },
         )
 
         try:
@@ -660,6 +1012,7 @@ class IssuePipelineDispatcher(BaseAgent):
         acceptance_criteria: list[Any],
         gherkin_feature: Any,
         test_cases: list[Any],
+        plan_payload: dict[str, Any] | None = None,
     ) -> str:
         lines: list[str] = [
             IssuePipelineDispatcher.PLANNING_COMMENT_MARKER,
@@ -694,6 +1047,13 @@ class IssuePipelineDispatcher(BaseAgent):
             lines.append("- No TDD test plan generated.")
         lines.append("")
         lines.append("_Generated by HordeForge issue scanner pipeline._")
+
+        if isinstance(plan_payload, dict) and plan_payload:
+            lines.append("")
+            lines.append(IssuePipelineDispatcher.PLAN_JSON_START)
+            lines.append(json.dumps(plan_payload, ensure_ascii=False, separators=(",", ":")))
+            lines.append(IssuePipelineDispatcher.PLAN_JSON_END)
+
         return "\n".join(lines)
 
     @staticmethod
@@ -796,7 +1156,7 @@ class IssuePipelineDispatcher(BaseAgent):
         if isinstance(response, JSONResponse):
             try:
                 payload = json.loads(response.body.decode("utf-8"))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 payload = {}
             return {
                 "status": "error",
@@ -806,5 +1166,8 @@ class IssuePipelineDispatcher(BaseAgent):
         return (
             response
             if isinstance(response, dict)
-            else {"status": "error", "error": "invalid_response"}
+            else {
+                "status": "error",
+                "error": "invalid_response",
+            }
         )

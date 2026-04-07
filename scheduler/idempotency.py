@@ -6,6 +6,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
+def build_payload_hash(payload: dict[str, Any]) -> str:
+    normalized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def build_idempotency_key(*, source: str, pipeline_name: str, payload: dict[str, Any]) -> str:
     normalized = json.dumps(
         {

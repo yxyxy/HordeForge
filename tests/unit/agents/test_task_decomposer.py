@@ -1,4 +1,4 @@
-"""TDD: Test-Driven Development для Task Decomposer Agent"""
+"""Updated tests for Task Decomposer Agent stage-1 improvements."""
 
 from agents.task_decomposer import (
     Subtask,
@@ -13,132 +13,71 @@ from agents.task_decomposer import (
 )
 
 
+def _artifact_content(result: dict) -> dict:
+    for artifact in result.get("artifacts", []):
+        if artifact.get("type") in {"task_decomposition", "subtasks"}:
+            content = artifact.get("content")
+            if isinstance(content, dict):
+                return content
+    return result.get("artifact_content", {})
+
+
 class TestTaskCategorization:
-    """TDD: Task Categorization Engine"""
-
     def test_categorize_backend_task(self):
-        """TDD: Categorize backend task"""
-        # Arrange
-        issue = "Add API endpoint for user login"
-
-        # Act
-        category = categorize_task(issue)
-
-        # Assert
-        assert category == TaskCategory.BACKEND
+        assert categorize_task("Add API endpoint for user login") == TaskCategory.BACKEND
 
     def test_categorize_frontend_task(self):
-        """TDD: Categorize frontend task"""
-        # Arrange
-        issue = "Add login form UI"
-
-        # Act
-        category = categorize_task(issue)
-
-        # Assert
-        assert category == TaskCategory.FRONTEND
+        assert categorize_task("Add login form UI") == TaskCategory.FRONTEND
 
     def test_categorize_test_task(self):
-        """TDD: Categorize test task"""
-        # Arrange
-        issue = "Add unit tests for auth module"
-
-        # Act
-        category = categorize_task(issue)
-
-        # Assert
-        assert category == TaskCategory.TESTS
+        assert categorize_task("Add unit tests for auth module") == TaskCategory.TESTS
 
     def test_categorize_docs_task(self):
-        """TDD: Categorize docs task"""
-        # Arrange
-        issue = "Update API documentation"
-
-        # Act
-        category = categorize_task(issue)
-
-        # Assert
-        assert category == TaskCategory.DOCS
+        assert categorize_task("Update API documentation") == TaskCategory.DOCS
 
     def test_decompose_complex_issue(self):
-        """TDD: Decompose complex issue"""
-        # Arrange
-        issue = "Implement login feature: API, UI, tests"
-
-        # Act
-        tasks = decompose_task(issue)
-
-        # Assert
-        assert len(tasks) >= 1  # At least one task should be identified
-        # Check that at least one task has a valid category
+        tasks = decompose_task("Implement login feature", "API, UI, tests")
+        assert len(tasks) >= 1
         assert any(task["category"] in [cat.value for cat in TaskCategory] for task in tasks)
+
+    def test_decompose_ci_incident_issue(self):
+        tasks = decompose_task(
+            "[CI Incident] test failure",
+            "Failing workflow in GitHub Actions",
+            labels=["kind:ci-incident"],
+        )
+        assert len(tasks) >= 4
+        assert any("Reproduce the failing CI job" in task["title"] for task in tasks)
+        assert any(task["category"] == TaskCategory.TESTS.value for task in tasks)
+
+    def test_decompose_bugfix_issue(self):
+        tasks = decompose_task("Fix login regression", "Users cannot sign in")
+        assert any(
+            "regression" in task["title"].lower() or "expected vs actual" in task["title"].lower()
+            for task in tasks
+        )
+        assert any(task["category"] == TaskCategory.TESTS.value for task in tasks)
 
 
 class TestPriorityAssignment:
-    """TDD: Priority Assignment"""
-
     def test_assign_p0_to_critical(self):
-        """TDD: Assign P0 to critical task"""
-        # Arrange
-        task = "Fix security vulnerability"
-
-        # Act
-        priority = assign_priority(task)
-
-        # Assert
-        assert priority == TaskPriority.P0
+        assert assign_priority("Fix security vulnerability") == TaskPriority.P0
 
     def test_assign_p1_to_important(self):
-        """TDD: Assign P1 to important task"""
-        # Arrange
-        task = "Add new feature"
-
-        # Act
-        priority = assign_priority(task)
-
-        # Assert
-        assert priority == TaskPriority.P1
+        assert assign_priority("Add new feature") == TaskPriority.P1
 
     def test_assign_p2_to_nice_to_have(self):
-        """TDD: Assign P2 to nice-to-have task"""
-        # Arrange
-        task = "Improve UI styling"
-
-        # Act
-        priority = assign_priority(task)
-
-        # Assert
-        assert priority == TaskPriority.P2
+        assert assign_priority("Improve UI styling") == TaskPriority.P2
 
     def test_detect_priority_from_labels(self):
-        """TDD: Auto-detect priority from labels"""
-        # Arrange
-        task = {"title": "Fix bug", "labels": ["priority-high"]}
-
-        # Act
-        priority = assign_priority(task)
-
-        # Assert
-        assert priority == TaskPriority.P0
+        assert assign_priority({"title": "Fix bug", "labels": ["priority-high"]}) == TaskPriority.P0
 
     def test_default_priority(self):
-        """TDD: Default priority is P1"""
-        # Arrange
-        task = "Some task"
-
-        # Act
-        priority = assign_priority(task)
-
-        # Assert
-        assert priority == TaskPriority.P1
+        assert assign_priority("Some task") == TaskPriority.P1
 
 
 class TestDependencyGraphGeneration:
-    """TDD: Dependency Graph Generation"""
-
     def test_generate_simple_dependency(self):
-        """TDD: Generate simple dependency"""
-        # Arrange
         subtasks = [
             Subtask(
                 id="1",
@@ -153,19 +92,12 @@ class TestDependencyGraphGeneration:
                 priority=TaskPriority.P1,
             ),
         ]
-
-        # Act
         graph = generate_dependency_graph(subtasks)
-
-        # Assert
         assert len(graph["tasks"]) == 2
-        # The second task should depend on the first one based on category order
         second_task = next(t for t in graph["tasks"] if t["id"] == "2")
         assert "1" in second_task["depends_on"]
 
     def test_generate_complex_dependency(self):
-        """TDD: Generate complex dependency graph"""
-        # Arrange
         subtasks = [
             Subtask(
                 id="1", title="Setup DB", category=TaskCategory.BACKEND, priority=TaskPriority.P0
@@ -184,19 +116,12 @@ class TestDependencyGraphGeneration:
             ),
             Subtask(id="5", title="Add docs", category=TaskCategory.DOCS, priority=TaskPriority.P2),
         ]
-
-        # Act
         graph = generate_dependency_graph(subtasks)
-
-        # Assert
         assert len(graph["tasks"]) == 5
-        # Check that tasks have proper dependencies based on category order
         api_task = next(t for t in graph["tasks"] if "Add API" in t["name"])
-        assert len(api_task["depends_on"]) > 0  # Should depend on earlier categories
+        assert len(api_task["depends_on"]) > 0
 
     def test_detect_parallelizable_tasks(self):
-        """TDD: Detect parallelizable tasks"""
-        # Arrange
         subtasks = [
             Subtask(
                 id="1",
@@ -215,79 +140,73 @@ class TestDependencyGraphGeneration:
             ),
         ]
         graph = generate_dependency_graph(subtasks)
-
-        # Act
         parallel = find_parallelizable_tasks(graph)
-
-        # Assert
-        # At least some tasks should be parallelizable
         assert len(parallel) >= 1
 
 
 class TestTaskDecomposerAgent:
-    """TDD: Task Decomposer Agent Integration Tests"""
-
     def test_run_with_valid_issue(self):
-        """TDD: Task decomposer runs with valid issue data"""
-        # Arrange
         context = {
             "issue": {
                 "title": "Implement login feature",
                 "body": "Need to implement login functionality with API and UI",
             }
         }
-        decomposer = TaskDecomposer()
+        result = TaskDecomposer().run(context)
 
-        # Act
-        result = decomposer.run(context)
-
-        # Assert
         assert result["status"] == "SUCCESS"
         assert result["artifact_type"] == "task_decomposition"
-        assert "subtasks" in result["artifact_content"]
-        assert "dependency_graph" in result["artifact_content"]
-        assert "parallelizable_groups" in result["artifact_content"]
+        content = _artifact_content(result)
+        assert "subtasks" in content
+        assert "dependency_graph" in content
+        assert "parallelizable_groups" in content
+        assert "quality_signals" in content
 
     def test_run_with_empty_issue(self):
-        """TDD: Task decomposer handles empty issue"""
-        # Arrange
-        context = {"issue": {}}
-        decomposer = TaskDecomposer()
-
-        # Act
-        result = decomposer.run(context)
-
-        # Assert
-        assert result["status"] == "FAILURE"
+        result = TaskDecomposer().run({"issue": {}})
+        assert result["status"] == "FAILED"
 
     def test_run_without_issue(self):
-        """TDD: Task decomposer handles missing issue"""
-        # Arrange
-        context = {}
-        decomposer = TaskDecomposer()
-
-        # Act
-        result = decomposer.run(context)
-
-        # Assert
-        assert result["status"] == "FAILURE"
+        result = TaskDecomposer().run({})
+        assert result["status"] == "FAILED"
 
     def test_run_generates_expected_categories(self):
-        """TDD: Task decomposer generates expected categories"""
-        # Arrange
         context = {
             "issue": {
                 "title": "Implement login feature with API, UI, and tests",
                 "body": "Full implementation needed",
             }
         }
-        decomposer = TaskDecomposer()
-
-        # Act
-        result = decomposer.run(context)
-
-        # Assert
-        content = result["artifact_content"]
+        result = TaskDecomposer().run(context)
+        content = _artifact_content(result)
         categories_count = content["categories_count"]
-        # At least one category should have tasks
         assert sum(categories_count.values()) > 0
+
+    def test_run_passthrough_existing_subtasks(self):
+        context = {
+            "subtasks": {"items": [{"id": "1", "title": "Existing task"}]},
+            "plan_source": "prepared_plan",
+        }
+        result = TaskDecomposer().run(context)
+        content = _artifact_content(result)
+
+        assert result["status"] == "SUCCESS"
+        # artifact_type is either 'subtasks' or 'task_decomposition' depending on context
+        artifact_type = result.get("artifact_type") or result["artifacts"][0]["type"]
+        assert artifact_type in {"subtasks", "task_decomposition"}
+        assert content["plan_provenance"]["passthrough"] is True
+
+    def test_run_detects_ci_incident_mode(self):
+        context = {
+            "issue": {
+                "title": "[CI Incident] failing unit tests",
+                "body": "GitHub Actions workflow is red",
+                "labels": [{"name": "kind:ci-incident"}],
+            }
+        }
+        result = TaskDecomposer().run(context)
+        content = _artifact_content(result)
+
+        assert result["status"] == "SUCCESS"
+        assert content["generation_context"]["mode"] == "ci_incident"
+        assert content["total_subtasks"] >= 4

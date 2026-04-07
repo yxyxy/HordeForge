@@ -335,7 +335,7 @@ class TestArchitecturePlannerAgent:
         result = planner.run(context)
 
         # Assert
-        assert result["status"] == "FAILURE"
+        assert result["status"] == "FAILED"
 
     def test_run_without_feature_description(self):
         """TDD: Architecture planner handles missing feature description"""
@@ -347,7 +347,7 @@ class TestArchitecturePlannerAgent:
         result = planner.run(context)
 
         # Assert
-        assert result["status"] == "FAILURE"
+        assert result["status"] == "FAILED"
 
     def test_run_generates_expected_structure(self, tmp_path):
         """TDD: Architecture planner generates expected structure"""

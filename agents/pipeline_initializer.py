@@ -43,7 +43,7 @@ PIPELINE_METADATA: dict[PipelineType, dict[str, Any]] = {
         "required_inputs": ["issue"],
     },
     PipelineType.CI_FIX: {
-        "name": "ci_fix_pipeline",
+        "name": "ci_scanner_pipeline",
         "description": "CI triage handoff - analyze failed CI and create agent-ready issue",
         "required_inputs": ["repository", "ci_run"],
     },

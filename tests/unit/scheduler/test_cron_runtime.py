@@ -80,6 +80,6 @@ def test_ci_monitor_job_publishes_ci_fix_trigger_via_runtime_wrapper():
     assert result["result"]["trigger_count"] == 1
     assert result["result"]["processed_run_ids"] == [77]
     assert result["result"]["published_count"] == 1
-    assert published_calls[0]["pipeline_name"] == "ci_fix_pipeline"
+    assert published_calls[0]["pipeline_name"] == "ci_scanner_pipeline"
     assert published_calls[0]["source"] == "cron:ci_monitor"
     assert published_calls[0]["idempotency_key"] == "ci_monitor:77"

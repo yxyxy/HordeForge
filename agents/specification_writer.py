@@ -1,4 +1,13 @@
-"""Specification Writer Agent - Generates structured specifications with user stories, acceptance criteria, and technical specs."""
+"""Specification Writer Agent - Generates structured specifications with user stories,
+acceptance criteria, and technical specs.
+
+Stage-1 improvements:
+- stricter prepared-plan validation mode for feature pipeline fail-fast
+- stronger DoD usage via normalized input resolution
+- quality signals on produced specification artifacts
+- consistent build_agent_result usage on all paths
+- backward-compatible passthrough / LLM / deterministic modes
+"""
 
 from __future__ import annotations
 
@@ -9,11 +18,7 @@ from typing import Any
 
 from agents.base import BaseAgent
 from agents.context_utils import build_agent_result
-from agents.llm_wrapper import (
-    build_spec_prompt,
-    get_llm_wrapper,
-    parse_spec_output,
-)
+from agents.llm_wrapper import build_spec_prompt, get_llm_wrapper, parse_spec_output
 from agents.llm_wrapper_backward_compatibility import (
     get_legacy_llm_wrapper,
     legacy_build_spec_prompt,
@@ -60,16 +65,233 @@ class FileChangePlan:
     files_to_delete: list[str] = field(default_factory=list)
 
 
-def generate_user_story(issue_description: str) -> str | None:
-    """Generate a user story from issue description.
+REQUIRED_PREPARED_PLAN_FIELDS = (
+    "dod",
+    "spec",
+    "subtasks",
+    "bdd_specification",
+    "tests",
+)
 
-    Args:
-        issue_description: Description of the issue/feature
 
-    Returns:
-        User story in format "As a ..., I want ..., So that ..." or None if not applicable
-    """
-    # Check if issue has user context
+def _normalize_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _coerce_str_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = _normalize_text(item)
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(text)
+    return cleaned
+
+
+def _extract_label_names(labels: Any) -> list[str]:
+    if not isinstance(labels, list):
+        return []
+
+    names: list[str] = []
+    for label in labels:
+        if isinstance(label, dict):
+            name = _normalize_text(label.get("name"))
+        else:
+            name = _normalize_text(label)
+        if name:
+            names.append(name)
+    return names
+
+
+def _extract_step_artifact_content(step_result: Any, artifact_type: str) -> dict[str, Any]:
+    if not isinstance(step_result, dict):
+        return {}
+
+    artifact_content = step_result.get("artifact_content")
+    if isinstance(artifact_content, dict) and artifact_content:
+        return artifact_content
+
+    artifacts = step_result.get("artifacts", [])
+    if isinstance(artifacts, list):
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            if artifact.get("type") == artifact_type and isinstance(artifact.get("content"), dict):
+                return artifact["content"]
+
+    return {}
+
+
+def _resolve_context_payload(
+    context: dict[str, Any], key: str, step_names: list[str]
+) -> dict[str, Any]:
+    direct = context.get(key)
+    if isinstance(direct, dict) and direct:
+        return direct
+
+    for step_name in step_names:
+        candidate = _extract_step_artifact_content(context.get(step_name), key)
+        if candidate:
+            return candidate
+
+    return {}
+
+
+def _has_meaningful_test_payload(tests: dict[str, Any]) -> bool:
+    if not isinstance(tests, dict) or not tests:
+        return False
+
+    test_cases = tests.get("test_cases")
+    if isinstance(test_cases, list) and test_cases:
+        return True
+
+    items = tests.get("items")
+    if isinstance(items, list) and items:
+        return True
+
+    return bool(
+        _normalize_text(tests.get("test_strategy")) or _normalize_text(tests.get("summary"))
+    )
+
+
+def _has_meaningful_subtasks_payload(subtasks: dict[str, Any]) -> bool:
+    if not isinstance(subtasks, dict) or not subtasks:
+        return False
+
+    items = subtasks.get("items")
+    if isinstance(items, list) and items:
+        return True
+
+    legacy_subtasks = subtasks.get("subtasks")
+    return isinstance(legacy_subtasks, list) and legacy_subtasks
+
+
+def _has_meaningful_bdd_payload(bdd_specification: dict[str, Any]) -> bool:
+    if not isinstance(bdd_specification, dict) or not bdd_specification:
+        return False
+
+    if _normalize_text(bdd_specification.get("gherkin_feature")):
+        return True
+
+    scenarios = bdd_specification.get("scenarios")
+    return isinstance(scenarios, dict) and bool(scenarios)
+
+
+def _has_meaningful_spec_payload(spec: dict[str, Any]) -> bool:
+    if not isinstance(spec, dict) or not spec:
+        return False
+
+    return any(
+        (
+            _normalize_text(spec.get("summary")),
+            _normalize_text(spec.get("feature_description")),
+            _normalize_text(spec.get("user_story")),
+            bool(_coerce_str_list(spec.get("acceptance_criteria"))),
+        )
+    )
+
+
+def _has_meaningful_dod_payload(dod: dict[str, Any]) -> bool:
+    if not isinstance(dod, dict) or not dod:
+        return False
+
+    return any(
+        (
+            _normalize_text(dod.get("title")),
+            _normalize_text(dod.get("feature_description")),
+            bool(_coerce_str_list(dod.get("acceptance_criteria"))),
+        )
+    )
+
+
+def _detect_spec_mode(issue: dict[str, Any], dod: dict[str, Any], labels: list[str]) -> str:
+    title = _normalize_text(issue.get("title"))
+    body = _normalize_text(issue.get("body"))
+    dod_text = " ".join(
+        [
+            _normalize_text(dod.get("title")),
+            _normalize_text(dod.get("feature_description")),
+            " ".join(_coerce_str_list(dod.get("acceptance_criteria"))),
+        ]
+    )
+    combined = f"{title} {body} {dod_text} {' '.join(labels)}".lower()
+
+    if (
+        "ci incident" in combined
+        or "kind:ci-incident" in combined
+        or "source:ci_scanner_pipeline" in combined
+    ):
+        return "ci_incident"
+    if any(token in combined for token in ["bug", "fix", "regression", "failure", "error"]):
+        return "bugfix"
+    if any(
+        token in combined
+        for token in ["infra", "config", "deployment", "docker", "pipeline", "workflow"]
+    ):
+        return "infra"
+    if any(token in combined for token in ["docs", "documentation", "readme", "guide"]):
+        return "docs"
+    return "feature"
+
+
+def _resolve_spec_input(context: dict[str, Any]) -> dict[str, Any]:
+    issue = context.get("issue", {}) if isinstance(context.get("issue"), dict) else {}
+    dod = _resolve_context_payload(context, "dod", ["dod_extractor"])
+    labels = _extract_label_names(issue.get("labels", []))
+
+    issue_title = _normalize_text(issue.get("title"))
+    issue_body = _normalize_text(issue.get("body") or issue.get("description"))
+    dod_title = _normalize_text(dod.get("title"))
+    dod_feature_description = _normalize_text(dod.get("feature_description"))
+    acceptance_criteria = _coerce_str_list(dod.get("acceptance_criteria"))
+
+    feature_description = (
+        issue_title
+        or issue_body
+        or _normalize_text(context.get("feature_description"))
+        or dod_title
+        or dod_feature_description
+        or (acceptance_criteria[0] if acceptance_criteria else "")
+    )
+
+    return {
+        "issue": issue,
+        "dod": dod,
+        "labels": labels,
+        "issue_title": issue_title,
+        "issue_body": issue_body,
+        "dod_title": dod_title,
+        "acceptance_criteria": acceptance_criteria,
+        "feature_description": feature_description,
+        "source_text": "\n\n".join(
+            part
+            for part in [
+                issue_title,
+                issue_body,
+                dod_title,
+                dod_feature_description,
+                "\n".join(acceptance_criteria),
+            ]
+            if part
+        ),
+        "spec_mode": _detect_spec_mode(issue, dod, labels),
+    }
+
+
+def generate_user_story(issue_description: str, spec_mode: str = "feature") -> str | None:
+    """Generate a user story from issue description when appropriate."""
+    if spec_mode != "feature":
+        return None
+
+    issue_lower = issue_description.lower()
     user_context_keywords = [
         "user",
         "customer",
@@ -84,85 +306,44 @@ def generate_user_story(issue_description: str) -> str | None:
         "login",
         "register",
     ]
-
-    issue_lower = issue_description.lower()
-    has_user_context = any(keyword in issue_lower for keyword in user_context_keywords)
-
-    if not has_user_context:
-        # Some issues like "fix performance issue" don't have clear user context
+    if not any(keyword in issue_lower for keyword in user_context_keywords):
         return None
 
-    # Extract key elements from issue
-    # This is a simplified approach - in a real implementation, we'd use NLP/LLM
-    issue_words = issue_description.split()
-
-    # Find action words to use in "I want to"
     action_indicators = ["add", "implement", "create", "update", "fix", "improve", "enable"]
-    action = None
-    for word in issue_words:
-        clean_word = word.lower().strip(".,!?")
-        if clean_word in action_indicators:
-            action = clean_word
-            break
-
-    if not action:
-        # Try to extract action from common patterns
-        patterns = [
-            r"(?:add|implement|create|update|fix|improve|enable)\s+(.+?)(?:\.|$)",
-            r"(?:need to|should)\s+(add|implement|create|update|fix|improve|enable)\s+(.+?)(?:\.|$)",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, issue_description.lower(), re.IGNORECASE)
-            if match:
-                if len(match.groups()) > 1:
-                    action = match.group(1)
-                else:
-                    # If only one group, try to extract action from the beginning
-                    action = match.group(0).split()[0].lower()
-                break
-
-    if not action:
-        action = "implement"
-
-    # Extract feature/object
-    feature = (
-        issue_description.replace("Add", "").replace("Implement", "").replace("Create", "").strip()
+    action = next(
+        (
+            word.lower().strip(".,!?")
+            for word in issue_description.split()
+            if word.lower().strip(".,!?") in action_indicators
+        ),
+        "implement",
     )
-    feature = feature.replace("Fix", "").replace("Update", "").replace("Improve", "").strip()
-    feature = feature.split(".")[0].strip()  # Take only first sentence
 
-    if not feature:
-        feature = issue_description
+    feature = issue_description
+    for verb in ["Add", "Implement", "Create", "Fix", "Update", "Improve"]:
+        feature = feature.replace(verb, "")
+    feature = feature.split(".")[0].strip() or issue_description
 
-    # Generate user story
-    user_story = f"As a user,\nI want to {action} {feature},\nSo that I can achieve my goals"
-
-    return user_story
+    return f"As a user,\nI want to {action} {feature},\nSo that I can achieve my goals"
 
 
-def generate_acceptance_criteria(user_story: str, issue_description: str = "") -> list[str]:
-    """Generate acceptance criteria for a user story.
-
-    Args:
-        user_story: The user story to generate criteria for
-        issue_description: Original issue description for context
-
-    Returns:
-        List of acceptance criteria
-    """
-    criteria = []
-
-    # Basic criteria that apply to most features
-    basic_criteria = [
-        "Feature works as described in the user story",
-        "Feature passes all relevant tests",
-        "Feature is documented appropriately",
-    ]
-
-    criteria.extend(basic_criteria)
-
-    # Add specific criteria based on issue content
+def generate_acceptance_criteria(
+    user_story: str | None,
+    issue_description: str = "",
+    seed_criteria: list[str] | None = None,
+) -> list[str]:
+    """Generate acceptance criteria, preferring upstream DoD criteria."""
+    criteria = _coerce_str_list(seed_criteria or [])
     issue_lower = issue_description.lower()
+
+    if not criteria:
+        criteria.extend(
+            [
+                "Feature works as described in the specification",
+                "Feature passes all relevant tests",
+                "Feature is documented appropriately",
+            ]
+        )
 
     if any(word in issue_lower for word in ["api", "endpoint", "service"]):
         criteria.extend(
@@ -193,45 +374,49 @@ def generate_acceptance_criteria(user_story: str, issue_description: str = "") -
 
     if any(word in issue_lower for word in ["performance", "speed", "load", "scale"]):
         criteria.extend(
-            ["Performance benchmarks are met", "Feature scales appropriately under load"]
+            [
+                "Performance benchmarks are met",
+                "Feature scales appropriately under load",
+            ]
         )
 
-    return criteria
+    return _coerce_str_list(criteria)
 
 
-def generate_technical_spec(feature_description: str) -> TechnicalSpec:
-    """Generate technical specification for a feature.
-
-    Args:
-        feature_description: Description of the feature to specify
-
-    Returns:
-        TechnicalSpec object with implementation details
-    """
-    # Determine feature type based on keywords
+def generate_technical_spec(feature_description: str, spec_mode: str = "feature") -> TechnicalSpec:
+    """Generate technical specification for a feature."""
     feature_lower = feature_description.lower()
+    components: list[str] = []
+    endpoints: list[str] = []
+    schemas: list[dict[str, Any]] = []
+    dependencies: list[str] = []
+    implementation_notes: list[str] = []
 
-    components = []
-    endpoints = []
-    schemas = []
-    dependencies = []
-    implementation_notes = []
-
-    # Identify components based on feature type
-    if any(word in feature_lower for word in ["api", "endpoint", "service"]):
-        components.extend(["Controller", "Service Layer", "Data Access Layer"])
-        endpoints.append(f"/api/v1/{_extract_entity_name(feature_description)}")
-        schemas.append(
-            {
-                "name": f"{_extract_entity_name(feature_description)}_request",
-                "fields": ["id", "name", "description"],
-            }
+    if spec_mode == "ci_incident":
+        return TechnicalSpec(
+            components=["CI workflow", "Failing job triage", "Targeted fix", "Verification step"],
+            dependencies=["ci_provider", "test_runner"],
+            implementation_notes=[
+                "Focus on reproducing the failure deterministically",
+                "Prefer targeted fixes over broad refactors",
+                "Rerun only affected checks first",
+            ],
         )
+
+    if spec_mode == "bugfix":
+        implementation_notes.append("Preserve existing behaviour outside the failing path")
+        implementation_notes.append("Add or update regression coverage")
+
+    if any(word in feature_lower for word in ["api", "endpoint", "service"]):
+        entity = _extract_entity_name(feature_description)
+        components.extend(["Controller", "Service Layer", "Data Access Layer"])
+        endpoints.append(f"/api/v1/{entity}")
+        schemas.append({"name": f"{entity}_request", "fields": ["id", "name", "description"]})
         dependencies.extend(["database", "authentication"])
         implementation_notes.append("Follow RESTful API principles")
 
     if any(word in feature_lower for word in ["ui", "interface", "form", "page"]):
-        components.extend(["React Component", "State Management", "Styling"])
+        components.extend(["UI Component", "State Management", "Styling"])
         dependencies.extend(["frontend_framework", "api_client"])
         implementation_notes.append("Ensure responsive design")
 
@@ -249,36 +434,34 @@ def generate_technical_spec(feature_description: str) -> TechnicalSpec:
     if any(word in feature_lower for word in ["test", "testing"]):
         components.extend(["Unit Tests", "Integration Tests", "Test Utilities"])
         dependencies.extend(["testing_framework", "mocking_library"])
-        implementation_notes.append("Achieve >90% code coverage")
+        implementation_notes.append("Prefer targeted coverage before broader expansion")
 
     return TechnicalSpec(
-        components=components,
-        endpoints=endpoints,
+        components=_coerce_str_list(components),
+        endpoints=_coerce_str_list(endpoints),
         schemas=schemas,
-        dependencies=dependencies,
-        implementation_notes=implementation_notes,
+        dependencies=_coerce_str_list(dependencies),
+        implementation_notes=_coerce_str_list(implementation_notes),
     )
 
 
 def generate_file_change_plan(
-    feature_description: str, project_structure: dict[str, Any] = None
+    feature_description: str,
+    project_structure: dict[str, Any] | None = None,
+    spec_mode: str = "feature",
 ) -> FileChangePlan:
-    """Generate a plan for file changes needed to implement the feature.
-
-    Args:
-        feature_description: Description of the feature to implement
-        project_structure: Current project structure for reference
-
-    Returns:
-        FileChangePlan object with files to create/modify/delete
-    """
+    """Generate a file change plan for the feature."""
     feature_lower = feature_description.lower()
+    files_to_create: list[str] = []
+    files_to_modify: list[str] = []
+    files_to_delete: list[str] = []
 
-    files_to_create = []
-    files_to_modify = []
-    files_to_delete = []
+    if spec_mode == "ci_incident":
+        files_to_modify.extend([".github/workflows/", "tests/", "src/"])
+        return FileChangePlan(
+            files_to_create=[], files_to_modify=files_to_modify, files_to_delete=[]
+        )
 
-    # Determine files based on feature type
     if any(word in feature_lower for word in ["api", "endpoint", "service"]):
         entity_name = _extract_entity_name(feature_description)
         files_to_create.extend(
@@ -307,66 +490,48 @@ def generate_file_change_plan(
         entity_name = _extract_entity_name(feature_description)
         files_to_create.append(f"tests/unit/test_{entity_name}.py")
 
-    # Apply project structure context if provided
-    if project_structure:
-        # Check if files already exist and adjust plan accordingly
-        existing_files = project_structure.get("files", [])
-        # Convert to sets for faster lookup
-        existing_files_set = set(existing_files)
-
-        # Adjust create/modify lists based on existing files
-        final_create = []
-        final_modify = []
+    if project_structure and isinstance(project_structure, dict):
+        existing_files = set(project_structure.get("files", []))
+        final_create: list[str] = []
+        final_modify: list[str] = []
 
         for file_path in files_to_create:
-            if file_path in existing_files_set:
-                # If file exists, maybe we need to modify it instead of create
+            if file_path in existing_files:
                 final_modify.append(file_path)
             else:
                 final_create.append(file_path)
 
         for file_path in files_to_modify:
-            if file_path in existing_files_set:
+            if file_path in existing_files:
                 final_modify.append(file_path)
             else:
-                # If file doesn't exist, maybe we need to create it
                 final_create.append(file_path)
 
         files_to_create = final_create
         files_to_modify = final_modify
 
     return FileChangePlan(
-        files_to_create=files_to_create,
-        files_to_modify=files_to_modify,
-        files_to_delete=files_to_delete,
+        files_to_create=_coerce_str_list(files_to_create),
+        files_to_modify=_coerce_str_list(files_to_modify),
+        files_to_delete=_coerce_str_list(files_to_delete),
     )
 
 
 def _extract_entity_name(feature_description: str) -> str:
-    """Extract entity name from feature description for file naming.
-
-    Args:
-        feature_description: Feature description
-
-    Returns:
-        Entity name in snake_case
-    """
-    # Look for common patterns like "Add user login" -> "user" or "Implement product API" -> "product"
+    """Extract entity name from feature description for file naming."""
     words = feature_description.lower().split()
-
-    # Common verbs that precede entity names
     verbs = ["add", "implement", "create", "update", "modify", "delete", "manage", "fix"]
 
-    for i, word in enumerate(words):
-        if word in verbs and i + 1 < len(words):
-            entity = words[i + 1]
-            # Remove common suffixes like "feature", "functionality", etc.
+    for index, word in enumerate(words):
+        if word in verbs and index + 1 < len(words):
             entity = re.sub(
-                r"(feature|functionality|module|system|service|endpoint|api)$", "", entity
+                r"(feature|functionality|module|system|service|endpoint|api)$",
+                "",
+                words[index + 1],
             ).strip()
-            return re.sub(r"[^\w]", "_", entity)
+            if entity:
+                return re.sub(r"[^\w]", "_", entity)
 
-    # If no verb pattern found, use the first noun-like word
     for word in words:
         if word not in verbs and len(word) > 2:
             return re.sub(r"[^\w]", "_", word)
@@ -374,98 +539,219 @@ def _extract_entity_name(feature_description: str) -> str:
     return "feature"
 
 
+def _build_quality_signals(spec_content: dict[str, Any]) -> dict[str, Any]:
+    acceptance_criteria = _coerce_str_list(spec_content.get("acceptance_criteria"))
+    technical_specification = spec_content.get("technical_specification", {})
+    file_change_plan = spec_content.get("file_change_plan", {})
+
+    has_technical_spec = isinstance(technical_specification, dict) and any(
+        technical_specification.get(key)
+        for key in ["components", "endpoints", "schemas", "dependencies"]
+    )
+    has_file_change_plan = isinstance(file_change_plan, dict) and any(
+        file_change_plan.get(key)
+        for key in ["files_to_create", "files_to_modify", "files_to_delete"]
+    )
+
+    completeness_score = 0
+    if _normalize_text(spec_content.get("feature_description")):
+        completeness_score += 1
+    if _normalize_text(spec_content.get("user_story")):
+        completeness_score += 1
+    if acceptance_criteria:
+        completeness_score += 1
+    if has_technical_spec:
+        completeness_score += 1
+    if has_file_change_plan:
+        completeness_score += 1
+
+    completeness = "low"
+    if completeness_score >= 4:
+        completeness = "high"
+    elif completeness_score >= 2:
+        completeness = "medium"
+
+    return {
+        "has_user_story": bool(_normalize_text(spec_content.get("user_story"))),
+        "acceptance_criteria_count": len(acceptance_criteria),
+        "has_technical_spec": has_technical_spec,
+        "has_file_change_plan": has_file_change_plan,
+        "spec_completeness": completeness,
+    }
+
+
 class SpecificationWriter(BaseAgent):
-    """Specification Writer Agent - Generates structured specifications with user stories, acceptance criteria, and technical specs."""
+    """Generates structured specifications with user stories, acceptance criteria, and technical specs."""
 
     name = "specification_writer"
     description = "Generates structured specifications with user stories, acceptance criteria, and technical specs."
 
-    def run(self, context: dict) -> dict:
-        """Run the specification writing process.
+    def _validate_prepared_plan(self, context: dict[str, Any]) -> dict:
+        dod = _resolve_context_payload(context, "dod", ["dod_extractor"])
+        spec = _resolve_context_payload(context, "spec", ["specification_writer"])
+        subtasks = _resolve_context_payload(context, "subtasks", ["task_decomposer"])
+        bdd_specification = _resolve_context_payload(
+            context, "bdd_specification", ["bdd_generator"]
+        )
+        tests = _resolve_context_payload(context, "tests", ["test_generator"])
 
-        Args:
-            context: Context containing issue/feature data
+        missing_fields: list[str] = []
+        invalid_fields: list[str] = []
 
-        Returns:
-            Agent result with generated specifications
-        """
-        # Extract issue data from context
-        issue = context.get("issue", {})
-        feature_description = issue.get("title", "") or context.get("feature_description", "")
+        field_values = {
+            "dod": dod,
+            "spec": spec,
+            "subtasks": subtasks,
+            "bdd_specification": bdd_specification,
+            "tests": tests,
+        }
 
-        # Also check for dod_extractor output
-        if not feature_description:
-            dod_result = context.get("dod_extractor", {})
-            if isinstance(dod_result, dict):
-                artifacts = dod_result.get("artifacts", [])
-                for artifact in artifacts:
-                    if artifact.get("type") == "dod":
-                        dod_content = artifact.get("content", {})
-                        # Try to get feature description from DoD
-                        feature_description = dod_content.get("title", "") or dod_content.get(
-                            "feature_description", ""
-                        )
-                        # If still empty, try to get from first acceptance criteria
-                        if not feature_description:
-                            acceptance_criteria = dod_content.get("acceptance_criteria", [])
-                            if acceptance_criteria and isinstance(acceptance_criteria[0], str):
-                                feature_description = acceptance_criteria[0]
-                        break
+        validators = {
+            "dod": _has_meaningful_dod_payload,
+            "spec": _has_meaningful_spec_payload,
+            "subtasks": _has_meaningful_subtasks_payload,
+            "bdd_specification": _has_meaningful_bdd_payload,
+            "tests": _has_meaningful_test_payload,
+        }
 
-        if not feature_description:
+        for field_name in REQUIRED_PREPARED_PLAN_FIELDS:
+            value = field_values[field_name]
+            if not isinstance(value, dict) or not value:
+                missing_fields.append(field_name)
+                continue
+            if not validators[field_name](value):
+                invalid_fields.append(field_name)
+
+        blocked_reasons: list[str] = []
+        if missing_fields:
+            blocked_reasons.append(f"missing fields: {', '.join(missing_fields)}")
+        if invalid_fields:
+            blocked_reasons.append(f"incomplete fields: {', '.join(invalid_fields)}")
+
+        artifact_content = {
+            "schema_version": "1.0",
+            "planning_artifacts_present": not missing_fields,
+            "plan_complete": not missing_fields and not invalid_fields,
+            "plan_source": context.get("plan_source", "prepared_plan"),
+            "dispatch_blocked_reason": "; ".join(blocked_reasons),
+            "validated_fields": {
+                field_name: field_name not in missing_fields and field_name not in invalid_fields
+                for field_name in REQUIRED_PREPARED_PLAN_FIELDS
+            },
+            "missing_fields": missing_fields,
+            "invalid_fields": invalid_fields,
+        }
+
+        if artifact_content["plan_complete"]:
             return build_agent_result(
-                status="FAILURE",
-                artifact_type="spec",
-                artifact_content={},
-                reason="No feature description provided in context",
-                confidence=0.0,
-                logs=["No feature description found in context"],
-                next_actions=[],
+                status="SUCCESS",
+                artifact_type="prepared_plan_validation",
+                artifact_content=artifact_content,
+                reason="Prepared plan validation passed.",
+                confidence=0.98,
+                logs=[
+                    "Prepared plan validator: all required artifacts are present.",
+                    f"plan_source={artifact_content['plan_source']}",
+                    "plan_complete=true",
+                ],
+                next_actions=[
+                    "specification_passthrough",
+                    "subtasks_passthrough",
+                    "bdd_passthrough",
+                    "tests_passthrough",
+                ],
             )
 
-        # Try to use LLM for enhanced specification generation
+        return build_agent_result(
+            status="BLOCKED",
+            artifact_type="prepared_plan_validation",
+            artifact_content=artifact_content,
+            reason="Prepared plan validation failed.",
+            confidence=0.99,
+            logs=[
+                "Prepared plan validator blocked execution.",
+                f"plan_source={artifact_content['plan_source']}",
+                f"dispatch_blocked_reason={artifact_content['dispatch_blocked_reason']}",
+            ],
+            next_actions=["regenerate_planning_artifacts", "request_human_input"],
+        )
+
+    def run(self, context: dict) -> dict:
+        if context.get("validate_prepared_plan"):
+            return self._validate_prepared_plan(context)
+
+        existing_spec = context.get("spec")
+        if isinstance(existing_spec, dict) and _has_meaningful_spec_payload(existing_spec):
+            passthrough_content = dict(existing_spec)
+            passthrough_content.setdefault(
+                "quality_signals", _build_quality_signals(passthrough_content)
+            )
+            passthrough_content.setdefault(
+                "plan_provenance",
+                {
+                    "source": context.get("plan_source", "upstream_pipeline"),
+                    "passthrough": True,
+                    "rebuilt": False,
+                },
+            )
+            return build_agent_result(
+                status="SUCCESS",
+                artifact_type="spec",
+                artifact_content=passthrough_content,
+                reason="Specification passed through from upstream pipeline.",
+                confidence=0.95,
+                logs=[
+                    "Specification reused from upstream pipeline (passthrough mode).",
+                    f"spec_completeness={passthrough_content['quality_signals']['spec_completeness']}",
+                ],
+                next_actions=["task_decomposer", "bdd_generator", "test_generator"],
+            )
+
+        resolved = _resolve_spec_input(context)
+        feature_description = resolved["feature_description"]
+        if not feature_description:
+            return build_agent_result(
+                status="FAILED",
+                artifact_type="spec",
+                artifact_content={},
+                reason="No feature description provided in context.",
+                confidence=1.0,
+                logs=["No feature description found in issue, DoD, or upstream artifacts."],
+                next_actions=["dod_extractor", "request_human_input"],
+            )
+
         use_llm = context.get("use_llm", True)
         require_llm = bool(context.get("require_llm", False))
-        llm_spec = None
-        llm_error = None
+        llm_spec: dict[str, Any] | None = None
+        llm_error: str | None = None
 
         if use_llm:
             try:
-                # Try to use the new LLM wrapper first, fall back to legacy if needed
-                llm = get_llm_wrapper()
-                if llm is None:
-                    # Try legacy wrapper for backward compatibility
-                    llm = get_legacy_llm_wrapper()
-
+                llm = get_llm_wrapper() or get_legacy_llm_wrapper()
                 if llm is not None:
-                    # Prepare context for LLM
                     repo_context = {
                         "feature_description": feature_description,
-                        "issue_labels": issue.get("labels", []),
+                        "issue_labels": resolved["labels"],
                         "existing_files": context.get("existing_files", []),
+                        "dod_acceptance_criteria": resolved["acceptance_criteria"],
+                        "spec_mode": resolved["spec_mode"],
                     }
-
-                    # Try new prompt building first, fall back to legacy if needed
                     try:
                         prompt = build_spec_prompt(feature_description, [], repo_context)
                     except AttributeError:
-                        # Fall back to legacy prompt building
                         prompt = legacy_build_spec_prompt(feature_description, [], repo_context)
 
                     response = llm.complete(prompt)
                     llm.close()
-
-                    # Try new parsing first, fall back to legacy if needed
                     try:
                         llm_spec = parse_spec_output(response)
                     except AttributeError:
-                        # Fall back to legacy parsing
                         llm_spec = legacy_parse_spec_output(response)
-
-            except Exception as exc:
+            except Exception as exc:  # pragma: no cover - defensive compatibility path
                 llm_error = str(exc)
 
         if use_llm and require_llm and not llm_spec:
+            fallback_draft = self._build_deterministic_spec(context, resolved, llm_error)
             return build_agent_result(
                 status="FAILED",
                 artifact_type="spec",
@@ -473,126 +759,218 @@ class SpecificationWriter(BaseAgent):
                     "schema_version": "1.0",
                     "llm_required": True,
                     "llm_error": llm_error,
+                    "spec_fallback_draft": fallback_draft,
                 },
                 reason=(
                     f"LLM required but unavailable: {llm_error[:160]}"
-                    if isinstance(llm_error, str) and llm_error
+                    if llm_error
                     else "LLM required but no valid specification was produced."
                 ),
-                confidence=0.95,
+                confidence=0.98,
                 logs=[
                     "LLM strict mode enabled (require_llm=true).",
-                    f"LLM error: {(llm_error or 'missing/invalid llm output')[:200]}",
+                    f"LLM error: {llm_error or 'missing_or_invalid_spec_output'}",
+                    "Deterministic fallback draft generated for diagnosis.",
                 ],
-                next_actions=["fix_llm_connectivity"],
+                next_actions=["retry_with_llm", "request_human_input"],
             )
 
-        if llm_spec:
-            # Use LLM-generated specification
-            result_content = llm_spec
-            reason = "Specification generated with LLM enhancement."
-            confidence = 0.95
+        if llm_spec and isinstance(llm_spec, dict):
+            result_content = self._normalize_llm_spec(llm_spec, resolved, context, llm_error)
+            reason = "Specification generated successfully using LLM."
+            confidence = 0.93
         else:
-            # Fallback to deterministic generation
-            # Generate user story
-            user_story_text = generate_user_story(feature_description)
-
-            # Generate acceptance criteria
-            acceptance_criteria = generate_acceptance_criteria(
-                user_story_text or feature_description, feature_description
-            )
-
-            # Generate technical specification
-            tech_spec = generate_technical_spec(feature_description)
-
-            # Get project structure if available for more accurate file planning
-            project_structure = context.get("project_structure", {})
-
-            # Generate file change plan
-            file_plan = generate_file_change_plan(feature_description, project_structure)
-
-            # Prepare result content
-            result_content = {
-                "schema_version": "1.0",
-                "feature_description": feature_description,
-                "user_story": user_story_text,
-                "acceptance_criteria": acceptance_criteria,
-                "technical_specification": {
-                    "components": tech_spec.components if hasattr(tech_spec, "components") else [],
-                    "endpoints": tech_spec.endpoints if hasattr(tech_spec, "endpoints") else [],
-                    "schemas": tech_spec.schemas if hasattr(tech_spec, "schemas") else [],
-                    "dependencies": tech_spec.dependencies
-                    if hasattr(tech_spec, "dependencies")
-                    else [],
-                    "implementation_notes": tech_spec.implementation_notes
-                    if hasattr(tech_spec, "implementation_notes")
-                    else [],
-                },
-                "file_change_plan": {
-                    "files_to_create": file_plan.files_to_create
-                    if hasattr(file_plan, "files_to_create")
-                    else [],
-                    "files_to_modify": file_plan.files_to_modify
-                    if hasattr(file_plan, "files_to_modify")
-                    else [],
-                    "files_to_delete": file_plan.files_to_delete
-                    if hasattr(file_plan, "files_to_delete")
-                    else [],
-                },
-                "generation_context": {
-                    "has_user_context": user_story_text is not None,
-                    "complexity_estimate": len(feature_description.split()) // 10 + 1,
-                },
-            }
-
+            result_content = self._build_deterministic_spec(context, resolved, llm_error)
             reason = (
                 "Deterministic specification generated (LLM unavailable)."
                 if llm_error
-                else "Specification generated from issue description."
+                else "Specification generated from normalized issue/DoD input."
             )
-            confidence = 0.85
+            confidence = 0.86
+
+        rules = context.get("rules", {})
+        if isinstance(rules, dict) and rules:
+            rule_sources = rules.get("sources", [])
+            if isinstance(rule_sources, list) and rule_sources:
+                result_content.setdefault("requirements", [])
+                result_content["requirements"].extend(rule_sources)
+            rules_version = _normalize_text(rules.get("version"))
+            if rules_version:
+                result_content.setdefault("notes", [])
+                result_content["notes"].append(f"rules_version={rules_version}")
+
+        result_content["quality_signals"] = _build_quality_signals(result_content)
+
+        result = build_agent_result(
+            status="SUCCESS",
+            artifact_type="spec",
+            artifact_content=result_content,
+            reason=reason,
+            confidence=confidence,
+            logs=[
+                f"Generated specification for: {feature_description[:80]}",
+                f"spec_mode={resolved['spec_mode']}",
+                f"acceptance_criteria={result_content['quality_signals']['acceptance_criteria_count']}",
+                f"spec_completeness={result_content['quality_signals']['spec_completeness']}",
+            ],
+            next_actions=["task_decomposer", "bdd_generator", "test_generator"],
+        )
+        result["artifact_type"] = "spec"
+        result["artifact_content"] = result_content
+        return result
+
+    def _build_deterministic_spec(
+        self,
+        context: dict[str, Any],
+        resolved: dict[str, Any],
+        llm_error: str | None,
+    ) -> dict[str, Any]:
+        feature_description = resolved["feature_description"]
+        spec_mode = resolved["spec_mode"]
+        user_story_text = generate_user_story(feature_description, spec_mode=spec_mode)
+        acceptance_criteria = generate_acceptance_criteria(
+            user_story_text,
+            issue_description=resolved["source_text"],
+            seed_criteria=resolved["acceptance_criteria"],
+        )
+        tech_spec = generate_technical_spec(feature_description, spec_mode=spec_mode)
+        project_structure = context.get("project_structure", {})
+        file_plan = generate_file_change_plan(
+            feature_description,
+            project_structure=project_structure if isinstance(project_structure, dict) else {},
+            spec_mode=spec_mode,
+        )
+
+        result_content = {
+            "schema_version": "1.0",
+            "summary": resolved["issue_title"] or feature_description,
+            "feature_description": feature_description,
+            "user_story": user_story_text,
+            "acceptance_criteria": acceptance_criteria,
+            "technical_specification": {
+                "components": tech_spec.components,
+                "endpoints": tech_spec.endpoints,
+                "schemas": tech_spec.schemas,
+                "dependencies": tech_spec.dependencies,
+                "implementation_notes": tech_spec.implementation_notes,
+            },
+            "file_change_plan": {
+                "files_to_create": file_plan.files_to_create,
+                "files_to_modify": file_plan.files_to_modify,
+                "files_to_delete": file_plan.files_to_delete,
+            },
+            "generation_context": {
+                "spec_mode": spec_mode,
+                "has_user_context": user_story_text is not None,
+                "complexity_estimate": max(1, len(feature_description.split()) // 10 + 1),
+                "input_sources": {
+                    "issue_title": bool(resolved["issue_title"]),
+                    "issue_body": bool(resolved["issue_body"]),
+                    "dod": bool(resolved["dod"]),
+                    "acceptance_criteria_seed_count": len(resolved["acceptance_criteria"]),
+                },
+            },
+            "plan_provenance": {
+                "source": context.get("plan_source", "generated"),
+                "passthrough": False,
+                "rebuilt": False,
+            },
+        }
+
+        if spec_mode in {"bugfix", "ci_incident", "infra", "docs"}:
+            result_content["problem_statement"] = resolved["source_text"] or feature_description
+            result_content["target_outcome"] = (
+                "Restore the expected system behaviour with minimal-risk changes."
+                if spec_mode in {"bugfix", "ci_incident"}
+                else "Implement the requested change safely and predictably."
+            )
+            result_content["constraints"] = [
+                "Prefer minimal, targeted changes",
+                "Preserve backward compatibility where possible",
+            ]
 
         if llm_error:
             result_content.setdefault("notes", [])
             result_content["notes"].append(f"llm_error={llm_error[:120]}")
 
-        # Add rules to requirements and notes if provided in context
-        rules = context.get("rules", {})
-        if rules:
-            # Add rule sources to requirements
-            rule_sources = rules.get("sources", [])
-            if rule_sources:
-                result_content.setdefault("requirements", [])
-                result_content["requirements"].extend(rule_sources)
+        return result_content
 
-            # Add rules version to notes
-            rules_version = rules.get("version", "")
-            if rules_version:
-                result_content.setdefault("notes", [])
-                result_content["notes"].append(f"rules_version={rules_version}")
+    def _normalize_llm_spec(
+        self,
+        llm_spec: dict[str, Any],
+        resolved: dict[str, Any],
+        context: dict[str, Any],
+        llm_error: str | None,
+    ) -> dict[str, Any]:
+        acceptance_criteria = generate_acceptance_criteria(
+            llm_spec.get("user_story"),
+            issue_description=resolved["source_text"],
+            seed_criteria=llm_spec.get("acceptance_criteria") or resolved["acceptance_criteria"],
+        )
+        technical_specification = llm_spec.get("technical_specification")
+        if not isinstance(technical_specification, dict):
+            technical_specification = llm_spec.get("technical_spec", {})
+        if not isinstance(technical_specification, dict):
+            technical_specification = {}
 
-        # Create the result in the expected format
-        result = {
-            "status": "SUCCESS",
-            "artifact_type": "spec",
-            "artifacts": [{"type": "spec", "content": result_content}],
-            "reason": reason,
-            "confidence": confidence,
-            "logs": [
-                f"Generated specification for: {feature_description[:50]}...",
-                f"User story: {'Yes' if result_content.get('user_story') else 'No'}",
-                f"Acceptance criteria: {len(result_content.get('acceptance_criteria', []))} items",
-                f"Technical components: {len(result_content.get('technical_specification', {}).get('components', []))}",
-                f"Files to create: {len(result_content.get('file_change_plan', {}).get('files_to_create', []))}, modify: {len(result_content.get('file_change_plan', {}).get('files_to_modify', []))}",
-            ],
-            "next_actions": ["architecture_planner", "implementation_planner"],
+        file_change_plan = llm_spec.get("file_change_plan")
+        if not isinstance(file_change_plan, dict):
+            deterministic = self._build_deterministic_spec(context, resolved, llm_error)
+            file_change_plan = deterministic.get("file_change_plan", {})
+
+        result_content = {
+            "schema_version": "1.0",
+            "summary": _normalize_text(llm_spec.get("summary"))
+            or resolved["issue_title"]
+            or resolved["feature_description"],
+            "feature_description": _normalize_text(llm_spec.get("feature_description"))
+            or resolved["feature_description"],
+            "user_story": _normalize_text(llm_spec.get("user_story"))
+            or generate_user_story(
+                resolved["feature_description"],
+                spec_mode=resolved["spec_mode"],
+            ),
+            "acceptance_criteria": acceptance_criteria,
+            "technical_specification": {
+                "components": _coerce_str_list(technical_specification.get("components")),
+                "endpoints": _coerce_str_list(technical_specification.get("endpoints")),
+                "schemas": technical_specification.get("schemas", [])
+                if isinstance(technical_specification.get("schemas", []), list)
+                else [],
+                "dependencies": _coerce_str_list(technical_specification.get("dependencies")),
+                "implementation_notes": _coerce_str_list(
+                    technical_specification.get("implementation_notes")
+                ),
+            },
+            "file_change_plan": {
+                "files_to_create": _coerce_str_list(file_change_plan.get("files_to_create")),
+                "files_to_modify": _coerce_str_list(file_change_plan.get("files_to_modify")),
+                "files_to_delete": _coerce_str_list(file_change_plan.get("files_to_delete")),
+            },
+            "generation_context": {
+                "spec_mode": resolved["spec_mode"],
+                "llm_enhanced": True,
+                "complexity_estimate": max(
+                    1, len(resolved["feature_description"].split()) // 10 + 1
+                ),
+            },
+            "plan_provenance": {
+                "source": context.get("plan_source", "generated"),
+                "passthrough": False,
+                "rebuilt": False,
+            },
         }
 
-        return result
+        notes = llm_spec.get("notes")
+        if isinstance(notes, list) and notes:
+            result_content["notes"] = [
+                _normalize_text(note) for note in notes if _normalize_text(note)
+            ]
+        if llm_error:
+            result_content.setdefault("notes", []).append(f"llm_error={llm_error[:120]}")
+
+        return result_content
 
 
-# Backward-compatible alias
 SpecWriter = SpecificationWriter
-
-# Backward-compatible alias
 EnhancedSpecificationWriter = SpecificationWriter

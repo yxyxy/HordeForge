@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from storage.backends import get_current_log_path
 from storage.models import StepLogRecord
 from storage.persistence import JsonStore
 
@@ -53,8 +54,8 @@ def _parse_iso(value: str | None) -> datetime:
 
 
 def run_cleanup(config: CleanupConfig) -> dict[str, int]:
-    store = JsonStore(config.storage_dir / "step_logs.json")
-    runs_store = JsonStore(config.storage_dir / "runs.json")
+    store = JsonStore(get_current_log_path(config.storage_dir, "step_logs.json"))
+    runs_store = JsonStore(get_current_log_path(config.storage_dir, "runs.json"))
     cutoff = datetime.now(timezone.utc) - timedelta(days=config.retention_days)
     runs = [item for item in runs_store.read_all()]
     run_started = {

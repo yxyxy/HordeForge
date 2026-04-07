@@ -25,6 +25,44 @@ os.environ["TEMP"] = _tmp_root
 tempfile.tempdir = _tmp_root
 
 
+def _force_remove_tree(path: Path) -> None:
+    def _onerror(_func, target, _exc) -> None:
+        try:
+            os.chmod(target, 0o700)
+        except Exception:
+            return
+
+    target = path
+    if os.name == "nt":
+        target = Path("\\\\?\\" + str(path.resolve()))
+    shutil.rmtree(target, ignore_errors=False, onerror=_onerror)
+
+
+def _cleanup_workspace_tmp_root() -> None:
+    if not _workspace_tmp_root.exists():
+        return
+    removable_prefixes = (
+        "test_runner_isolated_",
+        "test_runner_proc_",
+        "pip-build-tracker-",
+        "pip-ephem-wheel-cache-",
+        "pip-install-",
+        "pip-unpack-",
+        "tmp_path_",
+        "tmp",
+    )
+    for entry in _workspace_tmp_root.iterdir():
+        if not entry.name.startswith(removable_prefixes):
+            continue
+        try:
+            if entry.is_dir():
+                _force_remove_tree(entry)
+            else:
+                entry.unlink(missing_ok=True)
+        except Exception:
+            continue
+
+
 def _workspace_mkdtemp(
     suffix: str | None = None, prefix: str | None = None, dir: str | None = None
 ) -> str:
@@ -61,6 +99,26 @@ class _WorkspaceTemporaryDirectory:
 # Ensure stdlib tempfile helpers create writable directories inside workspace.
 tempfile.mkdtemp = _workspace_mkdtemp  # type: ignore[assignment]
 tempfile.TemporaryDirectory = _WorkspaceTemporaryDirectory  # type: ignore[assignment]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_workspace_tmp_root() -> Iterator[None]:
+    """Optional cleanup for .pytest_tmp_runtime (disabled by default for speed)."""
+    if os.getenv("HORDEFORGE_PYTEST_CLEANUP_ON_START", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        _cleanup_workspace_tmp_root()
+    yield
+    if os.getenv("HORDEFORGE_PYTEST_CLEANUP_ON_EXIT", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        _cleanup_workspace_tmp_root()
 
 
 @pytest.fixture
@@ -105,3 +163,89 @@ def sample_context() -> dict:
         "pipeline_name": "test_pipeline",
         "tenant_id": "test-tenant",
     }
+
+
+@pytest.fixture
+def stub_llm_for_pipeline_runtime(monkeypatch) -> None:
+    """Patch LLM wrappers for pipeline runtime tests while keeping require_llm=true in YAML."""
+
+    class _StubLLM:
+        def __init__(self, response: str) -> None:
+            self._response = response
+
+        def complete(self, _prompt: str, **_kwargs) -> str:
+            return self._response
+
+        def close(self) -> None:
+            return
+
+    spec_response = (
+        '{"summary":"Generated spec",'
+        '"requirements":[{"id":"REQ-001","description":"Implement deterministic path","test_criteria":"Runtime path succeeds","priority":"must"}],'
+        '"technical_notes":["Keep deterministic outputs for tests"],'
+        '"file_changes":[{"path":"src/feature_impl.py","change_type":"modify","description":"Implement deterministic feature path"}]}'
+    )
+    tests_response = (
+        '{"schema_version":"2.1","test_cases":['
+        '{"name":"test_feature_happy_path","description":"happy path",'
+        '"type":"unit","priority":"P1","file_path":"tests/test_feature.py",'
+        '"content":"def test_feature_happy_path():\\n    assert True"}'
+        "]}"
+    )
+    code_response = (
+        '{"files":[{"path":"src/feature_impl.py","change_type":"modify",'
+        '"content":"def process():\\n    return True"}],'
+        '"decisions":[{"description":"apply minimal patch","rationale":"deterministic test stub"}],'
+        '"test_changes":[],"expected_failures":0}'
+    )
+    fix_response = (
+        '{"files":[{"path":"src/feature_impl.py","change_type":"modify",'
+        '"content":"def process():\\n    return True"}],'
+        '"decisions":["fix from llm stub"]}'
+    )
+    review_response = (
+        '{"overall_decision":"approve","summary":"Looks good",'
+        '"findings":[],"strengths":["deterministic stub"],'
+        '"recommendations":[],"confidence":0.95}'
+    )
+
+    monkeypatch.setattr(
+        "agents.specification_writer.get_llm_wrapper",
+        lambda *args, **kwargs: _StubLLM(spec_response),
+    )
+    monkeypatch.setattr(
+        "agents.specification_writer.get_legacy_llm_wrapper",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "agents.test_generator.get_llm_wrapper",
+        lambda *args, **kwargs: _StubLLM(tests_response),
+    )
+    monkeypatch.setattr(
+        "agents.test_generator.get_legacy_llm_wrapper",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "agents.code_generator.get_llm_wrapper",
+        lambda *args, **kwargs: _StubLLM(code_response),
+    )
+    monkeypatch.setattr(
+        "agents.code_generator.get_legacy_llm_wrapper",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "agents.fix_agent.get_llm_wrapper",
+        lambda *args, **kwargs: _StubLLM(fix_response),
+    )
+    monkeypatch.setattr(
+        "agents.fix_agent.get_legacy_llm_wrapper",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "agents.review_agent.get_llm_wrapper",
+        lambda *args, **kwargs: _StubLLM(review_response),
+    )
+    monkeypatch.setattr(
+        "agents.review_agent.get_legacy_llm_wrapper",
+        lambda *args, **kwargs: None,
+    )

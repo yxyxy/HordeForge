@@ -61,7 +61,7 @@ class CiMonitorJob:
             self._processed_run_ids.add(run_id)
             triggers.append(
                 {
-                    "pipeline_name": "ci_fix_pipeline",
+                    "pipeline_name": "ci_scanner_pipeline",
                     "inputs": {
                         "repository": repository if isinstance(repository, dict) else {},
                         "ci_run": run,

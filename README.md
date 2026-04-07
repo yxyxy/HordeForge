@@ -1,5 +1,7 @@
 # HordeForge
 
+[English](README.md) | [Русский](README.ru.md)
+
 Autonomous AI software development orchestrator. Reads GitHub issues and automatically performs the full software development lifecycle: Issue → DoD → Spec → Tasks → Tests → Code → Fix loop → Review → PR → Merge
 
 ## Current State
@@ -42,45 +44,6 @@ Core layers: agents → orchestrator → scheduler → integrations → storage
 - **RAG**: `rag/` - Retrieval-Augmented Generation with vector storage and memory collections
 - **Registry**: `registry/` - Contracts, agents, and pipelines metadata with validation
 
-### Core Components
-
-- ✅ **Orchestrator runtime** (ExecutionContext, state machine, retry/timeout/loops, run summary)
-- ✅ **Schema validation** and registry-first agent execution
-- ✅ **MVP agents** for init_pipeline, feature_pipeline, ci_fix_pipeline
-- ✅ **Scheduler Gateway** with full REST API
-- ✅ **Webhook API** with HMAC validation and event routing
-- ✅ **Trigger-level idempotency** suppression
-- ✅ **Cron jobs** (issue_scanner, ci_monitor, dependency_checker, backup, data_retention)
-- ✅ **Storage layer** with JSON and PostgreSQL repositories
-- ✅ **Status/list API** with filtering and pagination
-- ✅ **Unified JSON logging** with correlation_id
-- ✅ **Runtime metrics** endpoint (Prometheus)
-- ✅ **Human override** API (stop/retry/resume/explain) with audit trail
-- ✅ **RBAC permission** checks for manual control-plane
-- ✅ **Token/security** hardening (redaction, masking)
-- ✅ **RAG foundation** (indexer, retriever, embeddings)
-- ✅ **Task queue** with async mode (InMemory + Redis backends)
-- ✅ **Tenant isolation** and multi-tenancy support
-- ✅ **Circuit breaker**, cost tracking, benchmarking
-- ✅ **Agent Memory system** with automatic recording of successful solutions
-- ✅ **Context optimization** with compression and deduplication
-- ✅ **Token Budget System** with comprehensive cost tracking
-- ⚠️ **Interactive CLI** with `horde` command (pipeline/LLM operations are implemented; `task/history` UX paths are scaffolded)
-- ✅ **Memory Hook integration** for automatic solution recording
-- ✅ **Context Builder** with memory and RAG integration
-- ✅ **Deduplication and compression** algorithms
-- ✅ **Token usage tracking** for all providers
-- ✅ **Budget enforcement** and cost monitoring
-- ✅ **Streaming interface** with multiple chunk types
-- ✅ **Provider routing** and fallback mechanisms
-- ✅ **Performance optimization** with caching
-- ✅ **Security hardening** with token redaction
-- ✅ **Comprehensive testing** with 500+ test cases (unit + integration)
-- ⚠️ **Deployment assets** for Docker/Kubernetes are implemented; production launch hardening is still required
-- ✅ **Multi-tenant isolation** and security
-- ✅ **Performance monitoring** and alerting
-- ✅ **Error handling** and retry mechanisms
-- ✅ **Documentation and examples**
 
 ## Quick Start
 
@@ -303,12 +266,20 @@ Safety gates in `pr_merge_agent`:
 - PR must exist
 - in dry-run/no-live mode `merged=false`
 
-### CI Fix Pipeline
+### CI Scanner Pipeline
 CI failure triage and handoff:
 ```
 ci_failure_analyzer -> ci_incident_handoff
 ```
-Result: creates/updates incident issue with labels `agent:opened`, `source:ci_fix_pipeline`, `kind:ci-incident`.
+Result: creates/updates incident issue with labels `agent:opened`, `source:ci_scanner_pipeline`, `kind:ci-incident`.
+
+### CI Fix Pipeline
+Production-safe execution pipeline for CI incidents and repair tasks:
+```
+rag_initializer -> memory_retrieval -> ci_failure_analysis -> specification_passthrough ->
+subtasks_passthrough -> bdd_passthrough -> code_generator -> test_runner ->
+fix_agent (loop) -> review_agent -> memory_writer -> pr_merge_agent
+```
 
 ### Issue Scanner Pipeline
 Scans staged issues (`agent:opened`, `agent:planning`, `agent:ready`, `agent:fixed`) and dispatches implementation:
@@ -336,7 +307,7 @@ code_generator -> test_runner -> fix_agent -> review_agent
 ## Development
 
 ### Requirements
-- Python 3.10+
+- Python 3.11+
 - Docker and docker-compose
 - Git
 
@@ -387,20 +358,16 @@ Complete documentation is available in the `docs/` directory:
 - [Development Setup](docs/development_setup.md) - Local development configuration
 - [CLI Interface](docs/cli_interface.md) - Command-line tools and usage
 - [LLM Integration](docs/llm_integration.md) - Multi-provider LLM support
-- [Agent Memory](docs/agent_memory.md) - Memory system and historical solutions
-- [Context Optimization](docs/context_optimization.md) - Context compression and deduplication
 - [Token Budget System](docs/token_budget_system.md) - Cost tracking and budget management
 - [Operations Runbook](docs/operations_runbook.md) - Operational procedures
 - [Troubleshooting Guide](docs/troubleshooting_guide.md) - Issue resolution
-- [Development Workflow](docs/development_workflow.md) - Development processes
 - [Quality Assurance](docs/quality_assurance.md) - Testing and quality standards
 - [API Reference](docs/api_reference.md) - Complete API documentation
-- [Migration Guide](docs/migration_guide.md) - Migration procedures
 - [Contributing Guide](docs/contributing.md) - Contribution guidelines
 
 ## Contributing
 
-See [Contributing Guide](docs/contributing.md) for contribution guidelines and [Development Workflow](docs/development_workflow.md) for development processes.
+See [Contributing Guide](docs/contributing.md) for contribution guidelines.
 
 ## License
 

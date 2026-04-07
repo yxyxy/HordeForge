@@ -17,23 +17,17 @@ Welcome to the comprehensive documentation for HordeForge, an autonomous AI soft
 
 ### Core Features
 - [LLM Integration](llm_integration.md) - Multi-provider LLM support and configuration
-- [Agent Memory System](agent_memory.md) - Historical solution storage and retrieval
-- [Context Optimization](context_optimization.md) - Context compression and deduplication
 - [Token Budget System](token_budget_system.md) - Cost tracking and budget management
-- [Features Matrix](features.md) - Comprehensive feature list and status
 
 ### Operations
 - [Operations Runbook](operations_runbook.md) - Operational procedures and runbooks
 - [Launch Readiness Plan](launch_readiness_plan.md) - Production hardening and launch gates
 - [Troubleshooting Guide](troubleshooting_guide.md) - Common issues and solutions
-- [System Requirements](system_requirements.md) - Hardware and software requirements
 - [Security Notes](security_notes.md) - Security practices and considerations
 
 ### Development
-- [Development Workflow](development_workflow.md) - Development processes and practices
 - [Quality Assurance](quality_assurance.md) - Testing and quality standards
 - [Contributing Guide](contributing.md) - Contribution guidelines and standards
-- [Migration Guide](migration_guide.md) - Migration procedures from previous versions
 
 ### Pipelines and Scheduling
 - [Pipelines Documentation](pipelines.md) - Complete pipeline definitions and usage
@@ -44,7 +38,7 @@ Welcome to the comprehensive documentation for HordeForge, an autonomous AI soft
 ### Monitoring and Performance
 - [Metrics and Monitoring](metrics_and_monitoring.md) - Performance metrics and monitoring
 - [Benchmark Results](benchmark_results.md) - Performance benchmarks and results
-- [Performance Optimization](context_optimization.md) - Performance tuning and optimization
+
 
 ## Key Features
 
@@ -78,13 +72,11 @@ Welcome to the comprehensive documentation for HordeForge, an autonomous AI soft
 1. Start with [Development Setup](development_setup.md) for local environment
 2. Review [Agent Specification](AGENT_SPEC.md) for creating new agents
 3. Check [CLI Interface](cli_interface.md) for development workflows
-4. Follow [Development Workflow](development_workflow.md) for best practices
 
 ### For Operators
-1. Begin with [System Requirements](system_requirements.md) for deployment
-2. Review [Operations Runbook](operations_runbook.md) for operational procedures
-3. Check [Security Notes](security_notes.md) for security practices
-4. Use [Troubleshooting Guide](troubleshooting_guide.md) for issue resolution
+1. Review [Operations Runbook](operations_runbook.md) for operational procedures
+2. Check [Security Notes](security_notes.md) for security practices
+3. Use [Troubleshooting Guide](troubleshooting_guide.md) for issue resolution
 
 ### For Architects
 1. Study [Architecture Overview](ARCHITECTURE.md) for system design
@@ -107,13 +99,12 @@ Documentation status: Synced with codebase for MVP/P2; launch hardening items re
 
 ## Contributing to Documentation
 
-Documentation is maintained alongside code changes. See [Contributing Guide](contributing.md) for contribution guidelines and [Development Workflow](development_workflow.md) for documentation standards.
+Documentation is maintained alongside code changes. See [Contributing Guide](contributing.md) for contribution guidelines
 
 ## Next Steps
 
 1. **New to HordeForge?** Start with the [Quick Start](quick_start.md) guide
 2. **Developing agents?** Review the [Agent Specification](AGENT_SPEC.md)
-3. **Setting up production?** Check [System Requirements](system_requirements.md) and [Operations Runbook](operations_runbook.md)
-4. **Integrating with LLMs?** Read [LLM Integration](llm_integration.md)
+3. **Integrating with LLMs?** Read [LLM Integration](llm_integration.md)
 
 The documentation is organized to provide both high-level overviews and detailed technical information. Use the table of contents above to navigate to specific topics of interest.

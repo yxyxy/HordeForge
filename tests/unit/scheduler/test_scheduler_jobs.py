@@ -40,7 +40,7 @@ def test_ci_monitor_triggers_failed_runs_once():
     second = job.run(payload)
 
     assert first["trigger_count"] == 1
-    assert first["triggers"][0]["pipeline_name"] == "ci_fix_pipeline"
+    assert first["triggers"][0]["pipeline_name"] == "ci_scanner_pipeline"
     assert second["trigger_count"] == 0
 
 

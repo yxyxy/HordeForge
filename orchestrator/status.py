@@ -29,7 +29,7 @@ VALID_STATUS_TRANSITIONS: dict[StepStatus, set[StepStatus]] = {
     StepStatus.SUCCESS: {StepStatus.RUNNING},
     StepStatus.PARTIAL_SUCCESS: {StepStatus.RUNNING},
     StepStatus.FAILED: {StepStatus.RUNNING, StepStatus.SKIPPED},
-    StepStatus.BLOCKED: {StepStatus.RUNNING},
+    StepStatus.BLOCKED: {StepStatus.RUNNING, StepStatus.SKIPPED},
     StepStatus.SKIPPED: {StepStatus.RUNNING},
 }
 

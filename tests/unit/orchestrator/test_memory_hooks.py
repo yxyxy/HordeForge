@@ -193,3 +193,81 @@ def test_memory_hook_creates_correct_entry_types():
     assert payload["file"] == "test.py"
     assert payload["diff"] == "patch_diff"
     assert payload["reason"] == "fix bug"
+
+
+def test_memory_hook_deferred_mode_buffers_without_immediate_write():
+    mock_store = Mock()
+    hook = MemoryHook(memory_store=mock_store)
+    step_result = {
+        "status": "SUCCESS",
+        "artifacts": [
+            {"type": "patch", "content": {"diff": "test", "file": "file.py", "reason": "reason"}}
+        ],
+    }
+    context = {
+        "task_description": "Test task",
+        "agents_used": [],
+        "__memory_promotion_mode": "deferred",
+    }
+
+    hook.after_step("test_agent", step_result, context)
+
+    assert isinstance(context.get(MemoryHook.SHORT_TERM_KEY), list)
+    assert len(context[MemoryHook.SHORT_TERM_KEY]) == 1
+    mock_store.add_memory.assert_not_called()
+
+
+def test_memory_hook_promotes_buffered_entries_for_successful_run():
+    mock_store = Mock()
+    hook = MemoryHook(memory_store=mock_store)
+    step_result = {
+        "status": "SUCCESS",
+        "artifacts": [
+            {"type": "patch", "content": {"diff": "test", "file": "file.py", "reason": "reason"}}
+        ],
+    }
+    context = {
+        "task_description": "Test task",
+        "agents_used": [],
+        "__memory_promotion_mode": "deferred",
+    }
+
+    hook.after_step("test_agent", step_result, context)
+    promoted = hook.promote_short_term(context=context, run_status="SUCCESS")
+
+    assert promoted == 1
+    mock_store.add_memory.assert_called_once()
+    assert context[MemoryHook.SHORT_TERM_KEY] == []
+
+
+def test_memory_hook_skips_promotion_for_fallback_generated_entries():
+    mock_store = Mock()
+    hook = MemoryHook(memory_store=mock_store)
+    step_result = {
+        "status": "SUCCESS",
+        "result": {"source": "memory_agent_fallback"},
+        "artifacts": [
+            {
+                "type": "patch",
+                "content": {
+                    "diff": "",
+                    "file": "",
+                    "reason": "",
+                    "note": "fallback_empty_patch",
+                    "source": "memory_agent_fallback",
+                },
+            }
+        ],
+    }
+    context = {
+        "task_description": "Fallback memory write",
+        "agents_used": [],
+        "__memory_promotion_mode": "deferred",
+    }
+
+    hook.after_step("memory_agent", step_result, context)
+    promoted = hook.promote_short_term(context=context, run_status="SUCCESS")
+
+    assert promoted == 0
+    mock_store.add_memory.assert_not_called()
+    assert context[MemoryHook.SHORT_TERM_KEY] == []

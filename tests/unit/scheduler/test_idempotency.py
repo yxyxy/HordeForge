@@ -38,3 +38,10 @@ def test_idempotency_store_clear_removes_cached_entries():
     store.clear()
 
     assert store.get("k1") is None
+
+
+def test_build_payload_hash_is_stable_for_same_payload_content():
+    from scheduler.idempotency import build_payload_hash
+
+    payload = {"a": 1, "b": {"x": 2}}
+    assert build_payload_hash(payload) == build_payload_hash({"b": {"x": 2}, "a": 1})

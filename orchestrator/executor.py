@@ -7,6 +7,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
+from hashlib import sha256
 from typing import Any
 from uuid import uuid4
 
@@ -53,9 +54,9 @@ class StepExecutor:
         self.logger = logging.getLogger("hordeforge.orchestrator.step_executor")
 
     def _create_registry_from_factory(self, base_registry, factory):
-        """Создает обертку реестра, который использует фабрику для создания агентов."""
+        """РЎРѕР·РґР°РµС‚ РѕР±РµСЂС‚РєСѓ СЂРµРµСЃС‚СЂР°, РєРѕС‚РѕСЂС‹Р№ РёСЃРїРѕР»СЊР·СѓРµС‚ С„Р°Р±СЂРёРєСѓ РґР»СЏ СЃРѕР·РґР°РЅРёСЏ Р°РіРµРЅС‚РѕРІ."""
 
-        # Создаем обертку вокруг базового реестра, которая может динамически регистрировать агентов
+        # РЎРѕР·РґР°РµРј РѕР±РµСЂС‚РєСѓ РІРѕРєСЂСѓРі Р±Р°Р·РѕРІРѕРіРѕ СЂРµРµСЃС‚СЂР°, РєРѕС‚РѕСЂР°СЏ РјРѕР¶РµС‚ РґРёРЅР°РјРёС‡РµСЃРєРё СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊ Р°РіРµРЅС‚РѕРІ
         class DynamicRegistryWrapper:
             def __init__(self, base_reg, factory_func):
                 self.base_registry = base_reg
@@ -63,30 +64,30 @@ class StepExecutor:
                 self.dynamic_agents = {}
 
             def has(self, agent_name: str) -> bool:
-                # Проверяем сначала в базовом реестре, затем пробуем фабрику
+                # РџСЂРѕРІРµСЂСЏРµРј СЃРЅР°С‡Р°Р»Р° РІ Р±Р°Р·РѕРІРѕРј СЂРµРµСЃС‚СЂРµ, Р·Р°С‚РµРј РїСЂРѕР±СѓРµРј С„Р°Р±СЂРёРєСѓ
                 if self.base_registry.has(agent_name):
                     return True
 
-                # Пробуем создать агент через фабрику, чтобы проверить его наличие
+                # РџСЂРѕР±СѓРµРј СЃРѕР·РґР°С‚СЊ Р°РіРµРЅС‚ С‡РµСЂРµР· С„Р°Р±СЂРёРєСѓ, С‡С‚РѕР±С‹ РїСЂРѕРІРµСЂРёС‚СЊ РµРіРѕ РЅР°Р»РёС‡РёРµ
                 try:
                     agent = self.factory(agent_name)
-                    # Сохраняем агент во временный кэш
+                    # РЎРѕС…СЂР°РЅСЏРµРј Р°РіРµРЅС‚ РІРѕ РІСЂРµРјРµРЅРЅС‹Р№ РєСЌС€
                     self.dynamic_agents[agent_name] = agent.__class__
                     return True
                 except Exception:
                     return False
 
             def create(self, agent_name: str) -> Any:
-                # Если агент в базовом реестре - используем его
+                # Р•СЃР»Рё Р°РіРµРЅС‚ РІ Р±Р°Р·РѕРІРѕРј СЂРµРµСЃС‚СЂРµ - РёСЃРїРѕР»СЊР·СѓРµРј РµРіРѕ
                 if self.base_registry.has(agent_name):
                     return self.base_registry.create(agent_name)
 
-                # Иначе создаем через фабрику каждый раз, чтобы избежать проблем с состоянием
+                # РРЅР°С‡Рµ СЃРѕР·РґР°РµРј С‡РµСЂРµР· С„Р°Р±СЂРёРєСѓ РєР°Р¶РґС‹Р№ СЂР°Р·, С‡С‚РѕР±С‹ РёР·Р±РµР¶Р°С‚СЊ РїСЂРѕР±Р»РµРј СЃ СЃРѕСЃС‚РѕСЏРЅРёРµРј
                 agent = self.factory(agent_name)
                 return agent
 
             def get(self, agent_name: str):
-                # Для совместимости с интерфейсом AgentRegistry
+                # Р”Р»СЏ СЃРѕРІРјРµСЃС‚РёРјРѕСЃС‚Рё СЃ РёРЅС‚РµСЂС„РµР№СЃРѕРј AgentRegistry
                 if self.base_registry.has(agent_name):
                     item = self.base_registry.get(agent_name)
                     if isinstance(item, AgentMetadata):
@@ -94,16 +95,16 @@ class StepExecutor:
                     return item
 
                 if agent_name in self.dynamic_agents:
-                    # Возвращаем класс агента, а не экземпляр
+                    # Р’РѕР·РІСЂР°С‰Р°РµРј РєР»Р°СЃСЃ Р°РіРµРЅС‚Р°, Р° РЅРµ СЌРєР·РµРјРїР»СЏСЂ
                     return self.dynamic_agents[agent_name]
 
-                # Если агент не существует, пробуем создать через фабрику
+                # Р•СЃР»Рё Р°РіРµРЅС‚ РЅРµ СЃСѓС‰РµСЃС‚РІСѓРµС‚, РїСЂРѕР±СѓРµРј СЃРѕР·РґР°С‚СЊ С‡РµСЂРµР· С„Р°Р±СЂРёРєСѓ
                 try:
                     agent = self.factory(agent_name)
                     self.dynamic_agents[agent_name] = agent.__class__
                     return agent.__class__
                 except Exception:
-                    # Если агент не существует, вызываем исключение как в оригинальном методе
+                    # Р•СЃР»Рё Р°РіРµРЅС‚ РЅРµ СЃСѓС‰РµСЃС‚РІСѓРµС‚, РІС‹Р·С‹РІР°РµРј РёСЃРєР»СЋС‡РµРЅРёРµ РєР°Рє РІ РѕСЂРёРіРёРЅР°Р»СЊРЅРѕРј РјРµС‚РѕРґРµ
                     raise KeyError(f"Agent '{agent_name}' is not registered") from None
 
         return DynamicRegistryWrapper(base_registry, factory)
@@ -111,6 +112,23 @@ class StepExecutor:
     @staticmethod
     def _now_iso() -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _stable_hash(payload: dict[str, Any]) -> str:
+        normalized = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return sha256(normalized.encode("utf-8")).hexdigest()
+
+    def calculate_step_input_hash(self, step: StepDefinition, context_state: dict[str, Any]) -> str:
+        payload = self._apply_input_mapping(step, context_state)
+        if not isinstance(payload, dict):
+            payload = {"_payload": payload}
+        return self._stable_hash(payload)
 
     def _log_event(self, level: int, run_id: str, event: str, **fields: Any) -> None:
         safe_fields = redact_mapping(fields)
@@ -129,7 +147,7 @@ class StepExecutor:
         self.logger.log(level, json.dumps(payload, ensure_ascii=False))
 
     def _get_agent_from_registry(self, agent_name: str, run_id: str) -> Any:
-        """Получить агент из реестра, с обработкой ошибок для незарегистрированных агентов."""
+        """РџРѕР»СѓС‡РёС‚СЊ Р°РіРµРЅС‚ РёР· СЂРµРµСЃС‚СЂР°, СЃ РѕР±СЂР°Р±РѕС‚РєРѕР№ РѕС€РёР±РѕРє РґР»СЏ РЅРµР·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРЅС‹С… Р°РіРµРЅС‚РѕРІ."""
         if not self.agent_registry.has(agent_name):
             error_msg = f"Agent '{agent_name}' is not registered in AgentRegistry"
             self._log_event(
@@ -146,10 +164,10 @@ class StepExecutor:
     @staticmethod
     def _normalize_agent_output(output: dict[str, Any]) -> dict[str, Any]:
         """
-        Нормализует результат агента, чтобы он соответствовал схеме.
-        Удаляет дополнительные поля, которые не предусмотрены схемой.
+        РќРѕСЂРјР°Р»РёР·СѓРµС‚ СЂРµР·СѓР»СЊС‚Р°С‚ Р°РіРµРЅС‚Р°, С‡С‚РѕР±С‹ РѕРЅ СЃРѕРѕС‚РІРµС‚СЃС‚РІРѕРІР°Р» СЃС…РµРјРµ.
+        РЈРґР°Р»СЏРµС‚ РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅС‹Рµ РїРѕР»СЏ, РєРѕС‚РѕСЂС‹Рµ РЅРµ РїСЂРµРґСѓСЃРјРѕС‚СЂРµРЅС‹ СЃС…РµРјРѕР№.
         """
-        # Определяем допустимые поля в соответствии со схемой
+        # РћРїСЂРµРґРµР»СЏРµРј РґРѕРїСѓСЃС‚РёРјС‹Рµ РїРѕР»СЏ РІ СЃРѕРѕС‚РІРµС‚СЃС‚РІРёРё СЃРѕ СЃС…РµРјРѕР№
         allowed_keys = {
             "status",
             "artifacts",
@@ -161,13 +179,13 @@ class StepExecutor:
             "schema_version",
         }
 
-        # Создаем новый словарь только с разрешенными ключами
+        # РЎРѕР·РґР°РµРј РЅРѕРІС‹Р№ СЃР»РѕРІР°СЂСЊ С‚РѕР»СЊРєРѕ СЃ СЂР°Р·СЂРµС€РµРЅРЅС‹РјРё РєР»СЋС‡Р°РјРё
         normalized = {}
         for key in allowed_keys:
             if key in output:
                 normalized[key] = output[key]
 
-        # Если обязательные поля отсутствуют, добавляем их со значениями по умолчанию
+        # Р•СЃР»Рё РѕР±СЏР·Р°С‚РµР»СЊРЅС‹Рµ РїРѕР»СЏ РѕС‚СЃСѓС‚СЃС‚РІСѓСЋС‚, РґРѕР±Р°РІР»СЏРµРј РёС… СЃРѕ Р·РЅР°С‡РµРЅРёСЏРјРё РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ
         if "status" not in normalized:
             normalized["status"] = output.get("status", "FAILED")
 
@@ -486,7 +504,7 @@ class StepExecutor:
         if isinstance(raw_status, str):
             status_upper = raw_status.strip().upper()
             if status_upper in {"FAILURE", "ERROR", "FAIL"}:
-                status_upper = StepStatus.FAILED.value
+                status_upper = "FAILED"  # Normalize to consistent FAILED status
             if status_upper:
                 sanitized["status"] = status_upper
 
@@ -861,6 +879,34 @@ class StepExecutor:
 
         return current
 
+    @staticmethod
+    def _attach_artifact_ids(
+        output: dict[str, Any],
+        *,
+        step_name: str,
+        step_input_hash: str,
+    ) -> list[str]:
+        artifact_ids: list[str] = []
+        artifacts = output.get("artifacts")
+        if not isinstance(artifacts, list):
+            return artifact_ids
+
+        for index, artifact in enumerate(artifacts):
+            if not isinstance(artifact, dict):
+                continue
+            artifact_type = str(artifact.get("type") or "unknown").strip() or "unknown"
+            digest_seed = f"{step_name}:{step_input_hash}:{artifact_type}:{index}"
+            artifact_id = sha256(digest_seed.encode("utf-8")).hexdigest()[:20]
+            metadata = artifact.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata.setdefault("artifact_id", artifact_id)
+            metadata.setdefault("step_input_hash", step_input_hash)
+            artifact["metadata"] = metadata
+            artifact_ids.append(str(metadata["artifact_id"]))
+
+        return artifact_ids
+
     def execute_step(
         self,
         step: StepDefinition,
@@ -873,6 +919,10 @@ class StepExecutor:
         parent_span_id = str(context.metadata.get("root_span_id", "")).strip() or None
         span_id = uuid4().hex[:16]
         started_at = self._now_iso()
+        step_payload_for_hash = self._apply_input_mapping(step, context.state)
+        if not isinstance(step_payload_for_hash, dict):
+            step_payload_for_hash = {"_payload": step_payload_for_hash}
+        step_input_hash = self._stable_hash(step_payload_for_hash)
         run_state.mark_step_status(
             step.name,
             StepStatus.RUNNING,
@@ -881,6 +931,7 @@ class StepExecutor:
             trace_id=trace_id,
             span_id=span_id,
             parent_span_id=parent_span_id,
+            input_hash=step_input_hash,
         )
         self._log_event(
             logging.INFO,
@@ -893,17 +944,18 @@ class StepExecutor:
             trace_id=trace_id,
             span_id=span_id,
             parent_span_id=parent_span_id,
+            input_hash=step_input_hash,
         )
 
         error_message: str | None = None
         try:
-            # Всегда получаем агент через реестр, без возможности прямого создания
+            # Р’СЃРµРіРґР° РїРѕР»СѓС‡Р°РµРј Р°РіРµРЅС‚ С‡РµСЂРµР· СЂРµРµСЃС‚СЂ, Р±РµР· РІРѕР·РјРѕР¶РЅРѕСЃС‚Рё РїСЂСЏРјРѕРіРѕ СЃРѕР·РґР°РЅРёСЏ
             agent = self._get_agent_from_registry(step.agent, run_id)
 
             # Apply input_mapping from step definition to context.state
-            step_payload = self._apply_input_mapping(step, context.state)
+            step_payload = dict(step_payload_for_hash)
 
-            # Логируем информацию о вызове агента
+            # Р›РѕРіРёСЂСѓРµРј РёРЅС„РѕСЂРјР°С†РёСЋ Рѕ РІС‹Р·РѕРІРµ Р°РіРµРЅС‚Р°
             self._log_event(
                 logging.DEBUG,
                 run_id,
@@ -915,8 +967,8 @@ class StepExecutor:
                 else type(step_payload).__name__,
             )
 
-            # Создаем контекст выполнения для агента, который включает в себя state и методы доступа к нему
-            # Используем объект, который предоставляет доступ к состоянию как через атрибут state, так и через метод get
+            # РЎРѕР·РґР°РµРј РєРѕРЅС‚РµРєСЃС‚ РІС‹РїРѕР»РЅРµРЅРёСЏ РґР»СЏ Р°РіРµРЅС‚Р°, РєРѕС‚РѕСЂС‹Р№ РІРєР»СЋС‡Р°РµС‚ РІ СЃРµР±СЏ state Рё РјРµС‚РѕРґС‹ РґРѕСЃС‚СѓРїР° Рє РЅРµРјСѓ
+            # РСЃРїРѕР»СЊР·СѓРµРј РѕР±СЉРµРєС‚, РєРѕС‚РѕСЂС‹Р№ РїСЂРµРґРѕСЃС‚Р°РІР»СЏРµС‚ РґРѕСЃС‚СѓРї Рє СЃРѕСЃС‚РѕСЏРЅРёСЋ РєР°Рє С‡РµСЂРµР· Р°С‚СЂРёР±СѓС‚ state, С‚Р°Рє Рё С‡РµСЂРµР· РјРµС‚РѕРґ get
 
             mapped_overrides: dict[str, Any] = {}
             if step.input_mapping and isinstance(step_payload, dict):
@@ -1027,7 +1079,7 @@ class StepExecutor:
             if not isinstance(output, dict):
                 raise TypeError("Agent output must be a dict")
 
-            # Логируем результат выполнения агента
+            # Р›РѕРіРёСЂСѓРµРј СЂРµР·СѓР»СЊС‚Р°С‚ РІС‹РїРѕР»РЅРµРЅРёСЏ Р°РіРµРЅС‚Р°
             self._log_event(
                 logging.DEBUG,
                 run_id,
@@ -1037,14 +1089,14 @@ class StepExecutor:
                 output_status=output.get("status", "unknown"),
             )
 
-            # Сначала проверяем схему с оригинальным результатом
+            # РЎРЅР°С‡Р°Р»Р° РїСЂРѕРІРµСЂСЏРµРј СЃС…РµРјСѓ СЃ РѕСЂРёРіРёРЅР°Р»СЊРЅС‹Рј СЂРµР·СѓР»СЊС‚Р°С‚РѕРј
             validation_payload = self._sanitize_output_for_validation(output)
 
             validation_errors = self.schema_validator.validate_step_output(
                 step.name, validation_payload
             )
             if validation_errors:
-                # Если есть ошибки валидации, нормализуем результат и добавляем ошибки
+                # Р•СЃР»Рё РµСЃС‚СЊ РѕС€РёР±РєРё РІР°Р»РёРґР°С†РёРё, РЅРѕСЂРјР°Р»РёР·СѓРµРј СЂРµР·СѓР»СЊС‚Р°С‚ Рё РґРѕР±Р°РІР»СЏРµРј РѕС€РёР±РєРё
                 normalized_output = self._normalize_agent_output(validation_payload)
                 existing_errors = normalized_output.get("validation_errors", [])
                 normalized_errors = (
@@ -1054,7 +1106,7 @@ class StepExecutor:
                 normalized_output["validation_errors"] = normalized_errors
                 output = normalized_output
                 if self.strict_schema_validation:
-                    # В строгом режиме валидации возвращаем ошибку
+                    # Р’ СЃС‚СЂРѕРіРѕРј СЂРµР¶РёРјРµ РІР°Р»РёРґР°С†РёРё РІРѕР·РІСЂР°С‰Р°РµРј РѕС€РёР±РєСѓ
                     error_message = "; ".join(validation_errors)
                     self._log_event(
                         logging.WARNING,
@@ -1067,7 +1119,7 @@ class StepExecutor:
                     )
                     output = self._error_result(f"Schema validation failed: {error_message}")
                 else:
-                    # В нестрогом режиме продолжаем с нормализованным результатом
+                    # Р’ РЅРµСЃС‚СЂРѕРіРѕРј СЂРµР¶РёРјРµ РїСЂРѕРґРѕР»Р¶Р°РµРј СЃ РЅРѕСЂРјР°Р»РёР·РѕРІР°РЅРЅС‹Рј СЂРµР·СѓР»СЊС‚Р°С‚РѕРј
                     error_message = "; ".join(validation_errors)
                     self._log_event(
                         logging.WARNING,
@@ -1079,7 +1131,7 @@ class StepExecutor:
                         strict_mode=self.strict_schema_validation,
                     )
             else:
-                # Если ошибок валидации нет, нормализуем результат для согласованности
+                # Р•СЃР»Рё РѕС€РёР±РѕРє РІР°Р»РёРґР°С†РёРё РЅРµС‚, РЅРѕСЂРјР°Р»РёР·СѓРµРј СЂРµР·СѓР»СЊС‚Р°С‚ РґР»СЏ СЃРѕРіР»Р°СЃРѕРІР°РЅРЅРѕСЃС‚Рё
                 output = self._normalize_agent_output(validation_payload)
 
             step_status = self._normalize_step_status(output.get("status"))
@@ -1111,6 +1163,7 @@ class StepExecutor:
                     error_type=type(exc).__name__,
                 )
 
+        _ = self._attach_artifact_ids(output, step_name=step.name, step_input_hash=step_input_hash)
         context.record_step_result(step.name, output)
         finished_at = self._now_iso()
         run_state.mark_step_status(
@@ -1123,6 +1176,7 @@ class StepExecutor:
             trace_id=trace_id,
             span_id=span_id,
             parent_span_id=parent_span_id,
+            input_hash=step_input_hash,
         )
         self._log_event(
             logging.INFO if step_status == StepStatus.SUCCESS else logging.ERROR,
@@ -1136,5 +1190,6 @@ class StepExecutor:
             trace_id=trace_id,
             span_id=span_id,
             parent_span_id=parent_span_id,
+            input_hash=step_input_hash,
         )
         return output

@@ -37,7 +37,7 @@ class TestPipelineTypeDetection:
         result = detect_pipeline_type(context)
         assert result == PipelineType.BUGFIX
 
-    def test_detect_ci_fix_pipeline(self):
+    def test_detect_ci_scanner_pipeline(self):
         """Test detection of CI fix pipeline."""
         context = {"ci_run": {"id": "123", "status": "failed"}, "repository": {"name": "test"}}
         result = detect_pipeline_type(context)
@@ -129,7 +129,7 @@ class TestStepDependencies:
         assert "test_analyzer" in step_names
         assert len(steps) == 7
 
-    def test_resolve_ci_fix_steps(self):
+    def test_resolve_ci_scanner_steps(self):
         """Test resolving CI fix pipeline steps."""
         steps = resolve_step_dependencies(PipelineType.CI_FIX, {})
         step_names = [s.name for s in steps]

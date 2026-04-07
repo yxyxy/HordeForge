@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 import time
 from abc import ABC, abstractmethod
@@ -18,6 +19,19 @@ from tenacity import (
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
+)
+
+from agents.qwen_dashscope import (
+    build_chat_messages as build_qwen_chat_messages,
+)
+from agents.qwen_dashscope import (
+    build_dashscope_headers,
+)
+from agents.qwen_dashscope import (
+    resolve_base_url as resolve_qwen_base_url,
+)
+from agents.qwen_dashscope import (
+    to_dashscope_content_parts as to_qwen_dashscope_content_parts,
 )
 
 logger = logging.getLogger(__name__)
@@ -409,12 +423,12 @@ class OpenAIWrapper(LLMWrapper, ApiHandler):
         """Get current model info."""
         model_info = ModelInfo(
             name=self._model,
-            max_tokens=4096,
-            context_window=128000,
-            supports_images=True,
-            supports_prompt_cache=False,
-            input_price=2.5,
-            output_price=10.0,
+            maxTokens=4096,
+            contextWindow=128000,
+            supportsImages=True,
+            supportsPromptCache=False,
+            inputPrice=2.5,
+            outputPrice=10.0,
             temperature=0.7,
         )
         return self._model, model_info
@@ -581,15 +595,15 @@ class AnthropicWrapper(LLMWrapper, ApiHandler):
         """Get current model info."""
         model_info = ModelInfo(
             name=self._model,
-            max_tokens=6400,
-            context_window=2000,
-            supports_images=True,
-            supports_prompt_cache=True,
-            supports_reasoning=True,
-            input_price=3.0,
-            output_price=15.0,
-            cache_writes_price=3.75,
-            cache_reads_price=0.3,
+            maxTokens=6400,
+            contextWindow=200000,
+            supportsImages=True,
+            supportsPromptCache=True,
+            supportsReasoning=True,
+            inputPrice=3.0,
+            outputPrice=15.0,
+            cacheWritesPrice=3.75,
+            cacheReadsPrice=0.3,
             temperature=1.0,
         )
         return self._model, model_info
@@ -720,17 +734,17 @@ class GoogleGenAIWrapper(LLMWrapper, ApiHandler):
         """Get current model info."""
         model_info = ModelInfo(
             name=self._model,
-            max_tokens=8192,
-            context_window=1048576,
-            supports_images=True,
-            supports_prompt_cache=True,
-            supports_reasoning=True,
-            input_price=0.15,
-            output_price=0.6,
-            cache_writes_price=1.0,
-            cache_reads_price=0.025,
+            maxTokens=8192,
+            contextWindow=1048576,
+            supportsImages=True,
+            supportsPromptCache=True,
+            supportsReasoning=True,
+            inputPrice=0.15,
+            outputPrice=0.6,
+            cacheWritesPrice=1.0,
+            cacheReadsPrice=0.025,
             temperature=1.0,
-            supports_global_endpoint=True,
+            supportsGlobalEndpoint=True,
         )
         return self._model, model_info
 
@@ -779,16 +793,15 @@ class QwenCodeWrapper(LLMWrapper):
 
     @staticmethod
     def _resolve_base_url(credentials: dict[str, Any]) -> str:
-        base_url = credentials.get(
-            "resource_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
-        if not isinstance(base_url, str) or not base_url:
-            base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        if not base_url.startswith("http://") and not base_url.startswith("https://"):
-            base_url = f"https://{base_url}"
-        if not base_url.endswith("/v1"):
-            base_url = f"{base_url.rstrip('/')}/v1"
-        return base_url
+        return resolve_qwen_base_url(credentials)
+
+    @staticmethod
+    def _dashscope_headers() -> dict[str, str]:
+        return build_dashscope_headers()
+
+    @staticmethod
+    def _to_dashscope_content_parts(content: Any) -> list[dict[str, str]]:
+        return to_qwen_dashscope_content_parts(content)
 
     def _auth_failure_fingerprint(self) -> str:
         credentials = self._token_manager.get_current_credentials()
@@ -846,38 +859,134 @@ class QwenCodeWrapper(LLMWrapper):
         return OpenAI(
             api_key=access_token,
             base_url=self._resolve_base_url(credentials),
+            default_headers=self._dashscope_headers(),
             timeout=self._timeout,
             max_retries=0,
         )
 
-    def complete(self, prompt: str, **kwargs) -> str:
-        self._raise_if_auth_cooldown()
-        client = self._client()
-        model = kwargs.get("model", self._model)
-        max_tokens = kwargs.get("max_tokens", 4000)
-        temperature = kwargs.get("temperature", 0.7)
+    @staticmethod
+    def _extract_error_diagnostics(exc: Exception) -> dict[str, Any]:
+        status_code = getattr(exc, "status_code", None)
+        request_id = getattr(exc, "request_id", None)
+        content_type = None
+        raw_body: str = ""
+
+        response = getattr(exc, "response", None)
+        if response is not None:
+            if status_code is None:
+                status_code = getattr(response, "status_code", None)
+            headers = getattr(response, "headers", {}) or {}
+            if isinstance(headers, dict):
+                if request_id is None:
+                    request_id = headers.get("x-request-id") or headers.get("request-id")
+                content_type = headers.get("content-type") or headers.get("Content-Type")
+
+            body = getattr(response, "text", None)
+            if callable(body):
+                try:
+                    body = body()
+                except Exception:  # noqa: BLE001
+                    body = None
+            if body is None:
+                body = getattr(response, "body", None)
+            if body is None:
+                body = getattr(response, "content", None)
+            if isinstance(body, bytes):
+                raw_body = body.decode("utf-8", errors="replace")
+            elif isinstance(body, str):
+                raw_body = body
+            elif body is not None:
+                raw_body = str(body)
+
+        if not raw_body:
+            raw_body = str(exc)
+
+        raw_body = raw_body.strip()
+        error_code = None
+        if raw_body:
+            try:
+                parsed = json.loads(raw_body)
+                if request_id is None and isinstance(parsed, dict):
+                    rid = parsed.get("request_id")
+                    if isinstance(rid, str) and rid.strip():
+                        request_id = rid.strip()
+                if isinstance(parsed, dict):
+                    error_obj = parsed.get("error")
+                    if isinstance(error_obj, dict):
+                        code = error_obj.get("code")
+                        if isinstance(code, str) and code.strip():
+                            error_code = code.strip()
+            except Exception:  # noqa: BLE001
+                pass
+        raw_excerpt = raw_body[:500]
+        return {
+            "status_code": status_code,
+            "request_id": request_id,
+            "content_type": content_type,
+            "error_code": error_code,
+            "raw_len": len(raw_body),
+            "raw_excerpt": raw_excerpt,
+        }
+
+    @staticmethod
+    def _is_non_retryable_status(status_code: int | None) -> bool:
+        return status_code in {400, 401, 403}
+
+    @staticmethod
+    def _is_retryable_status(status_code: int | None) -> bool:
+        if status_code is None:
+            return False
+        return status_code == 429 or status_code >= 500
+
+    @staticmethod
+    def _is_retryable_exception(exc: Exception) -> bool:
+        message = str(exc).lower()
+        if isinstance(exc, (TimeoutError, ConnectionError)):
+            return True
+        if "timeout" in message or "timed out" in message:
+            return True
+        if "connection reset" in message or "connection aborted" in message:
+            return True
+        return False
+
+    @staticmethod
+    def _backoff_with_jitter(attempt: int) -> float:
+        base = min(8.0, 2 ** max(0, attempt - 1))
+        return min(30.0, base + random.uniform(0.0, base * 0.3))
+
+    def _complete_once(
+        self,
+        *,
+        client: OpenAI,
+        prompt: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        system_prompt = ""
+        openai_messages = build_qwen_chat_messages(
+            user_prompt=prompt,
+            system_prompt=system_prompt,
+        )
+        non_stream_error: Exception | None = None
         try:
-            response = self._apply_retry(
-                client.chat.completions.create,
+            response = client.chat.completions.create(
                 model=model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=openai_messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
             if response.choices and response.choices[0].message.content:
-                return response.choices[0].message.content
-        except Exception as exc:
-            if self._is_auth_error_message(str(exc)):
-                self._mark_auth_failure()
-                raise RuntimeError(f"Qwen Code authentication failed: {exc}") from exc
-            # Fall back to streaming mode for providers that intermittently
-            # return invalid non-stream payloads via OpenAI-compatible endpoint.
-            pass
+                text = str(response.choices[0].message.content).strip()
+                if text:
+                    return text
+        except Exception as exc:  # noqa: BLE001
+            non_stream_error = exc
 
         try:
             stream = client.chat.completions.create(
                 model=model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=openai_messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=True,
@@ -889,21 +998,104 @@ class QwenCodeWrapper(LLMWrapper):
             text = "".join(chunks).strip()
             if text:
                 return text
-        except Exception as e:
-            if self._is_auth_error_message(str(e)):
-                self._mark_auth_failure()
-            raise RuntimeError(f"Qwen Code API call failed: {e}") from e
+        except Exception as exc:  # noqa: BLE001
+            raise exc
 
-        raise RuntimeError("Empty response from Qwen Code API")
+        if non_stream_error is not None:
+            raise non_stream_error
+        raise RuntimeError("Empty response body from Qwen Code API")
+
+    def complete(self, prompt: str, **kwargs) -> str:
+        self._raise_if_auth_cooldown()
+        client = self._client()
+        model = kwargs.get("model", self._model)
+        max_tokens = kwargs.get("max_tokens", 4000)
+        temperature = kwargs.get("temperature", 0.7)
+        attempts = max(1, int(kwargs.get("max_retries", self._max_retries)))
+        last_exc: Exception | None = None
+
+        for attempt in range(1, attempts + 1):
+            try:
+                return self._complete_once(
+                    client=client,
+                    prompt=prompt,
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+            except Exception as exc:  # noqa: BLE001
+                if self._is_auth_error_message(str(exc)):
+                    diagnostics = self._extract_error_diagnostics(exc)
+                    logger.warning(
+                        "qwen_llm_auth_failed provider=qwen-code model=%s request_id=%s "
+                        "status_code=%s error_code=%s content_type=%s raw_len=%s raw_excerpt=%s error=%s",
+                        model,
+                        diagnostics.get("request_id"),
+                        diagnostics.get("status_code"),
+                        diagnostics.get("error_code"),
+                        diagnostics.get("content_type"),
+                        diagnostics.get("raw_len"),
+                        diagnostics.get("raw_excerpt"),
+                        str(exc)[:300],
+                    )
+                    self._mark_auth_failure()
+                    raise RuntimeError(f"Qwen Code authentication failed: {exc}") from exc
+
+                diagnostics = self._extract_error_diagnostics(exc)
+                status_code = diagnostics.get("status_code")
+                is_empty = "empty response body" in str(exc).lower()
+                retryable = bool(
+                    is_empty
+                    or self._is_retryable_status(
+                        status_code if isinstance(status_code, int) else None
+                    )
+                    or self._is_retryable_exception(exc)
+                )
+                if self._is_non_retryable_status(
+                    status_code if isinstance(status_code, int) else None
+                ):
+                    retryable = False
+
+                logger.warning(
+                    "qwen_llm_request_failed provider=qwen-code model=%s attempt=%s/%s retryable=%s "
+                    "request_id=%s status_code=%s error_code=%s content_type=%s raw_len=%s raw_excerpt=%s error=%s",
+                    model,
+                    attempt,
+                    attempts,
+                    retryable,
+                    diagnostics.get("request_id"),
+                    diagnostics.get("status_code"),
+                    diagnostics.get("error_code"),
+                    diagnostics.get("content_type"),
+                    diagnostics.get("raw_len"),
+                    diagnostics.get("raw_excerpt"),
+                    str(exc)[:300],
+                )
+
+                last_exc = exc
+                if not retryable or attempt >= attempts:
+                    break
+
+                sleep_seconds = self._backoff_with_jitter(attempt)
+                logger.info(
+                    "qwen_llm_retry_scheduled provider=qwen-code model=%s attempt=%s sleep_seconds=%.2f",
+                    model,
+                    attempt,
+                    sleep_seconds,
+                )
+                time.sleep(sleep_seconds)
+
+        raise RuntimeError(f"Qwen Code API call failed: {last_exc}") from last_exc
 
     def complete_stream(self, prompt: str, **kwargs) -> Generator[str, None, None]:
         client = self._client()
         model = kwargs.get("model", self._model)
         max_tokens = kwargs.get("max_tokens", 4000)
+        openai_messages = build_qwen_chat_messages(user_prompt=prompt, system_prompt="")
         try:
             stream = client.chat.completions.create(
                 model=model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=openai_messages,
                 temperature=kwargs.get("temperature", 0.7),
                 max_tokens=max_tokens,
                 stream=True,
@@ -950,14 +1142,36 @@ class ProfileFallbackLLMWrapper(LLMWrapper):
             kwargs["model"] = model.strip()
         if isinstance(api_key, str) and api_key.strip():
             kwargs["api_key"] = api_key
-        if isinstance(api_key_ref, str) and api_key_ref.strip():
+        # Only qwen-code provider needs api_key_ref for OAuth token management.
+        # For all other providers, do NOT pass api_key_ref as it causes
+        # unexpected keyword argument errors in wrapper constructors.
+        if provider == "qwen-code" and isinstance(api_key_ref, str) and api_key_ref.strip():
             kwargs["api_key_ref"] = api_key_ref.strip()
         if isinstance(base_url, str) and base_url.strip():
             kwargs["base_url"] = base_url.strip()
         wrapper = get_llm_wrapper(provider=provider, **kwargs)
         if wrapper is None:
             raise RuntimeError(f"LLM wrapper unavailable for provider '{provider}'")
+        if wrapper is not None:
+            # Ensure qwen-code gets valid OAuth credentials.
+            # When the fallback path is used, the wrapper may be
+            # initialised with stale tokens. Try to refresh them.
+            self._try_refresh_qwen_oauth(wrapper)
         return wrapper
+
+    @staticmethod
+    def _try_refresh_qwen_oauth(wrapper) -> None:
+        """Attempt to refresh Qwen OAuth tokens if the wrapper supports it."""
+        token_manager = getattr(wrapper, "_token_manager", None)
+        if token_manager is not None:
+            try:
+                token_manager.get_valid_credentials()
+            except Exception as exc:
+                logger.warning(
+                    "llm_profile_qwen_oauth_refresh_failed model=%s error=%s",
+                    getattr(wrapper, "_model", "unknown"),
+                    str(exc)[:500],
+                )
 
     @staticmethod
     def _profile_name(profile: dict[str, Any]) -> str:
@@ -1026,14 +1240,18 @@ class ProfileFallbackLLMWrapper(LLMWrapper):
 
 
 def _load_profile_defaults(profile_name: str | None = None) -> dict[str, Any] | None:
-    """Load LLM profile and secret from local profile store."""
-    try:
-        from cli.repo_store import get_llm_profile, get_secret_value
-    except Exception:
-        return None
+    """Load LLM profile and secret, trying gateway first, then local."""
+    profile = _load_profile_from_gateway(profile_name)
 
-    profile = get_llm_profile(profile_name)
-    if not profile:
+    if profile is None:
+        try:
+            from cli.repo_store import get_llm_profile as _local_get
+
+            profile = _local_get(profile_name)
+        except Exception:
+            profile = None
+
+    if not isinstance(profile, dict):
         return None
 
     provider = str(profile.get("provider", "")).strip().lower()
@@ -1042,7 +1260,7 @@ def _load_profile_defaults(profile_name: str | None = None) -> dict[str, Any] | 
     api_key = None
     api_key_ref = profile.get("api_key_ref")
     if isinstance(api_key_ref, str) and api_key_ref.strip():
-        api_key = get_secret_value(api_key_ref.strip())
+        api_key = _load_secret_with_gateway_fallback(api_key_ref.strip())
 
     if not provider:
         return None
@@ -1057,14 +1275,125 @@ def _load_profile_defaults(profile_name: str | None = None) -> dict[str, Any] | 
     }
 
 
-def _load_profile_candidates(profile_name: str | None = None) -> list[dict[str, Any]]:
-    """Load profile candidates in priority order: selected/default first, then others."""
+def _load_secret_with_gateway_fallback(key: str) -> str | None:
+    """Load secret, trying gateway API first, then local secrets.json."""
+    # Try gateway API first (primary source of truth)
     try:
-        from cli.repo_store import get_llm_profile, get_secret_value, list_llm_profiles
+        import os
+
+        import requests as _requests
+
+        gateway_url = os.getenv("HORDEFORGE_GATEWAY_URL", "http://localhost:8000")
+        api_key = os.getenv("HORDEFORGE_OPERATOR_API_KEY")
+        if api_key and gateway_url:
+            resp = _requests.get(
+                f"{gateway_url}/secrets",
+                params={"name": key},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                value = data.get("value")
+                if isinstance(value, str) and value.strip():
+                    # Sync to local secrets.json for offline use
+                    try:
+                        from cli.repo_store import set_secret_value
+
+                        set_secret_value(key, value)
+                    except Exception:
+                        pass
+                    return value
+    except Exception:
+        pass
+
+    # Fall back to local secrets.json
+    try:
+        from cli.repo_store import get_secret_value
+
+        return get_secret_value(key)
+    except Exception:
+        return None
+
+
+def _load_profile_from_gateway(profile_name: str | None = None) -> dict[str, Any] | None:
+    """Load a single profile from gateway API."""
+    try:
+        import os
+
+        import requests as _requests
+
+        gateway_url = os.getenv("HORDEFORGE_GATEWAY_URL", "http://localhost:8000")
+        api_key = os.getenv("HORDEFORGE_OPERATOR_API_KEY")
+        if not gateway_url:
+            return None
+        params = {"profile_name": profile_name} if profile_name else None
+        resp = _requests.get(
+            f"{gateway_url}/llm/profiles",
+            params=params,
+            headers={"Authorization": f"Bearer {api_key}"} if api_key else None,
+            timeout=5,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        direct_profile = data.get("profile")
+        if isinstance(direct_profile, dict):
+            return direct_profile
+        profiles = data.get("profiles")
+        if isinstance(profiles, list):
+            selected: dict[str, Any] | None = None
+            for item in profiles:
+                if not isinstance(item, dict):
+                    continue
+                if bool(item.get("is_default")):
+                    return item
+                if selected is None:
+                    selected = item
+            return selected
+    except Exception:
+        return None
+    return None
+
+
+def _load_profiles_from_gateway() -> list[dict[str, Any]]:
+    """Load all profiles from gateway API."""
+    try:
+        import os
+
+        import requests as _requests
+
+        gateway_url = os.getenv("HORDEFORGE_GATEWAY_URL", "http://localhost:8000")
+        api_key = os.getenv("HORDEFORGE_OPERATOR_API_KEY")
+        if not gateway_url:
+            return []
+        resp = _requests.get(
+            f"{gateway_url}/llm/profiles",
+            headers={"Authorization": f"Bearer {api_key}"} if api_key else None,
+            timeout=5,
+        )
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        profiles = data.get("profiles")
+        if isinstance(profiles, list):
+            return [item for item in profiles if isinstance(item, dict)]
     except Exception:
         return []
+    return []
 
-    listed = list_llm_profiles()
+
+def _load_profile_candidates(profile_name: str | None = None) -> list[dict[str, Any]]:
+    """Load profile candidates in priority order: selected/default first, then others."""
+    listed = _load_profiles_from_gateway()
+    get_profile = _load_profile_from_gateway
+    if not listed:
+        try:
+            from cli.repo_store import get_llm_profile, list_llm_profiles
+
+            listed = list_llm_profiles()
+            get_profile = get_llm_profile
+        except Exception:
+            return []
     if not isinstance(listed, list) or not listed:
         return []
 
@@ -1094,7 +1423,7 @@ def _load_profile_candidates(profile_name: str | None = None) -> list[dict[str, 
     order = [first_name] + [name for name in by_name.keys() if name != first_name]
     candidates: list[dict[str, Any]] = []
     for name in order:
-        profile = get_llm_profile(name)
+        profile = get_profile(name)
         if not isinstance(profile, dict):
             continue
         provider = str(profile.get("provider", "")).strip().lower()
@@ -1105,7 +1434,7 @@ def _load_profile_candidates(profile_name: str | None = None) -> list[dict[str, 
         api_key = None
         api_key_ref = profile.get("api_key_ref")
         if isinstance(api_key_ref, str) and api_key_ref.strip():
-            api_key = get_secret_value(api_key_ref.strip())
+            api_key = _load_secret_with_gateway_fallback(api_key_ref.strip())
         candidates.append(
             {
                 "profile_name": name,
@@ -1265,24 +1594,86 @@ def build_code_review_prompt(files: list[dict[str, Any]], spec: dict[str, Any] =
     return legacy_build_code_prompt(spec or {}, files, {})
 
 
-def parse_review_output(output: str) -> dict[str, Any]:
-    """Parse review output - for backward compatibility."""
+def parse_review_output(output: Any) -> dict[str, Any]:
+    """Parse and normalize review output with backward-compatible defaults."""
     import json
     import re
 
-    # Try to extract JSON from output
-    json_match = re.search(r"\{[\s\S]*\}", output)
-    if not json_match:
-        raise ValueError("No JSON found in LLM output")
+    if isinstance(output, dict):
+        cleaned = json.dumps(output, ensure_ascii=False)
+    elif isinstance(output, list):
+        cleaned = json.dumps(output, ensure_ascii=False)
+    else:
+        cleaned = str(output or "").strip()
 
-    json_str = json_match.group(0)
+    if not cleaned:
+        raise ValueError("Empty LLM output")
 
-    try:
-        result = json.loads(json_str)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in LLM output: {e}") from e
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
 
-    # Validate required fields for review output
+    parse_errors: list[str] = []
+
+    def _try_parse(candidate: str) -> dict[str, Any] | None:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError as error:
+            parse_errors.append(str(error))
+        return None
+
+    result = _try_parse(cleaned)
+
+    if result is None:
+        start_positions = [idx for idx, char in enumerate(cleaned) if char == "{"]
+        for start in start_positions:
+            depth = 0
+            for idx in range(start, len(cleaned)):
+                char = cleaned[idx]
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = cleaned[start : idx + 1]
+                        result = _try_parse(candidate)
+                        if result is not None:
+                            break
+            if result is not None:
+                break
+
+    if result is None:
+        detail = parse_errors[-1] if parse_errors else "No JSON object found"
+        raise ValueError(f"Invalid JSON in LLM output: {detail}")
+
+    if "overall_decision" not in result:
+        if "decision" in result:
+            result["overall_decision"] = result["decision"]
+        else:
+            for alias in ("overallDecision", "final_decision", "finalDecision", "review_decision"):
+                if alias in result:
+                    result["overall_decision"] = result[alias]
+                    break
+
+    if "overall_decision" not in result:
+        result["overall_decision"] = "request_changes"
+
+    if "summary" not in result:
+        result["summary"] = ""
+
+    if "findings" not in result:
+        result["findings"] = []
+
+    if "strengths" not in result:
+        result["strengths"] = []
+
+    if "recommendations" not in result:
+        result["recommendations"] = []
+
+    if "confidence" not in result:
+        result["confidence"] = 0.7
+
     required_fields = [
         "overall_decision",
         "summary",
@@ -1294,6 +1685,16 @@ def parse_review_output(output: str) -> dict[str, Any]:
     for _field in required_fields:
         if _field not in result:
             raise ValueError(f"Missing required field: {_field}")
+
+    for i, finding in enumerate(result.get("findings", [])):
+        if not isinstance(finding, dict):
+            raise ValueError(f"Finding {i} is not an object")
+        if "type" not in finding:
+            raise ValueError(f"Finding {i} missing 'type'")
+        if "severity" not in finding:
+            raise ValueError(f"Finding {i} missing 'severity'")
+        if "description" not in finding:
+            raise ValueError(f"Finding {i} missing 'description'")
 
     return result
 
@@ -1878,24 +2279,35 @@ def build_code_prompt(
     repo_context: dict[str, Any],
     language: str | None = None,
 ) -> str:
-    """Build enhanced prompt for code generation.
+    """Build enhanced prompt for code generation."""
 
-    Args:
-        spec: Parsed specification from build_spec_prompt
-        test_cases: List of test case definitions
-        repo_context: Repository context (existing files, patterns, etc.)
-        language: Optional language override. Auto-detected if not provided.
-    """
-    # Auto-detect language if not provided
     if language is None:
         language = detect_language(repo_context)
 
     standards = LANGUAGE_STANDARDS.get(language, LANGUAGE_STANDARDS["python"])
-
-    # Extract existing code for context
     existing_code = _extract_relevant_code(repo_context, spec)
 
-    template = f"""You are a senior {language.title()} engineer. Generate code to satisfy the specification.
+    compact_spec = {
+        "summary": spec.get("summary"),
+        "acceptance_criteria": (spec.get("acceptance_criteria") or [])[:8],
+        "technical_notes": (spec.get("technical_notes") or [])[:8],
+        "file_change_plan": spec.get("file_change_plan") or {},
+        "requirements": (spec.get("requirements") or [])[:8],
+    }
+    compact_tests = []
+    for case in test_cases[:10]:
+        if not isinstance(case, dict):
+            continue
+        compact_tests.append(
+            {
+                "name": case.get("name"),
+                "file_path": case.get("file_path"),
+                "description": case.get("description"),
+                "expected_result": case.get("expected_result"),
+            }
+        )
+
+    template = f"""You are a senior {language.title()} engineer. Generate a minimal repository patch that satisfies the specification.
 
 ## Language Standards
 - Style: {standards["style"]}
@@ -1904,49 +2316,49 @@ def build_code_prompt(
 - Imports: {standards["imports"]}
 
 ## Specification
-{json.dumps(spec, indent=2)}
+{json.dumps(compact_spec, ensure_ascii=False, indent=2)}
 
-## Test Cases to Pass
-{json.dumps(test_cases, indent=2)}
+## Tests To Satisfy
+{json.dumps(compact_tests, ensure_ascii=False, indent=2)}
 
 ## Repository Context
-{json.dumps(repo_context, indent=2)}
+{json.dumps(repo_context, ensure_ascii=False, indent=2)}
 
-## Relevant Existing Code (for context)
+## Relevant Existing Code
 {existing_code}
 
-## Output Format - STRICT JSON
-Generate a JSON object with EXACTLY these fields:
+## Output Rules
+- Return VALID JSON only.
+- Do not wrap the JSON in markdown fences.
+- Touch the smallest possible number of files.
+- Prefer modifying existing likely files over inventing brand new modules.
+- For every file entry, include the FULL file content.
+- If a test file is included, put it in "test_changes" and also include full content.
+- Do not output prose before or after the JSON object.
 
+## Required JSON Schema
 {{
-    "files": [
-        {{
-            "path": "relative/path/to/file.py",
-            "change_type": "create|modify|delete",
-            "content": "FULL file content - include all existing code plus new changes"
-        }}
-    ],
-    "decisions": [
-        {{
-            "description": "Architectural decision made",
-            "rationale": "Why this approach was chosen"
-        }}
-    ],
-    "test_changes": [
-        {{
-            "path": "path/to/test.py",
-            "change_type": "create|modify",
-            "content": "Test file content"
-        }}
-    ]
+  "files": [
+    {{
+      "path": "relative/path/to/file.py",
+      "change_type": "create|modify|delete",
+      "content": "FULL file content"
+    }}
+  ],
+  "decisions": [
+    {{
+      "description": "Architectural decision made",
+      "rationale": "Why this approach was chosen"
+    }}
+  ],
+  "test_changes": [
+    {{
+      "path": "tests/test_example.py",
+      "change_type": "create|modify",
+      "content": "FULL file content"
+    }}
+  ]
 }}
-
-## Critical Requirements:
-1. For 'modify' changes, include FULL file content (not just diffs)
-2. All imports must be valid and not conflict with existing code
-3. Code must follow the specified language standards
-4. Tests must verify the specification requirements
-5. Response must be valid JSON only - no markdown code blocks
 
 Respond with valid JSON only.
 """
@@ -1984,43 +2396,64 @@ def _extract_relevant_code(repo_context: dict[str, Any], spec: dict[str, Any]) -
 
 
 def parse_code_output(output: str) -> dict[str, Any]:
-    """Parse and validate LLM code generation output.
+    """Parse and validate LLM code generation output."""
 
-    Args:
-        output: Raw LLM output
+    if not isinstance(output, str) or not output.strip():
+        raise ValueError("Empty LLM output")
 
-    Returns:
-        Parsed code generation result
+    cleaned = output.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
 
-    Raises:
-        ValueError: If output cannot be parsed or is invalid
-    """
-    # Try to extract JSON from output
-    json_match = re.search(r"\{[\s\S]*\}", output)
-    if not json_match:
-        raise ValueError("No JSON found in LLM output")
+    decoder = json.JSONDecoder()
+    last_error: Exception | None = None
+    parsed_result: dict[str, Any] | None = None
 
-    json_str = json_match.group(0)
+    for index, char in enumerate(cleaned):
+        if char != "{":
+            continue
+        try:
+            candidate, _ = decoder.raw_decode(cleaned[index:])
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            continue
+        if isinstance(candidate, dict) and "files" in candidate:
+            parsed_result = candidate
+            break
 
-    try:
-        result = json.loads(json_str)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in LLM output: {e}") from e
+    if parsed_result is None:
+        raise ValueError(f"No valid JSON object with 'files' found in LLM output: {last_error}")
 
-    # Validate required fields
+    result = parsed_result
+
     if "files" not in result:
         raise ValueError("Missing required field: files")
+    if not isinstance(result["files"], list) or not result["files"]:
+        raise ValueError("Field 'files' must be a non-empty list")
 
-    # Validate files structure
+    result.setdefault("decisions", [])
+    result.setdefault("test_changes", [])
+
     for i, f in enumerate(result.get("files", [])):
         if not isinstance(f, dict):
             raise ValueError(f"File {i} is not an object")
-        if "path" not in f:
-            raise ValueError(f"File {i} missing 'path'")
-        if "change_type" not in f:
+        if "path" not in f or not isinstance(f.get("path"), str) or not f.get("path", "").strip():
+            raise ValueError(f"File {i} missing valid 'path'")
+        if "change_type" not in f or not isinstance(f.get("change_type"), str):
             raise ValueError(f"File {i} missing 'change_type'")
-        if "content" not in f:
+        if "content" not in f or not isinstance(f.get("content"), str):
             raise ValueError(f"File {i} missing 'content'")
+
+    for i, f in enumerate(result.get("test_changes", [])):
+        if not isinstance(f, dict):
+            raise ValueError(f"Test change {i} is not an object")
+        if "path" not in f or not isinstance(f.get("path"), str) or not f.get("path", "").strip():
+            raise ValueError(f"Test change {i} missing valid 'path'")
+        if "change_type" not in f or not isinstance(f.get("change_type"), str):
+            raise ValueError(f"Test change {i} missing 'change_type'")
+        if "content" not in f or not isinstance(f.get("content"), str):
+            raise ValueError(f"Test change {i} missing 'content'")
 
     return result
 

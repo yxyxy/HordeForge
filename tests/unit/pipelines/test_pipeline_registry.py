@@ -115,7 +115,7 @@ class TestDefaultPipelineRegistration:
         # Проверяем, что основные пайплайны зарегистрированы
         assert test_registry.exists("init_pipeline")
         assert test_registry.exists("feature_pipeline")
-        assert test_registry.exists("ci_fix_pipeline")
+        assert test_registry.exists("ci_scanner_pipeline")
 
     def test_global_registry_has_default_pipelines(self):
         """Тест проверяет, что глобальный реестр содержит зарегистрированные пайплайны"""
@@ -134,7 +134,7 @@ class TestPipelineCompatibility:
         from registry.agents import AgentRegistry, register_agents
 
         pipeline_registry = PipelineRegistry()
-        pipeline_names = ["init_pipeline", "feature_pipeline", "ci_fix_pipeline"]
+        pipeline_names = ["init_pipeline", "feature_pipeline", "ci_scanner_pipeline"]
         for name in pipeline_names:
             pipeline_registry.register(PipelineMetadata(name, f"pipelines/{name}.yaml"))
 

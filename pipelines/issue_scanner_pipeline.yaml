@@ -43,9 +43,10 @@ steps:
     description: Handle staged labels (opened/planning/ready/fixed), plan when needed, dispatch or close
     input:
       target_pipeline: "feature_pipeline"
+      ci_incident_pipeline: "ci_fix_pipeline"
       require_llm: true
     output: "{{dispatch_report}}"
-    on_failure: stop_pipeline
+    on_failure: continue
 
 logging:
   level: INFO

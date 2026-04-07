@@ -336,7 +336,7 @@ async def test_feature_pipeline_complete_execution():
     assert len(memory_results) > 0
 
 @pytest.mark.e2e
-async def test_ci_fix_pipeline_error_handling():
+async def test_ci_scanner_pipeline_error_handling():
     """Test CI fix pipeline error handling."""
     engine = PipelineEngine()
     run_repo = RunRepository()
@@ -349,7 +349,7 @@ async def test_ci_fix_pipeline_error_handling():
     }
     
     # Execute pipeline
-    run_id = await engine.run_pipeline("ci_fix_pipeline", context)
+    run_id = await engine.run_pipeline("ci_scanner_pipeline", context)
     
     # Wait for completion
     run_record = await run_repo.wait_for_completion(run_id, timeout=300)

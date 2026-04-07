@@ -1,4 +1,11 @@
-"""Task Decomposer Agent - Decomposes tasks into categorized subtasks with priorities and dependencies."""
+"""Task Decomposer Agent - Decomposes tasks into categorized subtasks with priorities and dependencies.
+
+Stage-1 improvements:
+- stricter passthrough validation
+- less generic deterministic decomposition for technical tasks
+- explicit quality/provenance metadata
+- preserved backward-compatible output shapes
+"""
 
 from __future__ import annotations
 
@@ -23,9 +30,9 @@ class TaskCategory(Enum):
 class TaskPriority(Enum):
     """Task priorities."""
 
-    P0 = "P0"  # Critical
-    P1 = "P1"  # Important
-    P2 = "P2"  # Nice to have
+    P0 = "P0"
+    P1 = "P1"
+    P2 = "P2"
 
 
 @dataclass
@@ -40,18 +47,40 @@ class Subtask:
     description: str = ""
 
 
+TECHNICAL_LABEL_TOKENS = {
+    "kind:ci-incident",
+    "source:ci_scanner_pipeline",
+    "bug",
+    "infra",
+    "config",
+}
+
+
+def _normalize_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _coerce_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = _normalize_text(item)
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return result
+
+
 def categorize_task(task_title: str) -> TaskCategory:
-    """Categorize a task based on keywords in the title.
-
-    Args:
-        task_title: Title of the task to categorize
-
-    Returns:
-        TaskCategory corresponding to the identified category
-    """
+    """Categorize a task based on keywords in the title."""
     title_lower = task_title.lower()
 
-    # Test indicators - check first to avoid misclassification
     test_keywords = [
         "test",
         "testing",
@@ -65,13 +94,11 @@ def categorize_task(task_title: str) -> TaskCategory:
         "assert",
         "verify",
         "validate",
+        "rerun",
     ]
+    if any(keyword in title_lower for keyword in test_keywords):
+        return TaskCategory.TESTS
 
-    for keyword in test_keywords:
-        if keyword in title_lower:
-            return TaskCategory.TESTS
-
-    # Documentation indicators - check second
     doc_keywords = [
         "doc",
         "documentation",
@@ -86,45 +113,9 @@ def categorize_task(task_title: str) -> TaskCategory:
         "usage",
         "api doc",
     ]
+    if any(keyword in title_lower for keyword in doc_keywords):
+        return TaskCategory.DOCS
 
-    for keyword in doc_keywords:
-        if keyword in title_lower:
-            return TaskCategory.DOCS
-
-    # Backend indicators
-    backend_keywords = [
-        "api",
-        "endpoint",
-        "database",
-        "db",
-        "model",
-        "schema",
-        "migration",
-        "auth",
-        "authentication",
-        "authorization",
-        "oauth",
-        "jwt",
-        "token",
-        "server",
-        "backend",
-        "service",
-        "controller",
-        "route",
-        "middleware",
-        "cache",
-        "session",
-        "config",
-        "env",
-        "secret",
-        "key",
-    ]
-
-    for keyword in backend_keywords:
-        if keyword in title_lower:
-            return TaskCategory.BACKEND
-
-    # Frontend indicators
     frontend_keywords = [
         "ui",
         "user interface",
@@ -142,7 +133,6 @@ def categorize_task(task_title: str) -> TaskCategory:
         "angular",
         "template",
         "style",
-        "design",
         "layout",
         "responsive",
         "mobile",
@@ -153,41 +143,25 @@ def categorize_task(task_title: str) -> TaskCategory:
         "modal",
         "dialog",
     ]
+    if any(keyword in title_lower for keyword in frontend_keywords):
+        return TaskCategory.FRONTEND
 
-    for keyword in frontend_keywords:
-        if keyword in title_lower:
-            return TaskCategory.FRONTEND
-
-    # Default to backend if no clear indicator found
     return TaskCategory.BACKEND
 
 
 def assign_priority(task: str | dict[str, Any]) -> TaskPriority:
-    """Assign priority to a task based on content and labels.
-
-    Args:
-        task: Either a string title or a dict with title and labels
-
-    Returns:
-        TaskPriority corresponding to the assigned priority
-    """
-    # Handle both string and dict inputs
+    """Assign priority to a task based on content and labels."""
     if isinstance(task, str):
         title = task
-        labels = []
+        labels: list[str] = []
     else:
-        title = task.get("title", "")
-        labels = task.get("labels", [])
+        title = _normalize_text(task.get("title"))
+        labels = [str(item).lower() for item in task.get("labels", [])]
 
     title_lower = title.lower()
-
-    # P0 (Critical) indicators
     p0_keywords = [
         "security",
         "vulnerability",
-        "exploit",
-        "breach",
-        "leak",
         "critical",
         "urgent",
         "emergency",
@@ -196,131 +170,165 @@ def assign_priority(task: str | dict[str, Any]) -> TaskPriority:
         "fail",
         "regression",
         "blocker",
-        "block",
         "broken",
-        "stop",
     ]
-
-    # P2 (Nice to have) indicators
     p2_keywords = [
         "improve",
         "enhance",
-        "better",
         "nice to have",
-        "option",
-        "maybe",
-        "consider",
         "refactor",
         "cleanup",
         "polish",
-        "tweak",
-        "perf",
-        "performance",
         "optimize",
     ]
 
-    # Check labels first
-    for label in labels:
-        label_lower = label.lower() if isinstance(label, str) else str(label).lower()
-        if "p0" in label_lower or "critical" in label_lower or "high" in label_lower:
-            return TaskPriority.P0
-        elif "p2" in label_lower or "low" in label_lower:
-            return TaskPriority.P2
-
-    # Check title for P0 keywords
-    for keyword in p0_keywords:
-        if keyword in title_lower:
-            return TaskPriority.P0
-
-    # Check title for P2 keywords
-    for keyword in p2_keywords:
-        if keyword in title_lower:
-            return TaskPriority.P2
-
-    # Default to P1 for everything else
+    if any(token in " ".join(labels) for token in ["p0", "critical", "high"]):
+        return TaskPriority.P0
+    if any(token in " ".join(labels) for token in ["p2", "low"]):
+        return TaskPriority.P2
+    if any(keyword in title_lower for keyword in p0_keywords):
+        return TaskPriority.P0
+    if any(keyword in title_lower for keyword in p2_keywords):
+        return TaskPriority.P2
     return TaskPriority.P1
 
 
-def decompose_task(issue_title: str, issue_body: str = "") -> list[dict[str, str]]:
-    """Decompose a complex issue into multiple subtasks.
+def _detect_mode(title: str, body: str, labels: list[str]) -> str:
+    combined = f"{title} {body} {' '.join(labels)}".lower()
+    if (
+        "ci incident" in combined
+        or "kind:ci-incident" in combined
+        or "source:ci_scanner_pipeline" in combined
+    ):
+        return "ci_incident"
+    if any(token in combined for token in ["bug", "fix", "regression", "failure", "error"]):
+        return "bugfix"
+    if any(token in combined for token in ["infra", "config", "docker", "workflow", "pipeline"]):
+        return "infra"
+    if any(token in combined for token in ["docs", "documentation", "readme", "guide"]):
+        return "docs"
+    return "feature"
 
-    Args:
-        issue_title: Title of the main issue
-        issue_body: Body of the issue for additional context
 
-    Returns:
-        List of dictionaries representing subtasks
-    """
-    subtasks = []
-    combined_text = f"{issue_title} {issue_body}".lower()
-
-    # Look for common patterns that indicate multiple tasks
-    patterns = [
-        # Patterns like "Implement X, Y, and Z"
-        r"implement\s+([^,.]+)[,\sand\s]+([^,.]+)[,\sand\s]+([^,.]+)",
-        # Patterns like "Add X, Y, Z"
-        r"add\s+([^,.]+)[,\sand\s]+([^,.]+)[,\sand\s]+([^,.]+)",
-        # Patterns like "X, Y, and Z functionality"
-        r"([^.!?]+)[,\sand\s]+([^.!?]+)[,\sand\s]+([^.!?]+)\s+functionality",
-    ]
-
-    for pattern in patterns:
-        matches = re.findall(pattern, combined_text)
-        for match in matches:
-            for item in match:
-                item = item.strip()
-                if item and len(item) > 2:  # Avoid very short matches
-                    category = categorize_task(item)
-                    subtasks.append({"title": f"Implement {item}", "category": category.value})
-
-    # If no decomposition patterns found, create a single task
-    if not subtasks:
-        category = categorize_task(issue_title)
-        subtasks.append({"title": issue_title, "category": category.value})
-
+def _build_tasks_from_acceptance_criteria(criteria: list[str]) -> list[dict[str, str]]:
+    subtasks: list[dict[str, str]] = []
+    for criterion in criteria:
+        lowered = criterion.lower()
+        title_prefix = "Implement"
+        if any(token in lowered for token in ["test", "verify", "validate"]):
+            title_prefix = "Add tests for"
+        elif any(token in lowered for token in ["document", "readme", "guide"]):
+            title_prefix = "Document"
+        subtasks.append(
+            {
+                "title": f"{title_prefix} {criterion.rstrip('.')}".strip(),
+                "category": categorize_task(criterion).value,
+            }
+        )
     return subtasks
 
 
+def decompose_task(
+    issue_title: str, issue_body: str = "", labels: list[str] | None = None
+) -> list[dict[str, str]]:
+    """Decompose a complex issue into multiple subtasks."""
+    labels = labels or []
+    mode = _detect_mode(issue_title, issue_body, labels)
+    body_lower = issue_body.lower()
+
+    if mode == "ci_incident":
+        return [
+            {
+                "title": "Reproduce the failing CI job locally or in isolated test mode",
+                "category": TaskCategory.TESTS.value,
+            },
+            {
+                "title": "Identify the failing workflow step and affected component",
+                "category": TaskCategory.BACKEND.value,
+            },
+            {
+                "title": "Implement a targeted fix for the failing path",
+                "category": TaskCategory.BACKEND.value,
+            },
+            {
+                "title": "Rerun affected checks and confirm regression coverage",
+                "category": TaskCategory.TESTS.value,
+            },
+            {"title": "Document root cause and fix rationale", "category": TaskCategory.DOCS.value},
+        ]
+
+    if mode == "bugfix":
+        return [
+            {
+                "title": "Confirm expected vs actual behaviour for the failing scenario",
+                "category": TaskCategory.TESTS.value,
+            },
+            {"title": "Implement targeted code fix", "category": TaskCategory.BACKEND.value},
+            {"title": "Add or update regression tests", "category": TaskCategory.TESTS.value},
+            {
+                "title": "Document behavioural constraints and edge cases",
+                "category": TaskCategory.DOCS.value,
+            },
+        ]
+
+    patterns = [
+        r"implement\s+([^,.]+)[,\sand]+([^,.]+)[,\sand]+([^,.]+)",
+        r"add\s+([^,.]+)[,\sand]+([^,.]+)[,\sand]+([^,.]+)",
+        r"([^.!?]+)[,\sand]+([^.!?]+)[,\sand]+([^.!?]+)\s+functionality",
+    ]
+    combined_text = f"{issue_title} {issue_body}".lower()
+    subtasks: list[dict[str, str]] = []
+
+    for pattern in patterns:
+        for match in re.findall(pattern, combined_text):
+            for item in match:
+                clean = item.strip()
+                if len(clean) > 2:
+                    subtasks.append(
+                        {
+                            "title": f"Implement {clean}",
+                            "category": categorize_task(clean).value,
+                        }
+                    )
+
+    if subtasks:
+        return subtasks
+
+    if "acceptance criteria" in body_lower:
+        criteria_lines = [
+            re.sub(r"^[-*\t ]+", "", line).strip()
+            for line in issue_body.splitlines()
+            if line.strip().startswith(("-", "*"))
+        ]
+        criteria_tasks = _build_tasks_from_acceptance_criteria(_coerce_list(criteria_lines))
+        if criteria_tasks:
+            return criteria_tasks
+
+    return [{"title": issue_title, "category": categorize_task(issue_title).value}]
+
+
 def generate_dependency_graph(subtasks: list[Subtask]) -> dict[str, Any]:
-    """Generate dependency graph for subtasks.
-
-    Args:
-        subtasks: List of subtasks to analyze for dependencies
-
-    Returns:
-        Dictionary representing the dependency graph
-    """
-    # Define dependency rules
+    """Generate dependency graph for subtasks."""
     category_order = {
         TaskCategory.BACKEND: 0,
         TaskCategory.FRONTEND: 1,
         TaskCategory.TESTS: 2,
         TaskCategory.DOCS: 3,
     }
+    sorted_subtasks = sorted(subtasks, key=lambda item: category_order[item.category])
 
-    # Sort subtasks by category order to establish a sequence
-    sorted_subtasks = sorted(subtasks, key=lambda x: category_order[x.category])
+    for index, current_task in enumerate(sorted_subtasks):
+        for other_index, other_task in enumerate(sorted_subtasks):
+            if current_task.id == other_task.id:
+                continue
+            if category_order[current_task.category] > category_order[other_task.category]:
+                if other_task.id not in current_task.depends_on:
+                    current_task.depends_on.append(other_task.id)
+            elif current_task.category == other_task.category and index > other_index:
+                if other_task.id not in current_task.depends_on:
+                    current_task.depends_on.append(other_task.id)
 
-    # Initialize dependencies based on category order and position
-    for i, current_task in enumerate(sorted_subtasks):
-        # Tasks in higher categories depend on tasks in lower categories
-        for j, other_task in enumerate(sorted_subtasks):
-            if current_task.id != other_task.id:
-                # If current task has higher category order than other task,
-                # it depends on it
-                if category_order[current_task.category] > category_order[other_task.category]:
-                    if other_task.id not in current_task.depends_on:
-                        current_task.depends_on.append(other_task.id)
-                # For tasks in the same category, create sequential dependencies
-                # based on their position in the sorted list
-                elif (
-                    current_task.category == other_task.category and i > j
-                ):  # If current task comes after other task
-                    if other_task.id not in current_task.depends_on:
-                        current_task.depends_on.append(other_task.id)
-
-    # Convert to the required format
-    graph = {
+    return {
         "tasks": [
             {
                 "id": subtask.id,
@@ -330,169 +338,158 @@ def generate_dependency_graph(subtasks: list[Subtask]) -> dict[str, Any]:
                 "depends_on": subtask.depends_on,
                 "description": subtask.description,
             }
-            for subtask in subtasks
+            for subtask in sorted_subtasks
         ]
     }
 
-    return graph
 
+def find_parallelizable_tasks(dependency_graph: dict[str, Any]) -> list[list[str]]:
+    """Find groups of parallelizable tasks from dependency graph."""
+    tasks = dependency_graph.get("tasks", [])
+    completed: set[str] = set()
+    groups: list[list[str]] = []
 
-def find_parallelizable_tasks(graph: dict[str, Any]) -> list[list[str]]:
-    """Find tasks that can be executed in parallel.
-
-    Args:
-        graph: Dependency graph
-
-    Returns:
-        List of lists, where each inner list contains task IDs that can run in parallel
-    """
-    tasks = graph["tasks"]
-
-    # Build a map of which tasks depend on others
-    dependents = {}
-    for task in tasks:
-        for dep_id in task["depends_on"]:
-            if dep_id not in dependents:
-                dependents[dep_id] = []
-            dependents[dep_id].append(task["id"])
-
-    # Find tasks that don't depend on each other
-    parallel_groups = []
-    processed = set()
-
-    for task in tasks:
-        if task["id"] in processed:
-            continue
-
-        group = [task["id"]]
-        processed.add(task["id"])
-
-        # Find other tasks that don't conflict with this task
-        for other_task in tasks:
-            if other_task["id"] in processed or other_task["id"] in task["depends_on"]:
+    while len(completed) < len(tasks):
+        current_group: list[str] = []
+        for task in tasks:
+            task_id = task.get("id")
+            if task_id in completed:
                 continue
+            depends_on = task.get("depends_on", [])
+            if all(dep in completed for dep in depends_on):
+                current_group.append(task_id)
 
-            # Check if there's a mutual dependency
-            conflicts = False
-            if task["id"] in other_task["depends_on"] or other_task["id"] in task["depends_on"]:
-                conflicts = True
-            elif task["id"] in dependents and other_task["id"] in dependents:
-                # Check if they have conflicting dependencies
-                for dep in task["depends_on"]:
-                    if dep in other_task["depends_on"]:
-                        continue
-                    # If one task is a dependent of the other's dependency, they conflict
-                    if dep in dependents and other_task["id"] in dependents[dep]:
-                        conflicts = True
-                        break
+        if not current_group:
+            break
 
-            if not conflicts:
-                group.append(other_task["id"])
-                processed.add(other_task["id"])
+        groups.append(current_group)
+        completed.update(current_group)
 
-        if group:
-            parallel_groups.append(group)
-
-    return parallel_groups
+    return groups
 
 
-class TaskDecomposer(BaseAgent):
-    """Task Decomposer Agent - Decomposes tasks into categorized subtasks with priorities and dependencies."""
+class TaskDecomposerAgent(BaseAgent):
+    """Task Decomposer Agent."""
 
     name = "task_decomposer"
-    description = (
-        "Decomposes complex tasks into manageable subtasks with priorities and dependencies."
-    )
+    description = "Decomposes tasks into categorized subtasks with priorities and dependencies."
 
     def run(self, context: dict) -> dict:
-        """Run the task decomposition process.
-
-        Args:
-            context: Context containing issue data
-
-        Returns:
-            Agent result with decomposed tasks
-        """
-        # Extract issue data from context
-        issue = context.get("issue", {})
-        issue_title = issue.get("title", "")
-        issue_body = issue.get("body", "") or issue.get("description", "")
-
-        # For backward compatibility, also check for specification_writer context
-        if not issue_title:
-            spec_result = context.get("specification_writer", {})
-            if isinstance(spec_result, dict):
-                spec_content = spec_result.get("artifact_content", {})
-                if isinstance(spec_content, dict):
-                    issue_title = spec_content.get("summary", "")
-
-        # Also check if we have spec data directly in context using get_artifact_from_context
-        if not issue_title:
-            from agents.context_utils import get_artifact_from_context
-
-            spec_data = get_artifact_from_context(
-                context, "spec", preferred_steps=["specification_writer"]
+        existing_subtasks = context.get("subtasks")
+        if isinstance(existing_subtasks, dict) and (
+            (isinstance(existing_subtasks.get("items"), list) and existing_subtasks.get("items"))
+            or (
+                isinstance(existing_subtasks.get("subtasks"), list)
+                and existing_subtasks.get("subtasks")
             )
-            if spec_data and isinstance(spec_data, dict):
-                issue_title = spec_data.get("summary", "")
+        ):
+            passthrough_content = dict(existing_subtasks)
+            passthrough_content.setdefault(
+                "quality_signals",
+                {
+                    "items_count": len(
+                        passthrough_content.get("items", passthrough_content.get("subtasks", []))
+                    ),
+                    "decomposition_completeness": "high",
+                },
+            )
+            passthrough_content.setdefault(
+                "plan_provenance",
+                {
+                    "source": context.get("plan_source", "upstream_pipeline"),
+                    "passthrough": True,
+                    "rebuilt": False,
+                },
+            )
+            return build_agent_result(
+                status="SUCCESS",
+                artifact_type="subtasks",
+                artifact_content=passthrough_content,
+                reason="Subtasks passed through from upstream pipeline.",
+                confidence=0.95,
+                logs=["Subtasks reused from upstream pipeline (passthrough mode)."],
+                next_actions=["bdd_generator", "test_generator"],
+            )
+
+        issue = context.get("issue", {}) if isinstance(context.get("issue"), dict) else {}
+        issue_title = _normalize_text(issue.get("title"))
+        issue_body = _normalize_text(issue.get("body") or issue.get("description"))
+        labels = []
+        raw_labels = issue.get("labels", [])
+        if isinstance(raw_labels, list):
+            for label in raw_labels:
+                labels.append(
+                    _normalize_text(label.get("name") if isinstance(label, dict) else label)
+                )
+
+        spec = context.get("spec") if isinstance(context.get("spec"), dict) else {}
+        if not issue_title and isinstance(spec, dict):
+            issue_title = _normalize_text(
+                spec.get("summary") or spec.get("feature_description") or spec.get("user_story")
+            )
+            issue_body = issue_body or "\n".join(_coerce_list(spec.get("acceptance_criteria")))
 
         if not issue_title:
             return build_agent_result(
-                status="FAILURE",
+                status="FAILED",
                 artifact_type="task_decomposition",
                 artifact_content={},
-                reason="No issue title provided in context",
-                confidence=0.0,
-                logs=["No issue title found in context"],
-                next_actions=[],
+                reason="No issue title provided in context.",
+                confidence=1.0,
+                logs=["No issue title found in issue or specification context."],
+                next_actions=["specification_writer", "request_human_input"],
             )
 
-        # Decompose the task into subtasks
-        raw_subtasks = decompose_task(issue_title, issue_body)
-
-        # Create Subtask objects with priorities
-        subtasks = []
-        for i, raw_task in enumerate(raw_subtasks):
-            task_obj = Subtask(
-                id=f"task_{i + 1}",
-                title=raw_task["title"],
+        raw_subtasks = decompose_task(issue_title, issue_body, labels=labels)
+        subtasks: list[Subtask] = []
+        for index, raw_task in enumerate(raw_subtasks):
+            title = raw_task["title"]
+            subtask = Subtask(
+                id=f"task_{index + 1}",
+                title=title,
                 category=TaskCategory(raw_task["category"]),
-                priority=assign_priority(raw_task["title"]),
+                priority=assign_priority({"title": title, "labels": labels}),
                 description=f"Subtask of: {issue_title}",
             )
-            subtasks.append(task_obj)
+            subtasks.append(subtask)
 
-        # Generate dependency graph
         dependency_graph = generate_dependency_graph(subtasks)
-
-        # Find parallelizable tasks
         parallel_tasks = find_parallelizable_tasks(dependency_graph)
 
-        # Prepare result
-        # Transform tasks to match test expectations
-        transformed_tasks = []
+        transformed_items = []
         for task in dependency_graph["tasks"]:
-            transformed_task = {
-                "id": task["id"],
-                "title": task["name"],
-                "category": task["category"],
-                "priority": task["priority"],  # P0, P1, P2
-                "estimate_hours": 4,  # Default estimate
-                "depends_on": task["depends_on"],
-                "description": task["description"],
-            }
-            transformed_tasks.append(transformed_task)
+            transformed_items.append(
+                {
+                    "id": task["id"],
+                    "title": task["name"],
+                    "category": task["category"],
+                    "priority": task["priority"],
+                    "estimate_hours": 4,
+                    "depends_on": task["depends_on"],
+                    "description": task["description"],
+                }
+            )
 
+        mode = _detect_mode(issue_title, issue_body, labels)
         result_content = {
             "schema_version": "1.0",
             "original_issue": issue_title,
-            "items": transformed_tasks,  # Changed from "subtasks" to "items" for test compatibility
-            "subtasks": dependency_graph[
-                "tasks"
-            ],  # Keep original subtasks for backward compatibility
+            "items": transformed_items,
+            "subtasks": dependency_graph["tasks"],
             "dependency_graph": dependency_graph,
             "parallelizable_groups": parallel_tasks,
             "total_subtasks": len(subtasks),
+            "generation_context": {"mode": mode},
+            "quality_signals": {
+                "items_count": len(transformed_items),
+                "parallel_group_count": len(parallel_tasks),
+                "decomposition_completeness": "high" if len(transformed_items) >= 3 else "medium",
+            },
+            "plan_provenance": {
+                "source": context.get("plan_source", "generated"),
+                "passthrough": False,
+                "rebuilt": False,
+            },
             "categories_count": {
                 "backend": len([t for t in subtasks if t.category == TaskCategory.BACKEND]),
                 "frontend": len([t for t in subtasks if t.category == TaskCategory.FRONTEND]),
@@ -501,35 +498,23 @@ class TaskDecomposer(BaseAgent):
             },
         }
 
-        # Determine artifact type based on context
-        # If we have specification_writer in context, it's likely the MVP test expecting "subtasks"
-        if "specification_writer" in context:
-            artifact_type = "subtasks"
-        else:
-            # For other contexts, use the standard "task_decomposition"
-            artifact_type = "task_decomposition"
-
-        # Create the result in the format expected by tests
+        artifact_type = "subtasks" if "specification_writer" in context else "task_decomposition"
         result = build_agent_result(
             status="SUCCESS",
             artifact_type=artifact_type,
             artifact_content=result_content,
-            reason="Task decomposition completed successfully",
+            reason="Task decomposition completed successfully.",
             confidence=0.9,
             logs=[
                 f"Decomposed issue into {len(subtasks)} subtasks",
-                f"Identified {len(parallel_tasks)} groups of parallelizable tasks",
-                f"Categories: {result_content['categories_count']}",
+                f"mode={mode}",
+                f"parallelizable_groups={len(parallel_tasks)}",
             ],
-            next_actions=["specification_writer", "architecture_planner"],
+            next_actions=["bdd_generator", "test_generator"],
         )
-
-        # Add top-level keys expected by tests
         result["artifact_type"] = artifact_type
         result["artifact_content"] = result_content
-
         return result
 
 
-# Backward-compatible alias
-TaskDecomposer = TaskDecomposer
+TaskDecomposer = TaskDecomposerAgent

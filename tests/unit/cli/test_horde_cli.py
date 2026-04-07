@@ -218,12 +218,12 @@ def test_pipeline_run_ci_fix_uses_default_repo_and_ci_defaults(monkeypatch):
     monkeypatch.setattr(horde_cli, "_resolve_local_head_sha", lambda: "abcdef123456")
 
     exit_code = horde_cli.run_pipeline(
-        pipeline_name="ci_fix_pipeline",
+        pipeline_name="ci_scanner_pipeline",
         inputs_str="{}",
     )
 
     assert exit_code == horde_cli.EXIT_OK
-    assert captured["pipeline_name"] == "ci_fix_pipeline"
+    assert captured["pipeline_name"] == "ci_scanner_pipeline"
     assert captured["inputs"] == {
         "repository": {"full_name": "OWNER/REPO"},
         "ci_run": {
@@ -258,14 +258,14 @@ def test_pipeline_run_ci_fix_accepts_repo_and_branch_overrides(monkeypatch):
     monkeypatch.setattr(horde_cli, "_resolve_local_head_sha", lambda: "ignored")
 
     exit_code = horde_cli.run_pipeline(
-        pipeline_name="ci_fix_pipeline",
+        pipeline_name="ci_scanner_pipeline",
         inputs_str='{"ci_run":{"head_sha":"manual-sha"}}',
         repo_id="ALT/REPO",
         branch="release",
     )
 
     assert exit_code == horde_cli.EXIT_OK
-    assert captured["pipeline_name"] == "ci_fix_pipeline"
+    assert captured["pipeline_name"] == "ci_scanner_pipeline"
     assert captured["inputs"]["repository"]["full_name"] == "ALT/REPO"
     assert captured["inputs"]["ci_run"]["head_branch"] == "release"
     assert captured["inputs"]["ci_run"]["head_sha"] == "manual-sha"
@@ -312,12 +312,12 @@ def test_pipeline_run_ci_fix_enriches_ci_run_from_github(monkeypatch):
     )
 
     exit_code = horde_cli.run_pipeline(
-        pipeline_name="ci_fix_pipeline",
+        pipeline_name="ci_scanner_pipeline",
         inputs_str="{}",
     )
 
     assert exit_code == horde_cli.EXIT_OK
-    assert captured["pipeline_name"] == "ci_fix_pipeline"
+    assert captured["pipeline_name"] == "ci_scanner_pipeline"
     assert captured["inputs"]["github_token"] == "token-123"
     assert captured["inputs"]["ci_run"]["id"] == 23
     assert captured["inputs"]["ci_run"]["name"] == "Build Docker"

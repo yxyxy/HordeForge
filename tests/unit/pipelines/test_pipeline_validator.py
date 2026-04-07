@@ -470,7 +470,7 @@ class TestCorePipelineCompatibility:
 
     @pytest.mark.parametrize(
         "pipeline_name",
-        ["init_pipeline", "feature_pipeline", "ci_fix_pipeline"],
+        ["init_pipeline", "feature_pipeline", "ci_scanner_pipeline"],
     )
     def test_core_pipelines_pass_validation(self, pipeline_name):
         loader = PipelineLoader("pipelines")

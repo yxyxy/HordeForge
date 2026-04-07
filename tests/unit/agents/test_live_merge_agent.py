@@ -38,6 +38,7 @@ class TestPrMergeAgent:
                 "pr_number": 123,
                 "review_result": {"decision": "approve"},
                 "test_results": {"failed": 0},
+                "live_merge": True,
             }
         )
 
@@ -61,10 +62,12 @@ class TestPrMergeAgent:
                 "pr_number": 123,
                 "review_result": {"decision": "approve"},
                 "test_results": {"failed": 0},
+                "live_merge": True,
             }
         )
 
         artifact = result["artifacts"][0]["content"]
+        assert result["status"] == "PARTIAL_SUCCESS"
         assert artifact["merged"] is False
         assert "not mergeable" in (artifact.get("merge_error") or "").lower()
 

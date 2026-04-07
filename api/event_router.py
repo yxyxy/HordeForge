@@ -68,14 +68,14 @@ def route_github_event(event_type: str, payload: dict[str, Any]) -> WebhookRoute
         repository = payload.get("repository")
         issue = payload.get("issue")
         return WebhookRouteDecision(
-            pipeline_name="ci_fix_pipeline",
+            pipeline_name="ci_scanner_pipeline",
             inputs={
                 "repository": repository if isinstance(repository, dict) else {},
                 "ci_run": workflow_run,
                 "original_issue": issue if isinstance(issue, dict) else {},
             },
             ignored=False,
-            reason="mapped:workflow_run->ci_fix_pipeline",
+            reason="mapped:workflow_run->ci_scanner_pipeline",
         )
 
     return WebhookRouteDecision(

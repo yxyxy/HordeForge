@@ -249,6 +249,7 @@ class TestGitHubIntegration:
             "pr_number": 123,
             "review_result": {"decision": "approve"},
             "test_results": {"failed": 0},
+            "live_merge": True,
         }
 
         result = agent.run(context)

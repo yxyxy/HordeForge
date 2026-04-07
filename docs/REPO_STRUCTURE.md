@@ -190,8 +190,8 @@ HordeForge/
     +-- validation.py
     L-- pipeline_validator.py
 +-- pipelines/
+    +-- ci_scanner_pipeline.yaml
     +-- ci_fix_pipeline.yaml
-    +-- ci_monitoring_pipeline.yaml
     +-- code_generation.yaml
     +-- dependency_check_pipeline.yaml
     +-- feature_pipeline.yaml

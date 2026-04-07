@@ -12,7 +12,7 @@ Issue → DoD → Spec → Tasks → Tests → Code → Fix Loop → Review → 
 
 ### Основные технологии
 
-- **Язык**: Python 3.10+
+- **Язык**: Python 3.11+
 - **Веб-фреймворк**: FastAPI
 - **Оркестрация**: собственное решение в `orchestrator/`
 - **Контейнеризация**: Docker + docker-compose
@@ -83,7 +83,7 @@ HordeForge/
 ├── pipelines/                 # YAML-конфигурации pipeline
 │   ├── init_pipeline.yaml
 │   ├── feature_pipeline.yaml
-│   ├── ci_fix_pipeline.yaml
+│   ├── ci_scanner_pipeline.yaml
 │   └── ...
 ├── rag/                       # Retrieval-Augmented Generation
 │   ├── indexer.py             # Индексация документации
@@ -382,7 +382,7 @@ Retrieval-Augmented Generation:
 Реализовано:
 - ✅ Orchestrator runtime (ExecutionContext, state machine, retry/timeout/loops, run summary)
 - ✅ Schema validation и registry-first исполнение агентов
-- ✅ MVP-агенты для init_pipeline, feature_pipeline, ci_fix_pipeline
+- ✅ MVP-агенты для init_pipeline, feature_pipeline, ci_scanner_pipeline
 - ✅ Scheduler Gateway с полным REST API
 - ✅ Webhook API с HMAC-валидацией и event routing
 - ✅ Trigger-level idempotency suppression

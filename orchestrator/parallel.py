@@ -37,9 +37,13 @@ def _extract_output_aliases(output_mapping: Any) -> set[str]:
     return aliases
 
 
-def build_step_dependency_graph(steps: list[StepDefinition]) -> dict[str, set[str]]:
+def build_step_dependency_graph(
+    steps: list[StepDefinition],
+    externally_satisfied_dependencies: set[str] | None = None,
+) -> dict[str, set[str]]:
     dependencies: dict[str, set[str]] = {step.name: set() for step in steps}
     producer_by_key: dict[str, str] = {}
+    external_dependencies = externally_satisfied_dependencies or set()
 
     for step in steps:
         producer_by_key.setdefault(step.name, step.name)
@@ -58,9 +62,9 @@ def build_step_dependency_graph(steps: list[StepDefinition]) -> dict[str, set[st
             dependencies[step.name].add(previous_step_name)
 
         for dep_name in step.depends_on:
-            if dep_name not in step_names:
+            if dep_name not in step_names and dep_name not in external_dependencies:
                 raise ValueError(f"Step '{step.name}' depends on unknown step '{dep_name}'")
-            if dep_name != step.name:
+            if dep_name != step.name and dep_name in step_names:
                 dependencies[step.name].add(dep_name)
 
         for placeholder in _extract_placeholders(step.input_mapping):

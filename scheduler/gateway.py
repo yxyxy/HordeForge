@@ -46,6 +46,7 @@ from scheduler.tenant_registry import (
     extract_repository_full_name,
     normalize_tenant_id,
 )
+from storage.backends import archive_and_prune_rotated_logs, rotate_current_log_files
 from storage.models import ArtifactRecord, RunRecord, StepLogRecord
 from storage.repositories.artifact_repository import ArtifactRepository
 from storage.repositories.run_repository import RunRepository
@@ -64,6 +65,7 @@ app = FastAPI(title="HordeForge Scheduler Gateway", version="0.1.0")
 logger = logging.getLogger("hordeforge.gateway")
 
 config = RunConfig.from_env()
+CONTAINER_STARTED_AT = datetime.now(timezone.utc)
 
 # Initialize JWT validator if auth is enabled
 JWT_VALIDATOR: JWTValidator | None = None
@@ -474,6 +476,15 @@ def _queue_autodrain_batch_size() -> int:
     return max(1, min(200, parsed))
 
 
+def _queue_autodrain_shutdown_timeout_seconds() -> float:
+    raw_value = os.getenv("HORDEFORGE_QUEUE_AUTODRAIN_SHUTDOWN_TIMEOUT_SECONDS", "15")
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError):
+        parsed = 15.0
+    return max(1.0, min(300.0, parsed))
+
+
 def _drain_queue_once(*, max_items: int) -> list[dict[str, Any]]:
     claimed = TASK_QUEUE.claim_next(max_items=max_items)
     records: list[dict[str, Any]] = []
@@ -525,6 +536,12 @@ def _queue_autodrain_worker() -> None:
 @app.on_event("startup")
 def startup_queue_autodrain_worker() -> None:
     global QUEUE_AUTODRAIN_THREAD
+    if STORAGE_BACKEND_REQUESTED == "json":
+        archive_and_prune_rotated_logs(
+            storage_dir=config.storage_dir,
+            archive_after_days=7,
+            retention_days=7,
+        )
     if not _queue_autodrain_enabled():
         logger.info("Queue autodrain worker disabled by HORDEFORGE_QUEUE_AUTODRAIN_ENABLED.")
         return
@@ -534,7 +551,7 @@ def startup_queue_autodrain_worker() -> None:
     QUEUE_AUTODRAIN_THREAD = threading.Thread(
         target=_queue_autodrain_worker,
         name="hordeforge-queue-autodrain",
-        daemon=True,
+        daemon=False,
     )
     QUEUE_AUTODRAIN_THREAD.start()
 
@@ -542,11 +559,27 @@ def startup_queue_autodrain_worker() -> None:
 @app.on_event("shutdown")
 def shutdown_queue_autodrain_worker() -> None:
     global QUEUE_AUTODRAIN_THREAD
-    if QUEUE_AUTODRAIN_THREAD is None:
-        return
-    QUEUE_AUTODRAIN_STOP.set()
-    QUEUE_AUTODRAIN_THREAD.join(timeout=3.0)
-    QUEUE_AUTODRAIN_THREAD = None
+    if QUEUE_AUTODRAIN_THREAD is not None:
+        QUEUE_AUTODRAIN_STOP.set()
+        shutdown_timeout = _queue_autodrain_shutdown_timeout_seconds()
+        QUEUE_AUTODRAIN_THREAD.join(timeout=shutdown_timeout)
+        if QUEUE_AUTODRAIN_THREAD.is_alive():
+            logger.warning(
+                "Queue autodrain worker did not stop within %ss.",
+                shutdown_timeout,
+            )
+        QUEUE_AUTODRAIN_THREAD = None
+
+    if STORAGE_BACKEND_REQUESTED == "json":
+        rotate_current_log_files(
+            storage_dir=config.storage_dir,
+            container_started_at=CONTAINER_STARTED_AT,
+        )
+        archive_and_prune_rotated_logs(
+            storage_dir=config.storage_dir,
+            archive_after_days=7,
+            retention_days=7,
+        )
 
 
 @app.post("/llm/profiles")
@@ -706,6 +739,17 @@ def _persist_step_and_artifact_logs(run_record: RunRecord) -> None:
         logs = step_result.get("logs")
         if isinstance(logs, list) and logs:
             error_message = str(logs[0])
+
+        artifact_ids: list[str] = []
+        raw_artifacts = step_result.get("artifacts", [])
+        if isinstance(raw_artifacts, list):
+            for raw_artifact in raw_artifacts:
+                if not isinstance(raw_artifact, dict):
+                    continue
+                metadata = raw_artifact.get("metadata")
+                if isinstance(metadata, dict) and isinstance(metadata.get("artifact_id"), str):
+                    artifact_ids.append(str(metadata.get("artifact_id")))
+
         step_logs.append(
             StepLogRecord(
                 run_id=run_record.run_id,
@@ -717,10 +761,15 @@ def _persist_step_and_artifact_logs(run_record: RunRecord) -> None:
                 error=step_state.get("error")
                 or (error_message if status in {"FAILED", "BLOCKED"} else None),
                 retry_count=max(0, int(step_state.get("attempts", 1)) - 1),
+                step_input_hash=(
+                    str(step_state.get("input_hash")).strip()
+                    if step_state.get("input_hash") is not None
+                    else None
+                ),
+                artifact_ids=artifact_ids,
             )
         )
 
-        raw_artifacts = step_result.get("artifacts", [])
         if not isinstance(raw_artifacts, list):
             continue
         for raw_artifact in raw_artifacts:
@@ -944,6 +993,16 @@ def run_pipeline(request: PipelineRequest) -> dict[str, Any]:
     RUN_REPOSITORY.create(run_record)
     RUNS[run_id] = run_record.to_dict()
 
+    def _on_checkpoint(payload: dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            return
+        run_record.result = _sanitize_run_result(payload)
+        checkpoint = payload.get("checkpoint")
+        run_record.checkpoint_state = checkpoint if isinstance(checkpoint, dict) else None
+        run_record.status = str(payload.get("status") or "RUNNING")
+        RUN_REPOSITORY.upsert(run_record)
+        _persist_step_and_artifact_logs(run_record)
+
     try:
         result = engine.run(
             request.pipeline_name,
@@ -954,6 +1013,7 @@ def run_pipeline(request: PipelineRequest) -> dict[str, Any]:
                 "correlation_id": correlation_id,
                 "tenant_id": tenant_id,
                 "repository_full_name": repository_full_name,
+                "__checkpoint_callback": _on_checkpoint,
             },
         )
         run_record.result = _sanitize_run_result(result)
@@ -1621,6 +1681,17 @@ def override_run(
             correlation_id=correlation_id,
             override_state=record.override_state,
         )
+
+        def _on_override_checkpoint(payload: dict[str, Any]) -> None:
+            if not isinstance(payload, dict):
+                return
+            record.result = _sanitize_run_result(payload)
+            checkpoint = payload.get("checkpoint")
+            record.checkpoint_state = checkpoint if isinstance(checkpoint, dict) else None
+            record.status = str(payload.get("status") or "RUNNING")
+            RUN_REPOSITORY.upsert(record)
+            _persist_step_and_artifact_logs(record)
+
         try:
             result = engine.run(
                 record.pipeline_name,
@@ -1631,6 +1702,7 @@ def override_run(
                     "correlation_id": correlation_id,
                     "tenant_id": record.tenant_id,
                     "repository_full_name": record.repository_full_name,
+                    "__checkpoint_callback": _on_override_checkpoint,
                 },
                 resume_run_state=resume_run_state,
                 resume_step_results=resume_step_results,

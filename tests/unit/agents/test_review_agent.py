@@ -1,7 +1,6 @@
-# tests/unit/agents/test_review_agent.py
-
 from subprocess import CompletedProcess
 
+from agents.llm_wrapper import parse_review_output as parse_review_output_centralized
 from agents.review_agent import (
     ReviewAgent,
     parse_review_output,
@@ -15,8 +14,6 @@ class TestLintChecks:
     """TDD: Lint Checks"""
 
     def test_run_lint(self, monkeypatch):
-        """TDD: Run lint checks"""
-        # Arrange
         project = "python"
         recorded: dict[str, object] = {}
 
@@ -27,10 +24,8 @@ class TestLintChecks:
 
         monkeypatch.setattr("agents.review_agent.subprocess.run", _fake_run)
 
-        # Act
         result = run_lint(project)
 
-        # Assert
         assert result["tool"] == "ruff"
         assert result["success"] is True
         assert recorded["cmd"] == ["ruff", "check", "."]
@@ -41,8 +36,6 @@ class TestSecurityScan:
     """TDD: Security Scan"""
 
     def test_run_security_scan(self, monkeypatch):
-        """TDD: Run security scan"""
-        # Arrange
         project = "python"
         recorded: dict[str, object] = {}
 
@@ -53,10 +46,8 @@ class TestSecurityScan:
 
         monkeypatch.setattr("agents.review_agent.subprocess.run", _fake_run)
 
-        # Act
         result = run_security_scan(project)
 
-        # Assert
         assert result["tool"] == "bandit"
         assert result["success"] is True
         assert recorded["cmd"] == ["bandit", "-r", "."]
@@ -67,18 +58,24 @@ class TestArchitectureRulesValidation:
     """TDD: Architecture Rules Validation"""
 
     def test_validate_architecture_rules(self):
-        """TDD: Validate architecture rules"""
-        # Arrange
         dependencies = ["module_a -> module_b"]
-
-        # Act
         result = validate_architecture_rules(dependencies)
-
-        # Assert
         assert result is not None
 
 
 class TestReviewOutputParsing:
+    def test_centralized_parse_review_output_accepts_dict_and_decision_alias(self):
+        payload = {
+            "decision": "approve",
+            "summary": "Structured response",
+            "findings": [],
+            "strengths": ["ok"],
+            "recommendations": ["none"],
+            "confidence": 0.7,
+        }
+        parsed = parse_review_output_centralized(payload)
+        assert parsed["overall_decision"] == "approve"
+
     def test_parse_review_output_accepts_dict_input(self):
         payload = {
             "overall_decision": "approve",
@@ -135,6 +132,18 @@ Thanks.
         assert parsed["overall_decision"] == "request_changes"
         assert len(parsed["findings"]) == 1
 
+    def test_centralized_parse_review_output_accepts_overall_decision_aliases(self):
+        payload = {
+            "overallDecision": "approve",
+            "summary": "Structured response",
+            "findings": [],
+            "strengths": ["ok"],
+            "recommendations": ["none"],
+            "confidence": 0.7,
+        }
+        parsed = parse_review_output_centralized(payload)
+        assert parsed["overall_decision"] == "approve"
+
 
 def test_review_agent_fails_when_llm_required_and_unavailable(monkeypatch):
     class _FailingWrapper:
@@ -165,3 +174,130 @@ def test_review_agent_fails_when_llm_required_and_unavailable(monkeypatch):
 
     assert result["status"] == "FAILED"
     assert result["artifacts"][0]["type"] == "review_result"
+
+
+def test_review_agent_detects_grounding_mismatch():
+    context = {
+        "use_llm": False,
+        "code_generator": {
+            "artifacts": [
+                {
+                    "type": "code_patch",
+                    "content": {
+                        "files": [
+                            {
+                                "path": "src/unrelated.py",
+                                "content": "print('x')",
+                                "change_type": "modify",
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+        "ci_failure_analysis": {
+            "artifacts": [
+                {
+                    "type": "ci_failure_context",
+                    "content": {
+                        "files": ["orchestrator/loader.py"],
+                        "test_targets": ["tests/unit/test_loader.py::test_ok"],
+                    },
+                }
+            ]
+        },
+    }
+
+    result = ReviewAgent().run(context)
+
+    assert result["status"] == "PARTIAL_SUCCESS"
+    artifact = result["artifacts"][0]["content"]
+    assert artifact["decision"] == "request_changes"
+    assert any(item["type"] == "grounding_mismatch" for item in artifact["findings"])
+
+
+def test_review_agent_detects_invalid_verification_for_path_error():
+    context = {
+        "use_llm": False,
+        "code_generator": {
+            "artifacts": [
+                {
+                    "type": "code_patch",
+                    "content": {
+                        "files": [
+                            {
+                                "path": "tests/unit/test_loader.py",
+                                "content": "def test_x(): assert True",
+                                "change_type": "modify",
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+        "test_runner": {
+            "artifacts": [
+                {
+                    "type": "test_results",
+                    "content": {
+                        "exit_code": 4,
+                        "failed": 0,
+                        "error_classification": "path_error",
+                        "stderr": "ERROR: file or directory not found",
+                    },
+                }
+            ]
+        },
+    }
+
+    result = ReviewAgent().run(context)
+
+    assert result["status"] == "PARTIAL_SUCCESS"
+    artifact = result["artifacts"][0]["content"]
+    assert artifact["decision"] == "request_changes"
+    assert any(item["type"] == "verification_invalid" for item in artifact["findings"])
+    assert any(
+        "rerun verification" in item.lower() or "test execution" in item.lower()
+        for item in artifact["recommendations"]
+    )
+
+
+def test_review_agent_approves_clean_patch_without_ci_constraints():
+    context = {
+        "use_llm": False,
+        "code_generator": {
+            "artifacts": [
+                {
+                    "type": "code_patch",
+                    "content": {
+                        "files": [
+                            {
+                                "path": "orchestrator/loader.py",
+                                "content": "def load():\n    return True\n",
+                                "change_type": "modify",
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+        "test_runner": {
+            "artifacts": [
+                {
+                    "type": "test_results",
+                    "content": {
+                        "exit_code": 0,
+                        "failed": 0,
+                    },
+                }
+            ]
+        },
+    }
+
+    result = ReviewAgent().run(context)
+
+    assert result["status"] == "SUCCESS"
+    artifact = result["artifacts"][0]["content"]
+    assert artifact["decision"] == "approve"
+    assert artifact["policy_checks"]["grounding_checked"] is True
+    assert artifact["policy_checks"]["verification_checked"] is True
