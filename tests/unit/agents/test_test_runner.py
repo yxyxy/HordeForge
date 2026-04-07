@@ -182,6 +182,79 @@ class TestMultiFrameworkExecution:
         assert result["artifact_content"]["execution_mode"] == "real"
         assert result["artifact_content"]["isolated"] is False
 
+    def test_isolated_sandbox_cleanup_uses_force_remove_fallback(self, tmp_path, monkeypatch):
+        sandbox_root = tmp_path / "test_runner_isolated_demo"
+        sandbox_repo = sandbox_root / "HordeForge"
+        sandbox_repo.mkdir(parents=True)
+
+        calls: list[tuple[str, bool, bool]] = []
+        original_rmtree = __import__("shutil").rmtree
+
+        def _fake_rmtree(path, ignore_errors=False, onerror=None):
+            calls.append((str(path), bool(ignore_errors), onerror is not None))
+            if str(path) == str(sandbox_root) and ignore_errors:
+                raise PermissionError("simulated cleanup failure")
+            if onerror is not None:
+                return original_rmtree(path, ignore_errors=False, onerror=onerror)
+            return None
+
+        def _fake_run_pytest(_self, _project_path, _context):
+            return {
+                "framework": "pytest",
+                "exit_code": 0,
+                "stdout": "1 passed",
+                "stderr": "",
+                "command": "python -m pytest",
+            }
+
+        monkeypatch.setattr(
+            TestRunner, "_create_isolated_environment", lambda *_: str(sandbox_repo)
+        )
+        monkeypatch.setattr(TestRunner, "_run_pytest", _fake_run_pytest)
+        monkeypatch.setattr("shutil.rmtree", _fake_rmtree)
+
+        result = TestRunner().run(
+            {
+                "project_path": str(tmp_path),
+                "project_metadata": {"language": "python", "test_framework": "pytest"},
+                "isolate_test_environment": True,
+                "code_patch": {"files": [{"path": "src/a.py", "content": "print('ok')"}]},
+            }
+        )
+
+        assert result["status"] == "SUCCESS"
+        assert any(ignore_errors and not has_onerror for _path, ignore_errors, has_onerror in calls)
+        assert any(not ignore_errors and has_onerror for _path, ignore_errors, has_onerror in calls)
+
+    def test_pytest_runner_tmp_cleanup_uses_force_remove_fallback(self, tmp_path, monkeypatch):
+        runner_tmp_dir = tmp_path / "runner_tmp"
+        runner_tmp_dir.mkdir(parents=True)
+
+        calls: list[tuple[str, bool, bool]] = []
+        original_rmtree = __import__("shutil").rmtree
+
+        def _fake_rmtree(path, ignore_errors=False, onerror=None):
+            calls.append((str(path), bool(ignore_errors), onerror is not None))
+            if str(path) == str(runner_tmp_dir) and ignore_errors:
+                raise PermissionError("simulated runner tmp cleanup failure")
+            if onerror is not None:
+                return original_rmtree(path, ignore_errors=False, onerror=onerror)
+            return None
+
+        monkeypatch.setattr(TestRunner, "_make_runner_tmp_dir", lambda *_: str(runner_tmp_dir))
+        monkeypatch.setattr(TestRunner, "_prepare_python_env", lambda *_: ([], "python"))
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda *_args, **_kwargs: MagicMock(returncode=0, stdout="1 passed", stderr=""),
+        )
+        monkeypatch.setattr("shutil.rmtree", _fake_rmtree)
+
+        payload = TestRunner()._run_pytest(str(tmp_path), {})
+
+        assert payload["exit_code"] == 0
+        assert any(ignore_errors and not has_onerror for _path, ignore_errors, has_onerror in calls)
+        assert any(not ignore_errors and has_onerror for _path, ignore_errors, has_onerror in calls)
+
 
 class TestCoverageAndClassification:
     def test_generate_pytest_coverage_placeholder(self):

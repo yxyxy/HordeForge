@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import io
 import json
+import re
 import subprocess
 import sys
 import time
@@ -966,12 +967,14 @@ def _fetch_failed_jobs_for_run(
             else f"job failed (status={status or 'unknown'}, conclusion={conclusion or 'unknown'})"
         )
         log_excerpt = ""
+        raw_log = ""
         job_id = job.get("id")
         if isinstance(job_id, int):
-            log_excerpt = _fetch_job_log_excerpt(
+            log_excerpt, raw_log = _fetch_job_log_details(
                 repository_full_name=repository_full_name,
                 job_id=job_id,
                 github_token=github_token,
+                failed_steps=failed_steps,
             )
         logs = (
             f"job_url={job.get('html_url', 'n/a')}; "
@@ -980,18 +983,34 @@ def _fetch_failed_jobs_for_run(
         )
         if log_excerpt:
             logs = f"{logs}; excerpt={log_excerpt}"
-        failed_jobs.append(
-            {
-                "name": job.get("name") or "unknown-job",
-                "reason": reason,
-                "logs": logs,
-            }
-        )
+        job_payload: dict[str, object] = {
+            "name": job.get("name") or "unknown-job",
+            "reason": reason,
+            "logs": logs,
+        }
+        if raw_log:
+            job_payload["raw_log"] = raw_log
+        failed_jobs.append(job_payload)
 
     return failed_jobs
 
 
-def _fetch_job_log_excerpt(repository_full_name: str, job_id: int, github_token: str) -> str:
+def _trim_raw_log(text: str, max_chars: int = 16000) -> str:
+    if not text:
+        return ""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if len(normalized) <= max_chars:
+        return normalized
+    # Keep the tail where pytest summary and FAILED targets usually appear.
+    return normalized[-max_chars:]
+
+
+def _fetch_job_log_details(
+    repository_full_name: str,
+    job_id: int,
+    github_token: str,
+    failed_steps: list[str] | None = None,
+) -> tuple[str, str]:
     headers = {"Accept": "application/vnd.github+json"}
     if github_token.strip():
         headers["Authorization"] = f"token {github_token.strip()}"
@@ -1003,17 +1022,22 @@ def _fetch_job_log_excerpt(repository_full_name: str, job_id: int, github_token:
         )
         response.raise_for_status()
     except requests.RequestException:
-        return ""
+        return "", ""
 
     content_type = str(response.headers.get("Content-Type", "")).lower()
     if "text/plain" in content_type or "application/json" in content_type:
-        return _extract_log_error_excerpt(response.text)
+        text = response.text
+        return _extract_log_error_excerpt(text), _trim_raw_log(text)
 
     try:
         archive = zipfile.ZipFile(io.BytesIO(response.content))
     except (zipfile.BadZipFile, OSError):
-        return ""
+        return "", ""
 
+    failed_steps_normalized = [step.lower() for step in (failed_steps or []) if step.strip()]
+    best_excerpt = ""
+    best_raw_log = ""
+    best_score = -1
     for name in archive.namelist():
         try:
             with archive.open(name) as handle:
@@ -1022,9 +1046,36 @@ def _fetch_job_log_excerpt(repository_full_name: str, job_id: int, github_token:
         except Exception:
             continue
         excerpt = _extract_log_error_excerpt(text)
+        lowered_name = name.lower()
+        lowered_text = text.lower()
+        score = 0
         if excerpt:
-            return excerpt
-    return ""
+            score += 1
+        if "short test summary info" in lowered_text:
+            score += 2
+        if "failed " in lowered_text:
+            score += 1
+        if failed_steps_normalized and any(
+            step in lowered_name for step in failed_steps_normalized
+        ):
+            score += 3
+
+        if score > best_score:
+            best_score = score
+            best_excerpt = excerpt
+            best_raw_log = _trim_raw_log(text)
+
+    return best_excerpt, best_raw_log
+
+
+def _fetch_job_log_excerpt(repository_full_name: str, job_id: int, github_token: str) -> str:
+    excerpt, _ = _fetch_job_log_details(
+        repository_full_name=repository_full_name,
+        job_id=job_id,
+        github_token=github_token,
+        failed_steps=[],
+    )
+    return excerpt
 
 
 def _extract_log_error_excerpt(text: str) -> str:
@@ -1033,6 +1084,26 @@ def _extract_log_error_excerpt(text: str) -> str:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return ""
+
+    # Prefer concrete pytest failure targets when available.
+    summary_index = -1
+    for idx, line in enumerate(lines):
+        if "short test summary info" in line.lower():
+            summary_index = idx
+            break
+
+    if summary_index >= 0:
+        for line in lines[summary_index + 1 : summary_index + 20]:
+            if re.search(r"^\s*(?:FAILED|ERROR)\s+[^\s]+\.py(?:::[^\s]+)?", line):
+                return line[:400]
+
+    for line in lines:
+        if re.search(r"^\s*FAILED\s+[^\s]+\.py::[^\s]+", line):
+            return line[:400]
+    for line in lines:
+        if re.search(r"^\s*FAILED\s+[^\s]+\.py", line):
+            return line[:400]
+
     scored_patterns: list[tuple[int, tuple[str, ...]]] = [
         (
             100,

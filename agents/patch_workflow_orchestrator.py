@@ -10,6 +10,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,32 @@ class PatchWorkflowOrchestrator:
     """Orchestrates patch application with atomicity, safety, and detection capabilities."""
 
     def __init__(self):
-        self.backup_dir = tempfile.mkdtemp(prefix="patch_backup_")
+        self.backup_dir: str | None = None
+
+    @staticmethod
+    def _cleanup_tree(path: str) -> None:
+        """Remove a directory tree with a Windows-safe fallback for read-only paths."""
+        try:
+            shutil.rmtree(path, ignore_errors=True)
+            if not Path(path).exists():
+                return
+        except Exception:
+            pass
+
+        def _onerror(_func, target, _exc) -> None:
+            try:
+                os.chmod(target, 0o700)
+            except Exception:
+                return
+
+        target_path = Path(path)
+        rmtree_target: str | Path = target_path
+        if os.name == "nt":
+            rmtree_target = Path("\\\\?\\" + str(target_path.resolve()))
+        try:
+            shutil.rmtree(rmtree_target, ignore_errors=False, onerror=_onerror)
+        except Exception:
+            pass
 
     def apply_patch_atomically(self, patch_data: str) -> bool:
         """
@@ -180,7 +206,7 @@ class PatchWorkflowOrchestrator:
     def _cleanup_backup(self, backup_path: str) -> bool:
         """Clean up backup directory."""
         try:
-            shutil.rmtree(backup_path, ignore_errors=True)
+            self._cleanup_tree(backup_path)
             logger.info(f"Cleaned up backup: {backup_path}")
             return True
         except Exception as e:

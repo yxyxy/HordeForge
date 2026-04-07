@@ -100,6 +100,31 @@ class TestRunner(BaseAgent):
         return dest_path
 
     @staticmethod
+    def _cleanup_tree(path: str) -> None:
+        """Remove a directory tree with a Windows-safe fallback for read-only paths."""
+        try:
+            shutil.rmtree(path, ignore_errors=True)
+            if not Path(path).exists():
+                return
+        except Exception:
+            pass
+
+        def _onerror(_func, target, _exc) -> None:
+            try:
+                os.chmod(target, 0o700)
+            except Exception:
+                return
+
+        target_path = Path(path)
+        rmtree_target: str | Path = target_path
+        if os.name == "nt":
+            rmtree_target = Path("\\\\?\\" + str(target_path.resolve()))
+        try:
+            shutil.rmtree(rmtree_target, ignore_errors=False, onerror=_onerror)
+        except Exception:
+            pass
+
+    @staticmethod
     def _build_subprocess_env(project_path: str, runner_tmp_dir: str) -> dict[str, str]:
         env = os.environ.copy()
         env["TMPDIR"] = runner_tmp_dir
@@ -571,7 +596,7 @@ class TestRunner(BaseAgent):
                 "preparation_logs": prep_logs,
             }
         finally:
-            shutil.rmtree(runner_tmp_dir, ignore_errors=True)
+            self._cleanup_tree(runner_tmp_dir)
 
     def _extract_pytest_coverage(self, project_path: str) -> dict[str, Any] | None:
         cov_json_path = os.path.join(project_path, ".coverage.json")
@@ -654,7 +679,7 @@ class TestRunner(BaseAgent):
                 "command": " ".join(cmd),
             }
         finally:
-            shutil.rmtree(runner_tmp_dir, ignore_errors=True)
+            self._cleanup_tree(runner_tmp_dir)
 
     def _extract_jest_coverage(self, project_path: str) -> dict[str, Any] | None:
         summary_path = os.path.join(project_path, "coverage", "coverage-summary.json")
@@ -716,7 +741,7 @@ class TestRunner(BaseAgent):
                 "command": " ".join(cmd),
             }
         finally:
-            shutil.rmtree(runner_tmp_dir, ignore_errors=True)
+            self._cleanup_tree(runner_tmp_dir)
 
     def _extract_go_coverage(self, project_path: str) -> dict[str, Any] | None:
         coverage_file = os.path.join(project_path, "coverage.out")
@@ -1072,6 +1097,6 @@ class TestRunner(BaseAgent):
             if use_isolation:
                 try:
                     sandbox_root = str(Path(execution_path).parent)
-                    shutil.rmtree(sandbox_root, ignore_errors=True)
+                    self._cleanup_tree(sandbox_root)
                 except Exception:
                     pass

@@ -443,6 +443,111 @@ def test_agent_run_issue_handoff_extracts_only_real_failed_jobs():
     assert "failure" not in names
 
 
+def test_agent_run_extracts_candidates_from_short_test_summary_info():
+    agent = CiFailureAnalyzer()
+    context = {
+        "ci_run": {
+            "status": "failed",
+            "failed_jobs": [
+                {
+                    "name": "Test Unit",
+                    "reason": "pytest failed",
+                    "logs": """
+                    =========================== short test summary info ============================
+                    FAILED tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests - AssertionError: assert 'BLOCKED' in {'PARTIAL_SUCCESS', 'SUCCESS'}
+                    = 1 failed, 1428 passed in 648.05s =
+                    """,
+                }
+            ],
+        }
+    }
+
+    result = agent.run(context)
+    artifact = result["artifacts"][0]["content"]
+
+    assert (
+        "tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests"
+        in artifact["test_targets"]
+    )
+    assert "tests/unit/orchestrator/test_orchestrator_engine.py" in artifact["files"]
+    assert any(
+        item.get("target")
+        == "tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests"
+        and item.get("source") == "short_test_summary_info"
+        and float(item.get("confidence", 0.0)) >= 1.0
+        for item in artifact.get("test_targets_metadata", [])
+    )
+    assert any(
+        item.get("path") == "tests/unit/orchestrator/test_orchestrator_engine.py"
+        and item.get("source") in {"trace_location", "derived_from_test_targets"}
+        for item in artifact.get("files_metadata", [])
+    )
+
+
+def test_agent_run_issue_handoff_extracts_candidates_from_excerpt():
+    agent = CiFailureAnalyzer()
+    context = {
+        "issue": {
+            "number": 30,
+            "title": "[CI Incident] yxyxy/HordeForge run#24102822256 failure",
+            "body": """
+            ## CI Incident Handoff
+
+            ### Failed Jobs / Details
+            1. **Test Unit**: failed steps: Run unit pytest
+               - logs: `job_url=https://github.com/yxyxy/HordeForge/actions/runs/24102822256/job/70318336835; run_id=24102822256; failed_steps=Run unit pytest; excerpt=FAILED tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests - AssertionError: assert 'BLOCKED' in {'PARTIAL_SUCCESS', 'SUCCESS'}`
+            """,
+        }
+    }
+
+    result = agent.run(context)
+    artifact = result["artifacts"][0]["content"]
+
+    assert (
+        "tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests"
+        in artifact["test_targets"]
+    )
+    assert "tests/unit/orchestrator/test_orchestrator_engine.py" in artifact["files"]
+    assert any(
+        item.get("target")
+        == "tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests"
+        for item in artifact.get("test_targets_metadata", [])
+    )
+
+
+def test_agent_run_prefers_raw_log_when_logs_only_have_assertion_excerpt():
+    agent = CiFailureAnalyzer()
+    context = {
+        "ci_run": {
+            "status": "failed",
+            "failed_jobs": [
+                {
+                    "name": "Test Unit",
+                    "reason": "failed steps: Run unit pytest",
+                    "logs": (
+                        "job_url=https://github.com/yxyxy/HordeForge/actions/runs/24102822256/job/70318336835; "
+                        "run_id=24102822256; failed_steps=Run unit pytest; "
+                        "excerpt=2026-04-07T20:39:09.9835800Z E   AssertionError: assert 'BLOCKED' in {'PARTIAL_SUCCESS', 'SUCCESS'}"
+                    ),
+                    "raw_log": """
+                    2026-04-07T20:39:11.1735808Z =========================== short test summary info ============================
+                    2026-04-07T20:39:11.1737112Z FAILED tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests - AssertionError: assert 'BLOCKED' in {'PARTIAL_SUCCESS', 'SUCCESS'}
+                    """,
+                }
+            ],
+        }
+    }
+
+    result = agent.run(context)
+    artifact = result["artifacts"][0]["content"]
+
+    assert (
+        "tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests"
+        in artifact["test_targets"]
+    )
+    assert "tests/unit/orchestrator/test_orchestrator_engine.py" in artifact["files"]
+
+
 def test_agent_run_preserves_backward_compatible_fields():
     agent = CiFailureAnalyzer()
     context = {

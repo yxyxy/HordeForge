@@ -1,5 +1,8 @@
 # tests/unit/agents/test_patch_workflow_orchestrator.py
+import tempfile
+
 from agents.patch_workflow_orchestrator import (
+    PatchWorkflowOrchestrator,
     apply_patch_atomically,
     apply_patch_with_revert,
     detect_partial_patch,
@@ -82,3 +85,42 @@ class TestPartialPatchDetection:
 
         # Assert
         assert status == "complete"
+
+
+class TestCleanupBehavior:
+    def test_init_does_not_create_unused_temp_backup_dir(self, monkeypatch):
+        calls: list[str] = []
+        original_mkdtemp = tempfile.mkdtemp
+
+        def _fake_mkdtemp(*args, **kwargs):
+            calls.append(str(kwargs.get("prefix", "")))
+            return original_mkdtemp(*args, **kwargs)
+
+        monkeypatch.setattr("tempfile.mkdtemp", _fake_mkdtemp)
+
+        PatchWorkflowOrchestrator()
+
+        assert "patch_backup_" not in calls
+
+    def test_cleanup_backup_uses_force_remove_fallback(self, tmp_path, monkeypatch):
+        backup_path = tmp_path / "repo_backup_demo"
+        backup_path.mkdir(parents=True)
+
+        calls: list[tuple[str, bool, bool]] = []
+        original_rmtree = __import__("shutil").rmtree
+
+        def _fake_rmtree(path, ignore_errors=False, onerror=None):
+            calls.append((str(path), bool(ignore_errors), onerror is not None))
+            if str(path) == str(backup_path) and ignore_errors:
+                raise PermissionError("simulated backup cleanup failure")
+            if onerror is not None:
+                return original_rmtree(path, ignore_errors=False, onerror=onerror)
+            return None
+
+        monkeypatch.setattr("shutil.rmtree", _fake_rmtree)
+
+        result = PatchWorkflowOrchestrator()._cleanup_backup(str(backup_path))
+
+        assert result is True
+        assert any(ignore_errors and not has_onerror for _path, ignore_errors, has_onerror in calls)
+        assert any(not ignore_errors and has_onerror for _path, ignore_errors, has_onerror in calls)

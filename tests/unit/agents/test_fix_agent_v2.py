@@ -180,3 +180,49 @@ def test_fix_agent_prefers_code_generator_core_when_available(monkeypatch):
     content = _get_content(result, "code_patch")
     assert content["files"][0]["path"] == "tests/test_example.py"
     assert "use_codegen_core" in content.get("decisions", [])
+
+
+def test_fix_agent_require_llm_handles_missing_stdout_stderr(monkeypatch):
+    """Require-LLM mode should remain actionable even when runner omits stdout/stderr."""
+    agent = FixAgent()
+
+    monkeypatch.setattr(
+        fix_agent_module.FixAgent,
+        "_generate_fix_with_code_generator_core",
+        lambda *_args, **_kwargs: (
+            None,
+            "codegen_fix_returned_empty_patch",
+        ),
+    )
+
+    class _StubLLM:
+        def complete(self, _prompt):
+            return '{"files":[{"path":"src/feature_impl.py","change_type":"modify","content":"# fix"}]}'
+
+        def close(self):
+            return
+
+    monkeypatch.setattr(fix_agent_module, "get_llm_wrapper", lambda *args, **kwargs: _StubLLM())
+    monkeypatch.setattr(fix_agent_module, "get_legacy_llm_wrapper", lambda *args, **kwargs: None)
+
+    result = agent.run(
+        {
+            "use_llm": True,
+            "require_llm": True,
+            "test_runner": _step_result(
+                "PARTIAL_SUCCESS",
+                "test_results",
+                {
+                    "framework": "pytest",
+                    "failed": 1,
+                    "exit_code": 1,
+                    "stdout": "",
+                    "stderr": "",
+                },
+            ),
+        }
+    )
+
+    assert result["status"] == "SUCCESS"
+    content = _get_content(result, "code_patch")
+    assert content["files"]

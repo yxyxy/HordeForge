@@ -200,12 +200,17 @@ class FixAgent(BaseAgent):
         stderr = str(test_results.get("stderr") or "").strip()
         framework = str(test_results.get("framework") or "unknown").strip()
         failed_raw = test_results.get("failed")
+        exit_code_raw = test_results.get("exit_code")
         error_classification = str(test_results.get("error_classification") or "").strip()
 
         try:
             failed_count = int(failed_raw) if failed_raw is not None else 0
         except (TypeError, ValueError):
             failed_count = 0
+        try:
+            exit_code = int(exit_code_raw) if exit_code_raw is not None else 0
+        except (TypeError, ValueError):
+            exit_code = 0
 
         message_parts: list[str] = []
         if error_classification:
@@ -214,6 +219,16 @@ class FixAgent(BaseAgent):
             message_parts.append(f"stderr:\n{stderr[:3000]}")
         if stdout:
             message_parts.append(f"stdout:\n{stdout[:3000]}")
+
+        if not message_parts and (failed_count > 0 or exit_code != 0):
+            message_parts.append(
+                "synthetic_failure_summary:\n"
+                f"framework={framework}\n"
+                f"failed={failed_count}\n"
+                f"exit_code={exit_code}\n"
+                "No stdout/stderr payload was provided by test_runner."
+            )
+
         if not message_parts:
             return []
 

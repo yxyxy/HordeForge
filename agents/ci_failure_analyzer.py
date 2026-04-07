@@ -104,6 +104,20 @@ def _normalize_line(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _strip_ansi_sequences(text: str) -> str:
+    if not text:
+        return ""
+    return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+
+
+def _normalize_log_text(text: str) -> str:
+    if not text:
+        return ""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _strip_ansi_sequences(normalized)
+    return normalized
+
+
 def _dedupe_keep_order(items: list[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
@@ -364,35 +378,110 @@ def _fingerprint(text: str) -> str:
 
 
 def _extract_test_targets(text: str) -> list[str]:
+    return [item["target"] for item in _extract_test_targets_with_metadata(text)]
+
+
+def _extract_test_targets_with_metadata(text: str) -> list[dict[str, Any]]:
     if not text:
         return []
 
-    targets: list[str] = []
-    patterns = [
-        r"([\w./\\-]+\.py::test_[\w\[\]-]+)",
-        r"\bFAILED\s+([\w./\\-]+\.py::[\w\[\]-]+)",
-        r"\bERROR\s+([\w./\\-]+\.py::[\w\[\]-]+)",
-        r"\b([\w./\\-]+\.py)\b",
-    ]
-    for pattern in patterns:
-        matches = re.findall(pattern, text, flags=re.IGNORECASE)
-        for match in matches:
-            targets.append(str(match).strip())
+    normalized_text = _normalize_log_text(text)
+    targets: list[dict[str, Any]] = []
 
-    normalized: list[str] = []
-    for item in targets:
-        candidate = item.replace("\\", "/")
+    def _push(raw_target: str, *, source: str, confidence: float) -> None:
+        candidate = str(raw_target or "").strip().replace("\\", "/")
         for prefix in ("workspace/repo/", "/workspace/repo/", "workspace/", "repo/"):
             if candidate.startswith(prefix):
                 candidate = candidate[len(prefix) :]
                 break
-        if candidate:
-            normalized.append(candidate)
+        if not candidate:
+            return
+        targets.append(
+            {
+                "target": candidate,
+                "source": source,
+                "confidence": float(confidence),
+            }
+        )
 
-    return _dedupe_keep_order(normalized)
+    summary_match = re.search(
+        r"short test summary info(?P<body>.*?)(?:\n={3,}|\n\s*warnings summary|\n\s*docs:|\Z)",
+        normalized_text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if summary_match:
+        summary_body = summary_match.group("body")
+        summary_patterns = [
+            r"^\s*(?:FAILED|ERROR)\s+([^\s]+\.py::[^\s]+)",
+            r"^\s*(?:FAILED|ERROR)\s+([^\s]+\.py)",
+        ]
+        for line in summary_body.splitlines():
+            for pattern in summary_patterns:
+                match = re.search(pattern, line, flags=re.IGNORECASE)
+                if match:
+                    _push(
+                        match.group(1).strip(),
+                        source="short_test_summary_info",
+                        confidence=1.0,
+                    )
+
+    patterns = [
+        r"\b(?:FAILED|ERROR)\s+([\w./\\-]+\.py::[\w\[\]-]+)",
+        r"([\w./\\-]+\.py::test_[\w\[\]-]+)",
+        r"\b(?:FAILED|ERROR)\s+([\w./\\-]+\.py)",
+    ]
+    for pattern in patterns:
+        matches = re.findall(pattern, normalized_text, flags=re.IGNORECASE)
+        for match in matches:
+            _push(str(match).strip(), source="log_pattern", confidence=0.75)
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for item in targets:
+        key = str(item.get("target", "")).lower()
+        if not key:
+            continue
+        current = deduped.get(key)
+        if current is None or float(item["confidence"]) > float(current["confidence"]):
+            deduped[key] = item
+
+    return list(deduped.values())
+
+
+def _extract_files_from_test_targets(test_targets: list[str]) -> list[str]:
+    return [item["path"] for item in _extract_files_from_test_targets_with_metadata(test_targets)]
+
+
+def _extract_files_from_test_targets_with_metadata(
+    test_targets: list[str],
+) -> list[dict[str, Any]]:
+    files: list[str] = []
+    for target in test_targets:
+        normalized = str(target or "").strip().replace("\\", "/")
+        if not normalized:
+            continue
+        if "::" in normalized:
+            normalized = normalized.split("::", 1)[0]
+        if normalized.endswith(".py"):
+            files.append(normalized)
+    return [
+        {
+            "path": path,
+            "source": "derived_from_test_targets",
+            "confidence": 0.8,
+        }
+        for path in _dedupe_keep_order(files)
+    ]
 
 
 def _extract_repository_files_from_locations(locations: list[dict[str, Any]]) -> list[str]:
+    return [
+        item["path"] for item in _extract_repository_files_from_locations_with_metadata(locations)
+    ]
+
+
+def _extract_repository_files_from_locations_with_metadata(
+    locations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     files: list[str] = []
     for location in locations:
         file_path = str(location.get("file") or "").strip().replace("\\", "/")
@@ -401,7 +490,14 @@ def _extract_repository_files_from_locations(locations: list[dict[str, Any]]) ->
         if "/site-packages/" in file_path or "/usr/" in file_path:
             continue
         files.append(file_path)
-    return _dedupe_keep_order(files)
+    return [
+        {
+            "path": path,
+            "source": "trace_location",
+            "confidence": 0.95,
+        }
+        for path in _dedupe_keep_order(files)
+    ]
 
 
 def classify_failure_text(text: str) -> str:
@@ -650,33 +746,38 @@ class CiFailureAnalyzer(BaseAgent):
         per_job_analysis: list[dict[str, Any]] = []
         job_languages: list[str] = []
         all_test_targets: list[str] = []
+        all_test_target_metadata: list[dict[str, Any]] = []
 
         for index, job in enumerate(failed_jobs):
             job_name = str(job.get("name") or f"job_{index + 1}")
             job_reason = str(job.get("reason") or "")
             job_logs = str(job.get("logs") or job_reason or "")
+            job_raw_log = str(job.get("raw_log") or "")
+            job_analysis_logs = "\n".join(part for part in [job_raw_log, job_logs] if part).strip()
             combined_text = " ".join(
-                part for part in [job_name, job_reason, job_logs] if part
+                part for part in [job_name, job_reason, job_analysis_logs] if part
             ).strip()
 
-            combined_logs_parts.append(job_logs)
+            combined_logs_parts.append(job_analysis_logs)
 
-            locations = extract_file_line_from_trace(job_logs)
+            locations = extract_file_line_from_trace(job_analysis_logs)
             for location in locations:
                 if location not in all_locations:
                     all_locations.append(location)
 
             job_classification = classify_failure_text(combined_text)
             job_severity = determine_severity(job_classification)
-            job_language = detect_language(job_logs or combined_text)
+            job_language = detect_language(job_analysis_logs or combined_text)
             job_languages.append(job_language)
 
-            job_parsed_errors = parse_logs(job_logs)
-            job_flaky_tests = detect_flaky_tests(job_logs)
-            job_infra_errors = detect_infra_errors(job_logs)
-            job_fingerprint = _fingerprint(job_logs) if job_logs else ""
-            job_test_targets = _extract_test_targets(job_logs)
+            job_parsed_errors = parse_logs(job_analysis_logs)
+            job_flaky_tests = detect_flaky_tests(job_analysis_logs)
+            job_infra_errors = detect_infra_errors(job_analysis_logs)
+            job_fingerprint = _fingerprint(job_analysis_logs) if job_analysis_logs else ""
+            job_test_targets_metadata = _extract_test_targets_with_metadata(job_analysis_logs)
+            job_test_targets = [item["target"] for item in job_test_targets_metadata]
             all_test_targets.extend(job_test_targets)
+            all_test_target_metadata.extend(job_test_targets_metadata)
 
             per_job_analysis.append(
                 {
@@ -705,8 +806,33 @@ class CiFailureAnalyzer(BaseAgent):
         parsed_errors = parse_logs(combined_logs)
         flaky_tests = detect_flaky_tests(combined_logs)
         infra_errors = detect_infra_errors(combined_logs)
-        files = _extract_repository_files_from_locations(all_locations)
         test_targets = _dedupe_keep_order(all_test_targets)
+        deduped_target_meta: dict[str, dict[str, Any]] = {}
+        for item in all_test_target_metadata:
+            key = str(item.get("target", "")).lower()
+            if not key:
+                continue
+            current = deduped_target_meta.get(key)
+            if current is None or float(item.get("confidence", 0.0)) > float(
+                current.get("confidence", 0.0)
+            ):
+                deduped_target_meta[key] = item
+        test_targets_metadata = list(deduped_target_meta.values())
+
+        file_metadata = _extract_repository_files_from_locations_with_metadata(all_locations)
+        file_metadata.extend(_extract_files_from_test_targets_with_metadata(test_targets))
+        deduped_file_meta: dict[str, dict[str, Any]] = {}
+        for item in file_metadata:
+            key = str(item.get("path", "")).lower()
+            if not key:
+                continue
+            current = deduped_file_meta.get(key)
+            if current is None or float(item.get("confidence", 0.0)) > float(
+                current.get("confidence", 0.0)
+            ):
+                deduped_file_meta[key] = item
+        files_metadata = list(deduped_file_meta.values())
+        files = [item["path"] for item in files_metadata]
 
         analysis = {
             "classification": classification,
@@ -727,6 +853,8 @@ class CiFailureAnalyzer(BaseAgent):
             "issue_handoff_used": issue_handoff_used,
             "files": files[:20],
             "test_targets": test_targets[:20],
+            "files_metadata": files_metadata[:20],
+            "test_targets_metadata": test_targets_metadata[:20],
         }
 
         logs = [

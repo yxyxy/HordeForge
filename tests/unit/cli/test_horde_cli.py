@@ -387,6 +387,80 @@ def test_extract_log_error_excerpt_prefers_push_denied_error():
     assert "denied" in excerpt.lower()
 
 
+def test_extract_log_error_excerpt_prefers_failed_test_target_from_summary():
+    log_text = """
+    =========================== short test summary info ============================
+    FAILED tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests - AssertionError: assert 'BLOCKED' in {'PARTIAL_SUCCESS', 'SUCCESS'}
+    = 1 failed, 1428 passed in 648.05s =
+    """
+    excerpt = horde_cli._extract_log_error_excerpt(log_text)
+    assert excerpt.startswith(
+        "FAILED tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests"
+    )
+
+
+def test_extract_log_error_excerpt_prefers_failed_test_target_without_summary():
+    log_text = """
+    some output
+    FAILED tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests
+    E   AssertionError: assert 'BLOCKED' in {'PARTIAL_SUCCESS', 'SUCCESS'}
+    """
+    excerpt = horde_cli._extract_log_error_excerpt(log_text)
+    assert excerpt.startswith(
+        "FAILED tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests"
+    )
+
+
+def test_fetch_failed_jobs_for_run_includes_raw_log_when_available(monkeypatch):
+    class _JobsResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "jobs": [
+                    {
+                        "id": 70318336835,
+                        "name": "Test Unit",
+                        "html_url": "https://github.com/yxyxy/HordeForge/actions/runs/24102822256/job/70318336835",
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "steps": [
+                            {"name": "Run unit pytest", "conclusion": "failure"},
+                        ],
+                    }
+                ]
+            }
+
+    def _fake_get(url: str, *, headers: dict, params: dict, timeout: float):
+        assert "/actions/runs/24102822256/jobs" in url
+        return _JobsResponse()
+
+    monkeypatch.setattr(horde_cli.requests, "get", _fake_get)
+    monkeypatch.setattr(
+        horde_cli,
+        "_fetch_job_log_details",
+        lambda repository_full_name, job_id, github_token, failed_steps: (
+            "FAILED tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests",
+            "2026-04-07T20:39:11.1737112Z FAILED tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests",
+        ),
+    )
+
+    failed_jobs = horde_cli._fetch_failed_jobs_for_run(
+        repository_full_name="yxyxy/HordeForge",
+        run_id=24102822256,
+        github_token="token-123",
+    )
+
+    assert len(failed_jobs) == 1
+    assert failed_jobs[0]["name"] == "Test Unit"
+    assert (
+        "excerpt=FAILED tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests"
+        in str(failed_jobs[0]["logs"])
+    )
+    assert "raw_log" in failed_jobs[0]
+
+
 def test_run_llm_command_applies_llm_profile(monkeypatch):
     captured: dict[str, object] = {}
 
