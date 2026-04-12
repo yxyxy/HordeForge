@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 from agents.base import BaseAgent
@@ -447,6 +448,95 @@ def _extract_test_targets_with_metadata(text: str) -> list[dict[str, Any]]:
     return list(deduped.values())
 
 
+def _extract_markdown_section(text: str, section_title: str) -> str:
+    if not text:
+        return ""
+    pattern = (
+        rf"(?im)^\s*###\s*{re.escape(section_title)}\s*$"
+        r"(?P<body>.*?)(?=^\s*###\s+|\Z)"
+    )
+    match = re.search(pattern, text, flags=re.DOTALL | re.MULTILINE)
+    if not match:
+        return ""
+    return str(match.group("body") or "").strip()
+
+
+def _extract_candidate_files_with_metadata(text: str) -> list[dict[str, Any]]:
+    if not text:
+        return []
+
+    section = _extract_markdown_section(_normalize_log_text(text), "Candidate Files")
+    if not section:
+        return []
+
+    raw_items: list[str] = []
+    raw_items.extend(re.findall(r"`([^`]+)`", section))
+    for line in section.splitlines():
+        bullet_match = re.match(r"^\s*[-*]\s+(.+)$", line.strip())
+        if bullet_match:
+            raw_items.append(str(bullet_match.group(1)))
+
+    files: list[str] = []
+    for item in raw_items:
+        normalized = str(item).strip().strip("`").replace("\\", "/")
+        if not normalized:
+            continue
+        if "::" in normalized:
+            normalized = normalized.split("::", 1)[0].strip()
+        for prefix in ("workspace/repo/", "/workspace/repo/", "workspace/", "repo/"):
+            if normalized.startswith(prefix):
+                normalized = normalized[len(prefix) :]
+                break
+        if normalized and normalized not in files:
+            files.append(normalized)
+
+    return [
+        {
+            "path": path,
+            "source": "issue_handoff_markdown",
+            "confidence": 0.98,
+        }
+        for path in files
+    ]
+
+
+def _extract_handoff_sections(text: str) -> dict[str, Any]:
+    if not text:
+        return {}
+
+    normalized_text = _normalize_log_text(text)
+    candidate_files = [
+        item["path"] for item in _extract_candidate_files_with_metadata(normalized_text)
+    ]
+    test_targets = [item["target"] for item in _extract_test_targets_with_metadata(normalized_text)]
+
+    failure_analysis_section = _extract_markdown_section(normalized_text, "Failure Analysis")
+    failed_jobs_section = _extract_markdown_section(normalized_text, "Failed Jobs / Details")
+
+    ci_metadata: dict[str, str] = {}
+    for key, value in re.findall(r"-\s*([a-zA-Z0-9_.-]+):\s*`([^`]+)`", normalized_text):
+        normalized_key = str(key).strip()
+        normalized_value = str(value).strip()
+        if normalized_key and normalized_value:
+            ci_metadata[normalized_key] = normalized_value
+
+    return {
+        "candidate_files": candidate_files[:30],
+        "test_targets": test_targets[:30],
+        "failure_analysis": [
+            _normalize_line(line)
+            for line in failure_analysis_section.splitlines()
+            if _normalize_line(line).startswith("-")
+        ][:20],
+        "failed_jobs_details": [
+            _normalize_line(line)
+            for line in failed_jobs_section.splitlines()
+            if _normalize_line(line)
+        ][:30],
+        "ci_metadata": ci_metadata,
+    }
+
+
 def _extract_files_from_test_targets(test_targets: list[str]) -> list[str]:
     return [item["path"] for item in _extract_files_from_test_targets_with_metadata(test_targets)]
 
@@ -516,13 +606,13 @@ def classify_failure_text(text: str) -> str:
         if re.search(pattern, lowered, re.IGNORECASE):
             return "build_failure"
 
-    for pattern in INFRA_PATTERNS:
-        if re.search(pattern, lowered, re.IGNORECASE):
-            return "infrastructure"
-
     for pattern in TEST_FAILURE_PATTERNS:
         if re.search(pattern, lowered, re.IGNORECASE):
             return "test_failure"
+
+    for pattern in INFRA_PATTERNS:
+        if re.search(pattern, lowered, re.IGNORECASE):
+            return "infrastructure"
 
     for label, pattern in PYTHON_ERRORS.items():
         if re.search(pattern, lowered, re.IGNORECASE):
@@ -544,6 +634,171 @@ def classify_failure_text(text: str) -> str:
         return "lint_warning"
 
     return "unknown"
+
+
+def _normalize_repo_relative_path(value: str) -> str:
+    normalized = str(value or "").strip().replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    for prefix in ("workspace/repo/", "/workspace/repo/", "workspace/", "/workspace/", "repo/"):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix) :]
+            break
+    if "::" in normalized:
+        normalized = normalized.split("::", 1)[0]
+    return normalized
+
+
+def _infer_source_candidates_from_test_targets(
+    test_targets: list[str], files: list[str]
+) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def _push(path: str) -> None:
+        normalized = _normalize_repo_relative_path(path)
+        if not normalized or normalized.startswith("tests/"):
+            return
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        candidates.append(normalized)
+
+    for item in files:
+        _push(item)
+
+    for target in test_targets:
+        normalized = _normalize_repo_relative_path(target)
+        if not normalized.startswith("tests/"):
+            continue
+        parts = [p for p in normalized.split("/") if p]
+        if len(parts) < 2:
+            continue
+        filename = parts[-1]
+        if not filename.endswith(".py"):
+            continue
+        if filename.startswith("test_"):
+            module_file = filename[len("test_") :]
+        elif filename.endswith("_test.py"):
+            module_file = filename[: -len("_test.py")] + ".py"
+        else:
+            continue
+        relative_parts = parts[1:]
+        while relative_parts and relative_parts[0] in {
+            "unit",
+            "integration",
+            "functional",
+            "e2e",
+            "acceptance",
+            "system",
+        }:
+            relative_parts = relative_parts[1:]
+        if not relative_parts:
+            continue
+        base_parts = list(relative_parts)
+        base_parts[-1] = module_file
+        _push("/".join(base_parts))
+
+    return candidates[:20]
+
+
+def _extract_failing_assertions(text: str) -> list[str]:
+    if not text:
+        return []
+    matches: list[str] = []
+    for raw in text.splitlines():
+        line = _normalize_line(raw)
+        lowered = line.lower()
+        if not line:
+            continue
+        if "assertionerror" in lowered or re.search(r"\bassert\b", lowered):
+            matches.append(line)
+    return _dedupe_keep_order(matches)[:20]
+
+
+def _extract_traceback_excerpt(text: str, max_lines: int = 40) -> str:
+    if not text:
+        return ""
+    lines = text.splitlines()
+    start = -1
+    for idx, line in enumerate(lines):
+        if "traceback (most recent call last)" in line.lower():
+            start = idx
+            break
+    if start < 0:
+        return ""
+    excerpt = "\n".join(lines[start : start + max_lines]).strip()
+    return excerpt[:8000]
+
+
+def _build_grounded_snippets(
+    *,
+    test_targets: list[str],
+    source_candidates: list[str],
+    locations: list[dict[str, Any]],
+    max_files: int = 4,
+) -> list[dict[str, Any]]:
+    snippets: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    location_map: dict[str, int] = {}
+    for loc in locations:
+        if not isinstance(loc, dict):
+            continue
+        file_path = _normalize_repo_relative_path(str(loc.get("file", "")))
+        line = loc.get("line")
+        if file_path and isinstance(line, int) and line > 0 and file_path not in location_map:
+            location_map[file_path] = line
+
+    ordered_paths: list[tuple[str, str]] = []
+    for item in test_targets:
+        normalized = _normalize_repo_relative_path(item)
+        if normalized:
+            ordered_paths.append((normalized, "test_target"))
+    for item in source_candidates:
+        normalized = _normalize_repo_relative_path(item)
+        if normalized:
+            ordered_paths.append((normalized, "source_candidate"))
+
+    for path, kind in ordered_paths:
+        if path in seen:
+            continue
+        seen.add(path)
+
+        repo_path = Path("workspace/repo") / path
+        local_path = Path(path)
+        selected: Path | None = None
+        if repo_path.exists() and repo_path.is_file():
+            selected = repo_path
+        elif local_path.exists() and local_path.is_file():
+            selected = local_path
+        if selected is None:
+            continue
+
+        try:
+            all_lines = selected.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            continue
+        if not all_lines:
+            continue
+
+        anchor_line = location_map.get(path, 1)
+        start = max(1, anchor_line - 20)
+        end = min(len(all_lines), anchor_line + 20)
+        excerpt = "\n".join(all_lines[start - 1 : end]).strip()
+        snippets.append(
+            {
+                "path": path,
+                "kind": kind,
+                "anchor_line": anchor_line,
+                "line_start": start,
+                "line_end": end,
+                "excerpt": excerpt[:2400],
+                "truncated": len(excerpt) > 2400,
+            }
+        )
+        if len(snippets) >= max_files:
+            break
+    return snippets
 
 
 class CiFailureAnalyzer(BaseAgent):
@@ -670,7 +925,7 @@ class CiFailureAnalyzer(BaseAgent):
 
         full_text = "\n\n".join(part for part in [title, body, comments_text] if part).strip()
         failed_job_names = cls._extract_failed_job_names(full_text)
-        reason_source = full_text[:2000] if full_text else "issue-based ci incident handoff"
+        reason_source = full_text[:4000] if full_text else "issue-based ci incident handoff"
 
         failed_jobs: list[dict[str, Any]] = []
         for job_name in failed_job_names[:10]:
@@ -701,6 +956,8 @@ class CiFailureAnalyzer(BaseAgent):
                 "failed_jobs": failed_jobs,
                 "source": "issue_handoff",
                 "issue_number": issue.get("number"),
+                "issue_handoff_text": full_text[:20000],
+                "issue_handoff_body": body[:20000],
             },
             True,
         )
@@ -747,6 +1004,7 @@ class CiFailureAnalyzer(BaseAgent):
         job_languages: list[str] = []
         all_test_targets: list[str] = []
         all_test_target_metadata: list[dict[str, Any]] = []
+        handoff_sections: dict[str, Any] = {}
 
         for index, job in enumerate(failed_jobs):
             job_name = str(job.get("name") or f"job_{index + 1}")
@@ -794,6 +1052,17 @@ class CiFailureAnalyzer(BaseAgent):
                 }
             )
 
+        if issue_handoff_used:
+            handoff_text = str(
+                ci_run.get("issue_handoff_body") or ci_run.get("issue_handoff_text") or ""
+            ).strip()
+            handoff_sections = _extract_handoff_sections(handoff_text)
+            handoff_targets = handoff_sections.get("test_targets", [])
+            if isinstance(handoff_targets, list):
+                all_test_targets.extend(str(item) for item in handoff_targets if str(item).strip())
+            handoff_target_metadata = _extract_test_targets_with_metadata(handoff_text)
+            all_test_target_metadata.extend(handoff_target_metadata)
+
         combined_logs = " ".join(combined_logs_parts).strip()
         detected_language = detect_language(combined_logs)
         dominant_language = detected_language
@@ -821,6 +1090,11 @@ class CiFailureAnalyzer(BaseAgent):
 
         file_metadata = _extract_repository_files_from_locations_with_metadata(all_locations)
         file_metadata.extend(_extract_files_from_test_targets_with_metadata(test_targets))
+        if issue_handoff_used:
+            handoff_text = str(
+                ci_run.get("issue_handoff_body") or ci_run.get("issue_handoff_text") or ""
+            ).strip()
+            file_metadata.extend(_extract_candidate_files_with_metadata(handoff_text))
         deduped_file_meta: dict[str, dict[str, Any]] = {}
         for item in file_metadata:
             key = str(item.get("path", "")).lower()
@@ -833,6 +1107,19 @@ class CiFailureAnalyzer(BaseAgent):
                 deduped_file_meta[key] = item
         files_metadata = list(deduped_file_meta.values())
         files = [item["path"] for item in files_metadata]
+        source_candidates = _infer_source_candidates_from_test_targets(test_targets, files)
+        required_change_scope = (
+            "source_required"
+            if classification == "test_failure" and bool(source_candidates)
+            else "test_only_allowed"
+        )
+        failing_assertions = _extract_failing_assertions(combined_logs)
+        traceback_excerpt = _extract_traceback_excerpt(combined_logs)
+        grounded_snippets = _build_grounded_snippets(
+            test_targets=test_targets,
+            source_candidates=source_candidates,
+            locations=all_locations,
+        )
 
         analysis = {
             "classification": classification,
@@ -853,8 +1140,14 @@ class CiFailureAnalyzer(BaseAgent):
             "issue_handoff_used": issue_handoff_used,
             "files": files[:20],
             "test_targets": test_targets[:20],
+            "source_candidates": source_candidates[:20],
+            "required_change_scope": required_change_scope,
+            "grounded_snippets": grounded_snippets,
+            "failing_assertions": failing_assertions[:20],
+            "traceback_excerpt": traceback_excerpt,
             "files_metadata": files_metadata[:20],
             "test_targets_metadata": test_targets_metadata[:20],
+            "handoff_sections": handoff_sections if issue_handoff_used else {},
         }
 
         logs = [
@@ -868,6 +1161,9 @@ class CiFailureAnalyzer(BaseAgent):
             f"infra_errors_count={len(infra_errors)}",
             f"files_count={len(files)}",
             f"test_targets_count={len(test_targets)}",
+            f"source_candidates_count={len(source_candidates)}",
+            f"grounded_snippets_count={len(grounded_snippets)}",
+            f"required_change_scope={required_change_scope}",
         ]
 
         if issue_handoff_used:

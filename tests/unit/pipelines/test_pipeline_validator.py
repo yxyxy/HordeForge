@@ -297,6 +297,77 @@ steps:
         finally:
             Path(temp_path).unlink(missing_ok=True)
 
+    def test_pipeline_with_future_step_output_reference_raises_error(self):
+        """Input from a future non-loop step should fail handoff validation."""
+        pipeline_yaml = """
+pipeline_name: test_pipeline
+steps:
+  - name: step_a
+    agent: repo_connector
+    input:
+      late_value: "{{result_b}}"
+  - name: step_b
+    agent: rag_initializer
+    output: "{{result_b}}"
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(pipeline_yaml)
+            temp_path = f.name
+
+        try:
+            loader = PipelineLoader("pipelines")
+            pipeline = loader.load(temp_path)
+
+            validator = PipelineValidator()
+            with pytest.raises(PipelineValidationError) as exc_info:
+                validator.validate(pipeline)
+
+            error = str(exc_info.value)
+            assert "result_b" in error
+            assert "execution phase" in error
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
+
+    def test_pipeline_loop_step_can_use_output_from_loop_peer(self):
+        """Loop handoff should allow keys produced by peer loop steps."""
+        pipeline_yaml = """
+pipeline_name: test_pipeline
+steps:
+  - name: test_runner
+    agent: test_runner
+    input:
+      code_patch: "{{ fixed_code_patch | default(code_patch) }}"
+    output: "{{test_results}}"
+  - name: fix_agent
+    agent: fix_agent
+    input:
+      test_results: "{{test_results}}"
+      code_patch: "{{code_patch}}"
+    output: "{{fixed_code_patch}}"
+loops:
+  - condition: "{{ (test_results.failed | default(0)) > 0 }}"
+    steps:
+      - fix_agent
+      - test_runner
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(pipeline_yaml)
+            temp_path = f.name
+
+        try:
+            loader = PipelineLoader("pipelines")
+            pipeline = loader.load(temp_path)
+
+            validator = PipelineValidator()
+            errors = validator.validate(pipeline)
+            assert errors == []
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
+
     def test_pipeline_with_multiple_outputs_and_inputs_passes(self):
         """Pipeline with multiple outputs and inputs should pass validation."""
         pipeline_yaml = """

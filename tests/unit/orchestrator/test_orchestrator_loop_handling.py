@@ -534,3 +534,83 @@ loops:
     finally:
         if pipeline_path.exists():
             pipeline_path.unlink()
+
+
+class StaticFailingTestRunnerAgent:
+    def run(self, _context):
+        return {
+            "status": "PARTIAL_SUCCESS",
+            "artifacts": [],
+            "decisions": [],
+            "logs": [],
+            "next_actions": [],
+            "test_results": {
+                "failed": 1,
+                "exit_code": 1,
+                "failure_signature": "same-signature",
+            },
+        }
+
+
+def test_loop_breaks_on_no_progress_threshold():
+    pipeline_path = Path("tests/unit/_tmp_no_progress_loop_pipeline.yaml")
+    pipeline_path.write_text(
+        """
+pipeline_name: no_progress_loop_pipeline
+steps:
+  - name: seed_results
+    agent: static_test_runner
+    output: "{{test_results}}"
+    on_failure: continue
+  - name: fix_agent
+    agent: static_fix_agent
+    condition: "{{ (test_results.failed | default(0)) > 0 }}"
+    output: "{{fixed_code_patch}}"
+    on_failure: continue
+  - name: test_runner
+    agent: static_test_runner
+    output: "{{test_results}}"
+    on_failure: trigger_fix_loop
+loops:
+  - condition: "{{ (test_results.failed | default(0)) > 0 }}"
+    no_progress_threshold: 2
+    progress_signature_path: "test_results.failure_signature"
+    steps:
+      - fix_agent
+      - test_runner
+""".strip(),
+        encoding="utf-8",
+    )
+
+    class _StaticFixAgent:
+        def run(self, _context):
+            return {
+                "status": "SUCCESS",
+                "artifacts": [{"type": "code_patch", "content": {"files": []}}],
+                "decisions": [],
+                "logs": [],
+                "next_actions": [],
+            }
+
+    def agent_factory(agent_name: str):
+        if agent_name == "static_test_runner":
+            return StaticFailingTestRunnerAgent()
+        if agent_name == "static_fix_agent":
+            return _StaticFixAgent()
+        raise KeyError(agent_name)
+
+    engine = OrchestratorEngine(
+        pipelines_dir="pipelines",
+        step_executor=StepExecutor(agent_factory=agent_factory, strict_schema_validation=False),
+        max_loop_iterations=10,
+        use_registry_bootstrap=False,
+    )
+
+    try:
+        result = engine.run(str(pipeline_path), {}, run_id="no-progress-loop-run")
+    finally:
+        if pipeline_path.exists():
+            pipeline_path.unlink()
+
+    assert result["status"] in {"PARTIAL_SUCCESS", "SUCCESS"}
+    assert result["state"].get("loop_guard", {}).get("no_progress_detected") is True

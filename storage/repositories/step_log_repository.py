@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 
+from logging_utils import redact_sensitive_data
 from storage.backends import StorageBackend, get_current_log_path, get_storage_backend
 from storage.models import StepLogRecord
 
@@ -40,7 +41,14 @@ class StepLogRepository:
         return records
 
     def _save(self, items: list[StepLogRecord]) -> None:
-        self.store.write_all([item.to_dict() for item in items])
+        safe_items: list[dict[str, object]] = []
+        for item in items:
+            payload = redact_sensitive_data(item.to_dict())
+            if isinstance(payload, dict):
+                safe_items.append(payload)
+                continue
+            safe_items.append(item.to_dict())
+        self.store.write_all(safe_items)
 
     def add_many(self, records: list[StepLogRecord]) -> None:
         if not records:

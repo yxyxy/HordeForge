@@ -44,6 +44,7 @@ def _cleanup_workspace_tmp_root() -> None:
     removable_prefixes = (
         "test_runner_isolated_",
         "test_runner_proc_",
+        "patch_apply_workspace_",
         "pip-build-tracker-",
         "pip-ephem-wheel-cache-",
         "pip-install-",

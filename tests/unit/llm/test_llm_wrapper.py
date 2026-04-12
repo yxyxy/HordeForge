@@ -15,7 +15,84 @@ from agents.llm_wrapper import (
     build_code_prompt,
     build_spec_prompt,
     get_llm_wrapper,
+    parse_code_output,
 )
+
+
+def _find_llm_session_records(base_dir) -> list:
+    candidates = [
+        base_dir / "last_logs" / "llm_sessions",
+        base_dir / "logs" / "current" / "llm_sessions",
+    ]
+    records = []
+    for candidate in candidates:
+        records.extend(candidate.rglob("*.json"))
+    return records
+
+
+def test_get_llm_wrapper_wraps_with_session_logger_and_writes_record(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    class _DummyOpenAIWrapper:
+        def __init__(self, **kwargs):
+            self._model = kwargs.get("model", "dummy-model")
+
+        def complete(self, prompt: str, **kwargs) -> str:
+            return "dummy-response"
+
+        def complete_stream(self, prompt: str, **kwargs):
+            yield "dummy-stream"
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setenv("HORDEFORGE_LLM_SESSION_LOGGING", "all")
+    monkeypatch.setenv("HORDEFORGE_STORAGE_DIR", str(tmp_path))
+    monkeypatch.setattr(llm_wrapper_module, "OpenAIWrapper", _DummyOpenAIWrapper)
+
+    wrapper = get_llm_wrapper("openai", api_key="test-key")
+    response = wrapper.complete("hello prompt", temperature=0.0)
+
+    assert response == "dummy-response"
+    records = _find_llm_session_records(tmp_path)
+    assert records
+    payload = json.loads(records[0].read_text(encoding="utf-8"))
+    assert payload["status"] == "success"
+    assert payload["prompt"] == "hello prompt"
+    assert payload["response"] == "dummy-response"
+
+
+def test_get_llm_wrapper_logs_error_record_in_errors_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    class _FailingOpenAIWrapper:
+        def __init__(self, **kwargs):
+            self._model = kwargs.get("model", "dummy-model")
+
+        def complete(self, prompt: str, **kwargs) -> str:
+            raise RuntimeError("boom")
+
+        def complete_stream(self, prompt: str, **kwargs):
+            raise RuntimeError("boom-stream")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setenv("HORDEFORGE_LLM_SESSION_LOGGING", "errors")
+    monkeypatch.setenv("HORDEFORGE_STORAGE_DIR", str(tmp_path))
+    monkeypatch.setattr(llm_wrapper_module, "OpenAIWrapper", _FailingOpenAIWrapper)
+
+    wrapper = get_llm_wrapper("openai", api_key="test-key")
+    with pytest.raises(RuntimeError, match="boom"):
+        wrapper.complete("prompt with failure")
+
+    records = _find_llm_session_records(tmp_path)
+    assert records
+    payload = json.loads(records[0].read_text(encoding="utf-8"))
+    assert payload["status"] == "error"
+    assert "boom" in payload.get("error", "")
 
 
 def test_build_spec_prompt():
@@ -39,6 +116,93 @@ def test_build_code_prompt():
     )
     assert "Test" in prompt
     assert "test1" in prompt
+    assert "Required JSON Schema" in prompt
+    assert "final full content for that touched file only" in prompt
+    assert "FULL file content" not in prompt
+
+
+def test_build_code_prompt_uses_candidate_files_for_existing_code_context():
+    prompt = build_code_prompt(
+        spec={"summary": "Test", "file_changes": []},
+        test_cases=[],
+        repo_context={
+            "language": "python",
+            "candidate_files": ["orchestrator/engine.py"],
+            "existing_files": ["orchestrator/engine.py"],
+            "file_contents": {
+                "orchestrator/engine.py": (
+                    "class OrchestratorEngine:\n"
+                    "    def run(self) -> dict[str, object]:\n"
+                    "        return {}\n"
+                )
+            },
+        },
+    )
+
+    assert "No relevant existing code found." not in prompt
+    assert "=== orchestrator/engine.py ===" in prompt
+    assert "def run(self) -> dict[str, object]" in prompt
+
+
+def test_parse_code_output_rejects_non_list_decisions():
+    payload = (
+        '{"files":[{"path":"src/a.py","change_type":"modify","content":"x"}],'
+        '"decisions":"oops","test_changes":[]}'
+    )
+    with pytest.raises(ValueError, match="decisions"):
+        parse_code_output(payload)
+
+
+def test_parse_code_output_accepts_edit_operations_without_files():
+    payload = json.dumps(
+        {
+            "operations": [
+                {
+                    "type": "edit",
+                    "path": "src/a.py",
+                    "old_string": "old_value = 1\n",
+                    "new_string": "old_value = 2\n",
+                }
+            ],
+            "decisions": [],
+            "test_operations": [],
+        }
+    )
+
+    result = parse_code_output(payload)
+
+    assert result["files"] == []
+    assert len(result["operations"]) == 1
+    assert result["operations"][0]["type"] == "edit"
+
+
+def test_parse_code_output_accepts_patch_text_without_files():
+    payload = json.dumps(
+        {
+            "patch_text": (
+                "*** Begin Patch\n*** Add File: src/a.py\n+print('ok')\n*** End Patch\n"
+            ),
+            "decisions": [],
+        }
+    )
+
+    result = parse_code_output(payload)
+
+    assert result["files"] == []
+    assert result["patch_text"].startswith("*** Begin Patch")
+
+
+def test_build_code_prompt_mentions_operation_based_schema():
+    prompt = build_code_prompt(
+        spec={"summary": "Test"},
+        test_cases=[],
+        repo_context={"language": "python"},
+    )
+
+    assert '"patch_text"' in prompt
+    assert '"operations"' in prompt
+    assert '"type": "edit|write"' in prompt
+    assert "Prefer operations over raw full-file rewrites" in prompt
 
 
 def test_get_llm_wrapper_unknown():
@@ -64,6 +228,7 @@ def test_get_llm_wrapper_returns_none_for_empty():
 
 def test_get_llm_wrapper_uses_profile_store_defaults(monkeypatch):
     """Test factory resolves provider/model/key from local profile store."""
+    monkeypatch.setenv("HORDEFORGE_LLM_SESSION_LOGGING", "off")
     monkeypatch.setattr(llm_wrapper_module, "_load_profile_candidates", lambda _=None: [])
     monkeypatch.setattr(
         llm_wrapper_module,
@@ -83,6 +248,7 @@ def test_get_llm_wrapper_uses_profile_store_defaults(monkeypatch):
 
 
 def test_get_llm_wrapper_uses_profile_fallback_when_multiple_profiles(monkeypatch):
+    monkeypatch.setenv("HORDEFORGE_LLM_SESSION_LOGGING", "off")
     monkeypatch.setattr(
         llm_wrapper_module,
         "_load_profile_candidates",

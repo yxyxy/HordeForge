@@ -17,6 +17,7 @@ from agents.github_client import (
     GitHubClient,
     GitHubNotFoundError,
 )
+from agents.patch_workflow_orchestrator import resolve_code_patch_files
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +228,10 @@ def create_patch_from_code_result(code_result: dict[str, Any]) -> list[FileChang
     files: list[FileChange] = []
 
     raw_files = code_result.get("files", [])
+    if not isinstance(raw_files, list) or not raw_files:
+        materialized_files, _notes = resolve_code_patch_files(code_result)
+        if materialized_files:
+            raw_files = materialized_files
     if not isinstance(raw_files, list):
         return files
 

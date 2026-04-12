@@ -39,3 +39,17 @@ def test_feature_pipeline_memory_writer_uses_fixed_patch_with_code_patch_fallbac
     memory_writer_input = steps_by_name["memory_writer"]["input"]
 
     assert memory_writer_input["code_patch"] == "{{ fixed_code_patch | default(code_patch) }}"
+
+
+def test_feature_pipeline_review_and_merge_are_conditioned_on_green_tests() -> None:
+    pipeline = _load_pipeline()
+    steps_by_name = {step["name"]: step for step in pipeline["steps"]}
+
+    review_condition = steps_by_name["review_agent"].get("condition", "")
+    merge_condition = steps_by_name["pr_merge_agent"].get("condition", "")
+
+    assert "test_results.failed" in review_condition
+    assert "test_results.exit_code" in review_condition
+    assert "review_result.decision" in merge_condition
+    assert "test_results.failed" in merge_condition
+    assert "test_results.exit_code" in merge_condition

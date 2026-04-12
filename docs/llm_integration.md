@@ -139,6 +139,19 @@ from agents.llm_api import LlmRouter
 
 router = LlmRouter()
 
+## Code Generator Prompt Templates
+
+Code generation prompt is template-driven and versioned in repository files:
+
+- `agents/prompts/code_generator/base_prompt.v1.md`
+- `agents/prompts/code_generator/ci_fix_overlay.v1.md`
+
+Implementation notes:
+
+- `build_code_prompt()` loads `base_prompt.v1.md` and injects normalized JSON context blocks.
+- If template loading fails, a built-in fallback template is used.
+- This enables prompt hardening without deep code edits and supports deterministic prompt version control.
+
 # Optimal provider for different tasks
 code_llm = router.route_for_task("code")        # Uses OpenAI/GPT
 analysis_llm = router.route_for_task("analysis") # Uses Anthropic/Claude

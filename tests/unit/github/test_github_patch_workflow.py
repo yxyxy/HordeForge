@@ -118,6 +118,30 @@ class TestCreatePatchFromCodeResult:
         assert len(files) == 1
         assert files[0].path == "ok.py"
 
+    def test_materializes_patch_text_entries(self, tmp_path, monkeypatch):
+        target = tmp_path / "src" / "main.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("print('old')\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        code_result = {
+            "patch_text": (
+                "*** Begin Patch\n"
+                "*** Update File: src/main.py\n"
+                "@@\n"
+                "-print('old')\n"
+                "+print('new')\n"
+                "*** End Patch\n"
+            )
+        }
+
+        files = create_patch_from_code_result(code_result)
+
+        assert len(files) == 1
+        assert files[0].path == "src/main.py"
+        assert files[0].change_type == "modify"
+        assert "print('new')" in files[0].content
+
 
 class TestPatchWorkflowOrchestrator:
     """Tests for PatchWorkflowOrchestrator."""

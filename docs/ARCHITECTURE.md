@@ -24,33 +24,34 @@ HordeForge — автономная pipeline-ориентированная си
 - `scheduler/rate_limiter_middleware.py` — Rate limiter middleware
 
 **Orchestrator Layer:**
-- `orchestrator/engine.py` — Pipeline engine — parallel execution
-- `orchestrator/context.py` — Execution context
+- `orchestrator/engine.py` — Pipeline engine — parallel execution, guardrail hook integration
+- `orchestrator/context.py` — Execution context with concurrency-safe snapshots
 - `orchestrator/state.py` — State machine (PipelineRunState)
 - `orchestrator/retry.py` — Retry policy
 - `orchestrator/override.py` — Human override registry
 - `orchestrator/parallel.py` — DAG dependency graph + lock-aware batch execution
 - `orchestrator/loader.py` — Pipeline YAML loader
-- `orchestrator/executor.py` — Step executor — schema validation
+- `orchestrator/executor.py` — Step executor — schema validation, reason extraction
 - `orchestrator/summary.py` — Run summary builder
 - `orchestrator/validation.py` — Runtime schema validation
-- `orchestrator/pipeline_validator.py` — Pipeline schema validation
-- `orchestrator/hooks.py` — Hooks для pipeline (включая memory hook)
+- `orchestrator/pipeline_validator.py` — Pipeline schema validation with loop-aware phases
+- `orchestrator/hooks.py` — Hooks для pipeline (MemoryHook, ExecutionGuardrailHook)
 - `orchestrator/status.py` — Статусы шагов
 
 **Agent Layer:**
 - `agents/dod_extractor.py` — DoD extraction (deterministic)
-- `agents/specification_writer.py` — Spec generation
+- `agents/specification_writer.py` — Spec generation with LLM JSON repair and CI handoff enrichment
 - `agents/task_decomposer.py` — Task decomposition
 - `agents/bdd_generator.py` — BDD scenario generation
 - `agents/test_generator.py` — Test generation — language awareness
-- `agents/code_generator.py` — Code generation
-- `agents/fix_agent.py` — Fix loop
+- `agents/code_generator.py` — Code generation with quality gates and instruction stacks
+- `agents/fix_agent.py` — Fix loop with strategy rotation
 - `agents/fix_loop.py` — Fix loop orchestration
 - `agents/test_runner.py` / `test_executor.py` — Test execution
 - `agents/review_agent.py` — Code review
-- `agents/pr_merge_agent.py` / `live_merge.py` — PR merge
-- `agents/ci_failure_analyzer.py` — CI failure analysis
+- `agents/pr_merge_agent.py` / `live_merge.py` — PR merge with auto-labeling
+- `agents/ci_failure_analyzer.py` — CI failure analysis with metadata extraction
+- `agents/llm_wrapper.py` — LLM abstraction with session logging decorator
 - `agents/issue_closer.py` — Issue closer
 - `agents/issue_scanner.py` — Issue scanner
 - `agents/llm_wrapper.py` — LLM abstraction (OpenAI, Anthropic, Google GenAI)
@@ -246,10 +247,59 @@ Code generation -> Test execution -> Fix loop -> Review -> PR/Merge
 1. Registry layer интегрирован и используется для валидации контрактов агентов.
 2. Pipeline loader поддерживает `triggers`/`logging`, и schema-валидация применяется ко всем элементам.
 3. YAML placeholder-значения заменяются из registry.
-4. Система поддерживает LLM-fallback стратегии для production-стабильности.
+4. В кодовой базе есть LLM-fallback механизмы (`ProfileFallbackLLMWrapper`, `LlmRouter`), но их использование и поведение должны считаться production-ready только после live verification на staging.
 5. Данные изолированы; Postgres/Redis отделены от gateway.
 6. Внешний tracing backend интегрирован с exporter-компонентами.
-7. Архитектура документирована и готова к масштабированию.
+7. Архитектура документирована; широкая production-готовность пока не подтверждена и определяется `docs/launch_readiness_plan.md`.
+
+## 6.5. Ключевые архитектурные изменения (Апрель 2026)
+
+### Execution Guardrail Hook System
+
+Новая система хуков для pre/post execution валидации:
+
+```python
+class ExecutionGuardrailHook:
+    def before_step(self, *, step_name: str, context: dict) -> None: ...
+    def after_step(self, *, step_name: str, output: dict, context: dict) -> None: ...
+
+class BasicExecutionGuardrailHook(ExecutionGuardrailHook):
+    # Pre: permission validation
+    # Post: output contract validation
+```
+
+**Интеграция**: `OrchestratorEngine` принимает опциональный `execution_guardrail_hook` параметр.
+
+### Concurrency-Safe Snapshots
+
+`ExecutionContext` теперь предоставляет методы:
+- `snapshot_state()` — безопасный снимок state
+- `snapshot_step_results()` — безопасный снимок step_results
+
+Используют retry-логику для tolerance concurrent mutation.
+
+### Patch Quality Gate System
+
+Трехуровневая система валидации патчей в `EnhancedCodeGenerator`:
+1. Unjustified full rewrite detection (>400 lines)
+2. Analysis-only patch blocking
+3. Test-only change prevention
+
+### LLM Session Logging
+
+`SessionLoggingLLMWrapper` — decorator для логирования всех LLM запросов/ответов:
+- Per-request JSON файлы с prompt, response, latency, error
+- Sensitive data redaction
+- Configurable via `HORDEFORGE_LLM_SESSION_LOGGING`
+
+### Loop-Aware Pipeline Validation
+
+`PipelineValidator` теперь моделирует execution phases:
+- Pre-loop steps
+- Loop steps (с учетом peer outputs)
+- Post-loop steps
+
+Declared loop cycles разрешены и пропускаются.
 
 ## 7. Технические особенности
 

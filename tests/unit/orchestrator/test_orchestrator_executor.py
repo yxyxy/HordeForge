@@ -190,7 +190,14 @@ def test_step_executor_logs_json_with_run_id_correlation_and_step(caplog):
 
 def test_coerce_code_patch_preserves_pr_metadata_fields():
     content = {
-        "files": [{"path": "src/a.py", "diff": "# modify\nprint('ok')\n"}],
+        "files": [
+            {
+                "path": "src/a.py",
+                "change_type": "modify",
+                "diff": "# modify\nprint('ok')\n",
+                "content": "print('ok')\n",
+            }
+        ],
         "pr_number": 123,
         "pr_url": "https://github.com/org/repo/pull/123",
         "branch_name": "hordeforge/feature-123",
@@ -211,6 +218,60 @@ def test_coerce_code_patch_preserves_pr_metadata_fields():
     assert normalized["rollback_performed"] is False
     assert normalized["llm_enhanced"] is True
     assert normalized["notes"] == ["n1", "n2"]
+    assert normalized["files"][0]["change_type"] == "modify"
+    assert normalized["files"][0]["content"] == "print('ok')\n"
+
+
+def test_coerce_code_patch_preserves_codex_runtime_fields():
+    content = {
+        "schema_version": "2.0",
+        "files": [
+            {
+                "path": "src/a.py",
+                "change_type": "modify",
+                "content": "print('ok')\n",
+            }
+        ],
+        "patch_text": (
+            "*** Begin Patch\n"
+            "*** Update File: src/a.py\n"
+            "@@\n"
+            "-print('old')\n"
+            "+print('ok')\n"
+            "*** End Patch"
+        ),
+        "operations": [
+            {
+                "type": "edit",
+                "path": "src/a.py",
+                "old_string": "old",
+                "new_string": "ok",
+            }
+        ],
+        "test_operations": [
+            {
+                "type": "write",
+                "path": "tests/test_a.py",
+                "content": "def test_a():\n    assert True\n",
+                "change_type": "create",
+            }
+        ],
+        "test_changes": [
+            {
+                "path": "tests/test_a.py",
+                "change_type": "create",
+                "content": "def test_a():\n    assert True\n",
+            }
+        ],
+    }
+
+    normalized = StepExecutor._coerce_code_patch_content_for_validation(content)
+
+    assert normalized["schema_version"] == "2.0"
+    assert normalized["patch_text"].startswith("*** Begin Patch")
+    assert normalized["operations"][0]["type"] == "edit"
+    assert normalized["test_operations"][0]["type"] == "write"
+    assert normalized["test_changes"][0]["path"] == "tests/test_a.py"
 
 
 def test_step_executor_persists_step_input_hash_and_artifact_ids():
@@ -247,3 +308,87 @@ def test_step_executor_persists_step_input_hash_and_artifact_ids():
     metadata = result["artifacts"][0].get("metadata", {})
     assert isinstance(metadata.get("artifact_id"), str)
     assert metadata.get("step_input_hash") == step_state.input_hash
+
+
+class FakePartialSuccessAgent(BaseAgent):
+    def run(self, _context):
+        return {
+            "status": "PARTIAL_SUCCESS",
+            "artifacts": [],
+            "decisions": [{"reason": "tests_not_passed", "confidence": 0.9}],
+            "logs": ["partial execution"],
+            "next_actions": [],
+        }
+
+
+class FakeBlockedAgent(BaseAgent):
+    def run(self, _context):
+        return {
+            "status": "BLOCKED",
+            "artifacts": [
+                {
+                    "type": "tests",
+                    "content": {
+                        "schema_version": "1.0",
+                        "framework": "pytest",
+                        "result_type": "infra_error",
+                        "failed": 1,
+                        "exit_code": 2,
+                    },
+                }
+            ],
+            "decisions": [{"reason": "infra_error", "confidence": 0.9}],
+            "logs": ["blocked execution"],
+            "next_actions": [],
+        }
+
+
+def test_step_executor_applies_output_mapping_for_blocked_status():
+    registry = AgentRegistry()
+    registry.register(AgentMetadata(name="blocked_agent", agent_class=FakeBlockedAgent))
+
+    context = ExecutionContext(run_id="run-blocked-1", pipeline_name="pipe-blocked-1", inputs={})
+    run_state = PipelineRunState.from_steps(
+        "run-blocked-1", "pipe-blocked-1", [("test_runner", "blocked_agent")]
+    )
+    step = StepDefinition(
+        name="test_runner",
+        agent="blocked_agent",
+        output_mapping="{{test_results}}",
+    )
+
+    executor = StepExecutor(agent_registry=registry)
+    result = executor.execute_step(step, context, run_state)
+
+    assert result["status"] == "BLOCKED"
+    assert run_state.get_step("test_runner").status == StepStatus.BLOCKED
+    assert context.state["test_results"]["schema_version"] == "1.0"
+    assert context.state["test_results"]["framework"] == "pytest"
+
+
+def test_step_executor_logs_partial_success_as_warning_and_includes_reason(caplog):
+    registry = AgentRegistry()
+    registry.register(AgentMetadata(name="partial_agent", agent_class=FakePartialSuccessAgent))
+
+    context = ExecutionContext(run_id="run-partial-1", pipeline_name="pipe-partial-1", inputs={})
+    run_state = PipelineRunState.from_steps(
+        "run-partial-1", "pipe-partial-1", [("partial_step", "partial_agent")]
+    )
+    step = StepDefinition(name="partial_step", agent="partial_agent")
+
+    executor = StepExecutor(agent_registry=registry)
+    with caplog.at_level("WARNING", logger="hordeforge.orchestrator.step_executor"):
+        executor.execute_step(step, context, run_state)
+
+    step_end_payloads = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "hordeforge.orchestrator.step_executor"
+        and '"event": "step_end"' in record.message
+    ]
+
+    assert step_end_payloads
+    payload = step_end_payloads[-1]
+    assert payload["status"] == "PARTIAL_SUCCESS"
+    assert payload["level"] == "WARNING"
+    assert payload["reason"] == "tests_not_passed"

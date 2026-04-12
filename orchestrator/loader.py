@@ -33,6 +33,8 @@ class StepDefinition:
 class LoopDefinition:
     condition: str
     steps: list[str] = field(default_factory=list)
+    no_progress_threshold: int | None = None
+    progress_signature_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -70,45 +72,45 @@ class PipelineLoader:
         self.allow_fallback = allow_fallback
 
     def load(self, pipeline_name_or_path: str) -> PipelineDefinition:
-        # Пробуем сначала загрузить из реестра
+        # РџСЂРѕР±СѓРµРј СЃРЅР°С‡Р°Р»Р° Р·Р°РіСЂСѓР·РёС‚СЊ РёР· СЂРµРµСЃС‚СЂР°
         if self.pipeline_registry is not None:
-            # Если передан registry, пытаемся загрузить из него
-            # Проверяем, что это не полный путь к файлу
+            # Р•СЃР»Рё РїРµСЂРµРґР°РЅ registry, РїС‹С‚Р°РµРјСЃСЏ Р·Р°РіСЂСѓР·РёС‚СЊ РёР· РЅРµРіРѕ
+            # РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ СЌС‚Рѕ РЅРµ РїРѕР»РЅС‹Р№ РїСѓС‚СЊ Рє С„Р°Р№Р»Сѓ
             path = Path(pipeline_name_or_path)
             if not path.suffix == ".yaml" and not path.is_absolute():
-                # Это имя пайплайна, пробуем получить из него
-                # Проверяем, есть ли уже загруженное определение
+                # Р­С‚Рѕ РёРјСЏ РїР°Р№РїР»Р°Р№РЅР°, РїСЂРѕР±СѓРµРј РїРѕР»СѓС‡РёС‚СЊ РёР· РЅРµРіРѕ
+                # РџСЂРѕРІРµСЂСЏРµРј, РµСЃС‚СЊ Р»Рё СѓР¶Рµ Р·Р°РіСЂСѓР¶РµРЅРЅРѕРµ РѕРїСЂРµРґРµР»РµРЅРёРµ
                 if hasattr(
                     self.pipeline_registry, "has_pipeline_definition"
                 ) and self.pipeline_registry.has_pipeline_definition(pipeline_name_or_path):
                     return self.pipeline_registry.get_pipeline_definition(pipeline_name_or_path)
 
-                # Также проверяем наличие в реестре (метаданные)
+                # РўР°РєР¶Рµ РїСЂРѕРІРµСЂСЏРµРј РЅР°Р»РёС‡РёРµ РІ СЂРµРµСЃС‚СЂРµ (РјРµС‚Р°РґР°РЅРЅС‹Рµ)
                 if hasattr(self.pipeline_registry, "exists") and self.pipeline_registry.exists(
                     pipeline_name_or_path
                 ):
-                    # Получаем метаданные и загружаем пайплайн
+                    # РџРѕР»СѓС‡Р°РµРј РјРµС‚Р°РґР°РЅРЅС‹Рµ Рё Р·Р°РіСЂСѓР¶Р°РµРј РїР°Р№РїР»Р°Р№РЅ
                     metadata = self.pipeline_registry.get_metadata(pipeline_name_or_path)
                     if metadata:
-                        # Загружаем из файла, указанного в метаданных
+                        # Р—Р°РіСЂСѓР¶Р°РµРј РёР· С„Р°Р№Р»Р°, СѓРєР°Р·Р°РЅРЅРѕРіРѕ РІ РјРµС‚Р°РґР°РЅРЅС‹С…
                         with open(metadata.path, encoding="utf-8") as handle:
                             payload = yaml.safe_load(handle) or {}
                         pipeline_def = self._parse_pipeline(payload, Path(metadata.path))
 
-                        # Регистрируем загруженное определение в реестре для последующего использования
+                        # Р РµРіРёСЃС‚СЂРёСЂСѓРµРј Р·Р°РіСЂСѓР¶РµРЅРЅРѕРµ РѕРїСЂРµРґРµР»РµРЅРёРµ РІ СЂРµРµСЃС‚СЂРµ РґР»СЏ РїРѕСЃР»РµРґСѓСЋС‰РµРіРѕ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЏ
                         self.pipeline_registry.register_pipeline_definition(
                             pipeline_name_or_path, pipeline_def
                         )
                         return pipeline_def
 
-                # Если не в реестре и fallback запрещен - ошибка
+                # Р•СЃР»Рё РЅРµ РІ СЂРµРµСЃС‚СЂРµ Рё fallback Р·Р°РїСЂРµС‰РµРЅ - РѕС€РёР±РєР°
                 if not self.allow_fallback:
                     raise KeyError(
                         f"Pipeline '{pipeline_name_or_path}' is not registered "
                         "and fallback to file system is disabled"
                     )
 
-        # Fallback на загрузку из файла
+        # Fallback РЅР° Р·Р°РіСЂСѓР·РєСѓ РёР· С„Р°Р№Р»Р°
         path = self._resolve_pipeline_path(pipeline_name_or_path)
         if not path.exists():
             raise FileNotFoundError(f"Pipeline file not found: {path}")
@@ -118,13 +120,13 @@ class PipelineLoader:
 
         pipeline_def = self._parse_pipeline(payload, path)
 
-        # Если у нас есть реестр, регистрируем загруженное определение для последующего использования
+        # Р•СЃР»Рё Сѓ РЅР°СЃ РµСЃС‚СЊ СЂРµРµСЃС‚СЂ, СЂРµРіРёСЃС‚СЂРёСЂСѓРµРј Р·Р°РіСЂСѓР¶РµРЅРЅРѕРµ РѕРїСЂРµРґРµР»РµРЅРёРµ РґР»СЏ РїРѕСЃР»РµРґСѓСЋС‰РµРіРѕ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЏ
         if self.pipeline_registry is not None and hasattr(
             self.pipeline_registry, "register_pipeline_definition"
         ):
-            # Проверяем, что путь не является абсолютным файлом, а представляет имя пайплайна
+            # РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ РїСѓС‚СЊ РЅРµ СЏРІР»СЏРµС‚СЃСЏ Р°Р±СЃРѕР»СЋС‚РЅС‹Рј С„Р°Р№Р»РѕРј, Р° РїСЂРµРґСЃС‚Р°РІР»СЏРµС‚ РёРјСЏ РїР°Р№РїР»Р°Р№РЅР°
             if not Path(pipeline_name_or_path).is_absolute() or path.suffix == ".yaml":
-                # Извлекаем имя пайплайна из пути
+                # РР·РІР»РµРєР°РµРј РёРјСЏ РїР°Р№РїР»Р°Р№РЅР° РёР· РїСѓС‚Рё
                 pipeline_name = path.stem
                 self.pipeline_registry.register_pipeline_definition(pipeline_name, pipeline_def)
 
@@ -171,7 +173,35 @@ class PipelineLoader:
         steps = cls._ensure_list_of_strings(loop.get("steps"), f"{context}.steps")
         if not steps:
             raise ValueError(f"Invalid pipeline format in {context}: loop missing steps[]")
-        return LoopDefinition(condition=condition, steps=steps)
+        no_progress_threshold_raw = loop.get("no_progress_threshold")
+        no_progress_threshold: int | None = None
+        if no_progress_threshold_raw is not None:
+            try:
+                no_progress_threshold = int(no_progress_threshold_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Invalid pipeline format in {context}: no_progress_threshold must be int"
+                ) from exc
+            if no_progress_threshold <= 0:
+                raise ValueError(
+                    f"Invalid pipeline format in {context}: no_progress_threshold must be > 0"
+                )
+
+        signature_path_raw = loop.get("progress_signature_path")
+        progress_signature_path: str | None = None
+        if signature_path_raw is not None:
+            if not isinstance(signature_path_raw, str) or not signature_path_raw.strip():
+                raise ValueError(
+                    f"Invalid pipeline format in {context}: progress_signature_path must be string"
+                )
+            progress_signature_path = signature_path_raw.strip()
+
+        return LoopDefinition(
+            condition=condition,
+            steps=steps,
+            no_progress_threshold=no_progress_threshold,
+            progress_signature_path=progress_signature_path,
+        )
 
     @classmethod
     def _parse_loops_container(cls, raw: Any, context: str) -> list[LoopDefinition]:

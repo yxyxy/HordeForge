@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from typing import Any
 
 from agents.base import BaseAgent
@@ -100,14 +101,14 @@ class IssuePipelineDispatcher(BaseAgent):
         "503",
         "504",
         "429",
+        "invalid json",
+        "jsondecodeerror",
+        "no json found",
     )
     _SPEC_NON_TRANSIENT_MARKERS = (
         "invalid_parameter_error",
         "bad request",
         "missing_or_invalid_spec_output",
-        "no json found",
-        "invalid json",
-        "jsondecodeerror",
         "schema",
         "validation",
         "authentication failed",
@@ -365,6 +366,13 @@ class IssuePipelineDispatcher(BaseAgent):
             status = str(dispatch_result.get("status", "error")).strip().lower()
             run_id = dispatch_result.get("run_id")
             task_id = dispatch_result.get("task_id")
+            if (not isinstance(run_id, str) or not run_id.strip()) and isinstance(task_id, str):
+                resolved_run_id = self._resolve_downstream_run_id(
+                    task_id=task_id,
+                    timeout_seconds=2.0,
+                )
+                if isinstance(resolved_run_id, str) and resolved_run_id.strip():
+                    run_id = resolved_run_id.strip()
 
             if status in {"started", "success", "queued"} or isinstance(run_id, str):
                 self._update_issue_stage_label(
@@ -381,6 +389,7 @@ class IssuePipelineDispatcher(BaseAgent):
                         "run_id": run_id,
                         "task_id": task_id,
                         "status": dispatch_result.get("status"),
+                        "run_id_resolved": isinstance(run_id, str) and bool(run_id.strip()),
                         "idempotency_key": idempotency_key,
                         "planning_comment_posted": plan_bundle.get("comment_posted", False),
                         "moved_to_planning": moved_to_planning,
@@ -739,7 +748,7 @@ class IssuePipelineDispatcher(BaseAgent):
         if ci_mode:
             bdd_specification = self._sanitize_ci_bdd_specification(bdd_specification)
             spec = self._sanitize_ci_specification(spec)
-            tests = self._sanitize_ci_tests(tests)
+            tests = self._sanitize_ci_tests(tests, issue)
 
         comment_posted = self._post_planning_comment(
             repository_full_name=repository_full_name,
@@ -928,18 +937,64 @@ class IssuePipelineDispatcher(BaseAgent):
         return sanitized
 
     @staticmethod
-    def _sanitize_ci_tests(tests: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_ci_repo_path(value: str) -> str:
+        normalized = str(value or "").strip().replace("\\", "/")
+        for prefix in ("/workspace/repo/", "workspace/repo/", "/workspace/", "workspace/", "repo/"):
+            if normalized.startswith(prefix):
+                normalized = normalized[len(prefix) :]
+                break
+        return normalized.strip()
+
+    @classmethod
+    def _extract_grounded_ci_paths(cls, issue: dict[str, Any]) -> set[str]:
+        body = str(issue.get("body") or "").strip()
+        if not body:
+            return set()
+
+        grounded: set[str] = set()
+
+        def add_path(raw: str) -> None:
+            value = cls._normalize_ci_repo_path(str(raw or ""))
+            if not value:
+                return
+            if "::" in value:
+                value = value.split("::", 1)[0].strip()
+            if not value or not value.endswith(".py"):
+                return
+            grounded.add(value)
+
+        section_patterns = (
+            r"### Candidate Files(?P<body>.*?)(?:\n### |\Z)",
+            r"### Test Targets(?P<body>.*?)(?:\n### |\Z)",
+        )
+        for section_pattern in section_patterns:
+            section_match = re.search(section_pattern, body, flags=re.DOTALL | re.IGNORECASE)
+            if not section_match:
+                continue
+            section_body = section_match.group("body")
+            for item in re.findall(r"`([^`]+)`", section_body):
+                add_path(item)
+
+        return grounded
+
+    @classmethod
+    def _sanitize_ci_tests(cls, tests: dict[str, Any], issue: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(tests, dict):
             return {}
 
         sanitized = dict(tests)
         test_cases = sanitized.get("test_cases")
+        grounded_paths = cls._extract_grounded_ci_paths(issue)
         if isinstance(test_cases, list):
             filtered_cases = []
             for item in test_cases:
                 if not isinstance(item, dict):
                     continue
                 description = str(item.get("description") or item.get("name") or "").lower()
+                file_path = cls._normalize_ci_repo_path(str(item.get("file_path") or ""))
+                file_path_for_match = (
+                    file_path.split("::", 1)[0] if "::" in file_path else file_path
+                )
                 if any(
                     token in description
                     for token in (
@@ -951,6 +1006,9 @@ class IssuePipelineDispatcher(BaseAgent):
                     )
                 ):
                     continue
+                if grounded_paths:
+                    if not file_path_for_match or file_path_for_match not in grounded_paths:
+                        continue
                 filtered_cases.append(item)
             sanitized["test_cases"] = filtered_cases
         return sanitized
@@ -1171,3 +1229,24 @@ class IssuePipelineDispatcher(BaseAgent):
                 "error": "invalid_response",
             }
         )
+
+    @staticmethod
+    def _resolve_downstream_run_id(*, task_id: str, timeout_seconds: float = 2.0) -> str | None:
+        deadline = time.time() + max(0.1, float(timeout_seconds))
+        while time.time() <= deadline:
+            try:
+                from scheduler.gateway import TASK_QUEUE
+
+                task = TASK_QUEUE.get(task_id)
+            except Exception:
+                return None
+            if task is None:
+                return None
+            result = task.result if isinstance(task.result, dict) else {}
+            run_id = result.get("run_id")
+            if isinstance(run_id, str) and run_id.strip():
+                return run_id.strip()
+            if str(task.status).upper() in {"FAILED", "SUCCEEDED"}:
+                return None
+            time.sleep(0.2)
+        return None

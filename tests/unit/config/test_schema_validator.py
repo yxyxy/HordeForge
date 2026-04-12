@@ -104,3 +104,85 @@ def test_schema_validator_accepts_code_patch_with_pr_metadata():
     errors = validator.validate_step_output("step_code_patch_with_pr", payload)
 
     assert errors == []
+
+
+def test_schema_validator_accepts_code_patch_with_materialized_file_content():
+    validator = RuntimeSchemaValidator(schema_dir="contracts/schemas", strict_mode=True)
+    payload = _valid_agent_result()
+    payload["artifacts"] = [
+        {
+            "type": "code_patch",
+            "content": {
+                "schema_version": "1.0",
+                "files": [
+                    {
+                        "path": "src/a.py",
+                        "change_type": "modify",
+                        "diff": "# modify\nprint('ok')\n",
+                        "content": "print('ok')\n",
+                    }
+                ],
+            },
+        }
+    ]
+
+    errors = validator.validate_step_output("step_code_patch_with_content", payload)
+
+    assert errors == []
+
+
+def test_schema_validator_accepts_code_patch_with_codex_runtime_fields():
+    validator = RuntimeSchemaValidator(schema_dir="contracts/schemas", strict_mode=True)
+    payload = _valid_agent_result()
+    payload["artifacts"] = [
+        {
+            "type": "code_patch",
+            "content": {
+                "schema_version": "2.0",
+                "files": [
+                    {
+                        "path": "src/a.py",
+                        "change_type": "modify",
+                        "diff": "# modify\nprint('ok')\n",
+                        "content": "print('ok')\n",
+                    }
+                ],
+                "patch_text": (
+                    "*** Begin Patch\n"
+                    "*** Update File: src/a.py\n"
+                    "@@\n"
+                    "-print('old')\n"
+                    "+print('ok')\n"
+                    "*** End Patch"
+                ),
+                "operations": [
+                    {
+                        "type": "edit",
+                        "path": "src/a.py",
+                        "old_string": "old",
+                        "new_string": "ok",
+                    }
+                ],
+                "test_operations": [
+                    {
+                        "type": "write",
+                        "path": "tests/test_a.py",
+                        "content": "def test_a():\n    assert True\n",
+                        "change_type": "create",
+                    }
+                ],
+                "test_changes": [
+                    {
+                        "path": "tests/test_a.py",
+                        "change_type": "create",
+                        "diff": "# create\ndef test_a():\n    assert True\n",
+                        "content": "def test_a():\n    assert True\n",
+                    }
+                ],
+            },
+        }
+    ]
+
+    errors = validator.validate_step_output("step_code_patch_with_runtime_fields", payload)
+
+    assert errors == []

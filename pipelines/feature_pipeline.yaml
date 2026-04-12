@@ -131,8 +131,12 @@ steps:
   - name: review_agent
     agent: review_agent
     description: Review PR automatically, comment issues, approve or request changes
+    depends_on:
+      - test_runner
+    depends_on_explicit: true
+    condition: "{{ (test_results.failed | default(0)) == 0 and (test_results.exit_code | default(1)) == 0 }}"
     input:
-      fixed_code_patch: "{{fixed_code_patch}}"
+      fixed_code_patch: "{{ fixed_code_patch | default(code_patch) }}"
       repository: "{{repository}}"
       memory_context: "{{memory_context}}"
       require_llm: true
@@ -152,10 +156,11 @@ steps:
   - name: pr_merge_agent
     agent: pr_merge_agent
     description: Merge PR only when safety gates pass (review/tests/PR)
+    condition: "{{ (review_result.decision | default(review_result.overall_decision)) == 'approve' and (test_results.failed | default(0)) == 0 and (test_results.exit_code | default(1)) == 0 }}"
     input:
       review_result: "{{review_result}}"
       test_results: "{{test_results}}"
-      code_patch: "{{fixed_code_patch}}"
+      code_patch: "{{ fixed_code_patch | default(code_patch) }}"
       repository: "{{repository}}"
       publish_pr_in_merge_agent: true
       live_merge: false

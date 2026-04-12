@@ -37,8 +37,70 @@ These pipelines were removed to avoid duplicated scanner logic:
 `pr_merge_agent` merges only if all are true:
 
 - review decision is `approve`
-- tests passed
+- tests passed (`failed=0`, `exit_code=0`)
 - PR exists
 
 In dry-run/no-live-merge mode, `merged` remains `false`.
+
+On successful merge:
+- Automatically applies `agent:merged` label to the issue
+- Removes planning labels: `agent:opened`, `agent:planning`, `agent:ready`, `agent:fixed`
+- Posts a service comment with PR link
+
+## CI Fix Pipeline Quality Gates
+
+The `ci_fix_pipeline` includes comprehensive quality validation:
+
+### Patch Quality Gate
+
+Enabled via `enforce_patch_quality_gate: true` in pipeline definition.
+
+**Quality Checks**:
+1. **Unjustified Full Rewrite**: Detects files >400 lines without `full_file_rewrite_approved` in decisions
+2. **Analysis-Only Patch**: Blocks responses with analysis markers but no source code changes
+3. **Test-Only Change**: Prevents modifying only test files when source file candidates exist
+
+**Quality Gate Modes**:
+- `enforce` (default): Blocks execution on quality gate failure
+- `shadow`/`observe`/`monitor`: Records quality metrics without blocking
+
+**Quality Gate Output**:
+```yaml
+quality_gate:
+  passed: true/false
+  reasons: []  # List of failure reasons
+  enforced: true/false
+  mode: "enforce"  # or "shadow"
+  target_files_count: N
+  selected_files_count: M
+```
+
+### Strict Target Files Mode
+
+Enabled via `strict_target_files: true`:
+- Rejects files not in candidate list
+- Allows existing non-candidate files when `allow_new_files=false`
+- Prevents hallucinated file creation
+
+### Fix Agent Strategy Rotation
+
+The `fix_agent` rotates through strategies in the loop:
+1. `status_transition_guard`
+2. `failing_test_alignment`
+3. `minimal_source_correction`
+
+Stops after exhausting all strategies with `max_strategy_classes_exhausted`.
+
+### Execution Guardrails
+
+The orchestrator includes pre/post execution hooks:
+
+**Pre-Execution**:
+- Permission validation via `__step_permissions` and `__granted_permissions`
+- Blocks steps without required permissions
+
+**Post-Execution**:
+- Validates output has required keys: `status`, `artifacts`, `decisions`, `logs`, `next_actions`
+- Ensures `artifacts` is a list
+- Fails step on validation error
 

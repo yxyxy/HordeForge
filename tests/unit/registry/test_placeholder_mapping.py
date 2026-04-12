@@ -22,6 +22,12 @@ def test_extract_placeholders_from_nested_values():
     assert set(placeholders) == {"tests", "code_patch", "feature_spec"}
 
 
+def test_extract_placeholders_from_jinja_expression_with_default_filter():
+    value = "{{ fixed_code_patch | default(final_code_patch) }}"
+    placeholders = extract_placeholders(value)
+    assert placeholders == ["fixed_code_patch", "final_code_patch"]
+
+
 def test_root_key_extracts_first_segment():
     assert root_key("specification.section") == "specification"
     assert root_key("tests") == "tests"

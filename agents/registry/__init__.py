@@ -52,6 +52,7 @@ def register_default_agents(registry: AgentRegistry | None = None) -> AgentRegis
     from agents.issue_pipeline_dispatcher import IssuePipelineDispatcher
     from agents.issue_scanner import IssueScanner
     from agents.memory_agent import MemoryAgent
+    from agents.patch_apply_agent import PatchApplyAgent
     from agents.pipeline_initializer import PipelineInitializer
     from agents.pr_merge_agent import PrMergeAgent
     from agents.rag_initializer import RagInitializer
@@ -76,6 +77,7 @@ def register_default_agents(registry: AgentRegistry | None = None) -> AgentRegis
         "issue_pipeline_dispatcher": IssuePipelineDispatcher,
         "issue_scanner": IssueScanner,
         "memory_agent": MemoryAgent,
+        "patch_apply_agent": PatchApplyAgent,
         "pipeline_initializer": PipelineInitializer,
         "pr_merge_agent": PrMergeAgent,
         "rag_initializer": RagInitializer,

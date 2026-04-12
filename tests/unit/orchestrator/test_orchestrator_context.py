@@ -52,3 +52,39 @@ def test_execution_context_syncs_pipeline_state_from_run_state():
     assert context.pipeline_state.pending_steps == ["step_2"]
     assert context.pipeline_state.failed_steps == []
     assert context.pipeline_state.retry_state["step_1"] == 0
+
+
+class _MutatingDict(dict):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._mutated = False
+
+    def items(self):
+        if self._mutated:
+            return super().items()
+
+        self._mutated = True
+        iterator = super().items()
+
+        def _iterate():
+            first = True
+            for key, value in iterator:
+                if first:
+                    first = False
+                    self["late_key"] = "late_value"
+                yield key, value
+
+        return _iterate()
+
+
+def test_execution_context_snapshot_tolerates_mutating_dict_values():
+    context = ExecutionContext(
+        run_id="run-4",
+        pipeline_name="pipeline-d",
+        inputs={"payload": _MutatingDict({"safe": "ok"})},
+    )
+
+    snapshot = context.snapshot_state()
+
+    assert isinstance(snapshot, dict)
+    assert snapshot["payload"]["safe"] == "ok"

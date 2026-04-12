@@ -320,6 +320,69 @@ def test_dispatcher_reports_planning_failure(monkeypatch):
     assert artifact["failed"][0]["error_details"]["phase"] == "dod"
 
 
+def test_dispatcher_resolves_downstream_run_id_from_queue_task(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_dispatch_pipeline(*, pipeline_name, inputs, source, idempotency_key, async_mode):
+        calls.append({"pipeline_name": pipeline_name, "idempotency_key": idempotency_key})
+        return {"status": "queued", "task_id": "task-ci-2"}
+
+    monkeypatch.setattr(
+        IssuePipelineDispatcher,
+        "_dispatch_pipeline",
+        staticmethod(fake_dispatch_pipeline),
+    )
+    monkeypatch.setattr(
+        IssuePipelineDispatcher,
+        "_build_issue_plan",
+        lambda self, **kwargs: {
+            "status": "ok",
+            "dod": {"acceptance_criteria": ["ac-1"]},
+            "spec": {"summary": "spec"},
+            "subtasks": {"items": [{"id": "S1"}]},
+            "bdd_specification": {"gherkin_feature": "Feature: X"},
+            "tests": {"test_cases": [{"file_path": "tests/test_x.py"}]},
+            "comment_posted": True,
+        },
+    )
+    monkeypatch.setattr(
+        IssuePipelineDispatcher,
+        "_resolve_downstream_run_id",
+        staticmethod(lambda **kwargs: "default:resolved-run-id"),
+    )
+
+    context = {
+        "repository": {"full_name": "acme/hordeforge"},
+        "github_token": "ghs_test",
+        "repo_connector": _step_result(
+            "repository_data",
+            {
+                "issues": [
+                    {
+                        "id": 303,
+                        "number": 303,
+                        "title": "Fix build",
+                        "body": "Pipeline failed",
+                        "labels": [{"name": "agent:opened"}],
+                    }
+                ]
+            },
+        ),
+        "issue_classification": _step_result(
+            "issue_scan",
+            {"classified_issues": [{"id": 303, "number": 303, "title": "Fix build"}]},
+        ),
+    }
+
+    result = IssuePipelineDispatcher().run(context)
+
+    assert result["status"] == "SUCCESS"
+    artifact = result["artifacts"][0]["content"]
+    assert artifact["dispatched_count"] == 1
+    assert artifact["dispatched"][0]["run_id"] == "default:resolved-run-id"
+    assert artifact["dispatched"][0]["run_id_resolved"] is True
+
+
 def test_post_planning_comment_updates_existing_marker_comment(monkeypatch):
     calls: dict[str, list] = {"create": [], "update": []}
 
@@ -1014,6 +1077,73 @@ def test_build_issue_plan_retries_spec_with_relaxed_llm(monkeypatch):
     assert result["spec"]["summary"] == "spec"
 
 
+def test_build_issue_plan_retries_spec_with_relaxed_llm_on_invalid_json(monkeypatch):
+    class _FakeDodExtractor:
+        def run(self, context):
+            return _step_result("dod", {"acceptance_criteria": ["ac-1"]})
+
+    class _FakeSpecificationWriter:
+        calls = 0
+
+        def run(self, context):
+            _FakeSpecificationWriter.calls += 1
+            if bool(context.get("require_llm")):
+                return {
+                    "status": "FAILED",
+                    "artifacts": [
+                        {
+                            "type": "spec",
+                            "content": {
+                                "llm_required": True,
+                                "llm_error": "Invalid JSON in LLM output: Expecting ',' delimiter",
+                            },
+                        }
+                    ],
+                    "logs": [
+                        "LLM strict mode enabled (require_llm=true).",
+                        "LLM error: Invalid JSON in LLM output",
+                    ],
+                }
+            return _step_result("spec", {"summary": "spec"})
+
+    class _FakeTaskDecomposer:
+        def run(self, context):
+            return _step_result("subtasks", {"items": [{"id": "S1"}]})
+
+    class _FakeBDDGenerator:
+        def run(self, context):
+            return _step_result("bdd_specification", {"gherkin_feature": "Feature: X"})
+
+    class _FakeTestGenerator:
+        def run(self, context):
+            return _step_result("tests", {"test_cases": [{"file_path": "tests/test_x.py"}]})
+
+    monkeypatch.setattr("agents.dod_extractor.DodExtractor", _FakeDodExtractor)
+    monkeypatch.setattr("agents.specification_writer.SpecificationWriter", _FakeSpecificationWriter)
+    monkeypatch.setattr("agents.task_decomposer.TaskDecomposer", _FakeTaskDecomposer)
+    monkeypatch.setattr("agents.bdd_generator.BDDGenerator", _FakeBDDGenerator)
+    monkeypatch.setattr("agents.test_generator.TestGenerator", _FakeTestGenerator)
+    monkeypatch.setattr(
+        IssuePipelineDispatcher,
+        "_post_planning_comment",
+        staticmethod(lambda **kwargs: True),
+    )
+
+    result = IssuePipelineDispatcher()._build_issue_plan(  # noqa: SLF001
+        issue={"number": 28, "title": "CI incident"},
+        repository_full_name="acme/hordeforge",
+        token="ghs_test",
+        use_llm=True,
+        require_llm=True,
+        mock_mode=False,
+        rules=None,
+    )
+
+    assert result["status"] == "ok"
+    assert _FakeSpecificationWriter.calls == 2
+    assert result["spec"]["summary"] == "spec"
+
+
 def test_build_issue_plan_does_not_retry_spec_on_non_transient_failure(monkeypatch):
     class _FakeDodExtractor:
         def run(self, context):
@@ -1294,3 +1424,58 @@ def test_build_issue_plan_passes_ci_mode_to_steps(monkeypatch):
     assert "browser" not in result["bdd_specification"]["gherkin_feature"].lower()
     descriptions = [str(x.get("description", "")).lower() for x in result["tests"]["test_cases"]]
     assert all("browser" not in item for item in descriptions)
+
+
+def test_sanitize_ci_tests_keeps_only_grounded_paths_from_issue_handoff():
+    tests_payload = {
+        "test_cases": [
+            {
+                "file_path": "tests/test_test_unit_failed_steps_run_uni.py",
+                "description": "Acceptance criterion coverage: Test Unit failed steps",
+            },
+            {
+                "file_path": "tests/unit/orchestrator/test_orchestrator_engine.py",
+                "description": "Regression for failing CI target",
+            },
+        ]
+    }
+    issue_payload = {
+        "body": """
+        ## Failure Analysis
+
+        ### Candidate Files
+        - `tests/unit/orchestrator/test_orchestrator_engine.py`
+
+        ### Test Targets
+        - `tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests`
+        """
+    }
+
+    sanitized = IssuePipelineDispatcher._sanitize_ci_tests(tests_payload, issue_payload)
+    file_paths = [str(item.get("file_path")) for item in sanitized.get("test_cases", [])]
+
+    assert "tests/unit/orchestrator/test_orchestrator_engine.py" in file_paths
+    assert "tests/test_test_unit_failed_steps_run_uni.py" not in file_paths
+
+
+def test_sanitize_ci_tests_normalizes_workspace_prefixes_in_paths():
+    tests_payload = {
+        "test_cases": [
+            {
+                "file_path": "workspace/repo/tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests",
+                "description": "Regression for failing CI target",
+            }
+        ]
+    }
+    issue_payload = {
+        "body": """
+        ### Candidate Files
+        - `tests/unit/orchestrator/test_orchestrator_engine.py`
+
+        ### Test Targets
+        - workspace/repo/tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests
+        """
+    }
+
+    sanitized = IssuePipelineDispatcher._sanitize_ci_tests(tests_payload, issue_payload)
+    assert len(sanitized.get("test_cases", [])) == 1

@@ -154,18 +154,19 @@ class JsonStorageBackend(StorageBackend):
 
     def _write_raw_to_path(self, target_path: Path, payload: list[dict[str, Any]]) -> None:
         serialized = self._json.dumps(payload, ensure_ascii=False, indent=2)
-        temp_path = target_path.with_suffix(f"{target_path.suffix}.{self._uuid4().hex}.tmp")
-        temp_path.write_text(serialized, encoding="utf-8")
         last_error: OSError | None = None
         for attempt in range(5):
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = target_path.with_suffix(f"{target_path.suffix}.{self._uuid4().hex}.tmp")
             try:
+                temp_path.write_text(serialized, encoding="utf-8")
                 temp_path.replace(target_path)
                 return
-            except PermissionError as exc:
+            except (PermissionError, FileNotFoundError) as exc:
                 last_error = exc
+                if temp_path.exists():
+                    temp_path.unlink(missing_ok=True)
                 self._time.sleep(0.01 * (attempt + 1))
-        if temp_path.exists():
-            temp_path.unlink(missing_ok=True)
         if last_error is not None:
             raise last_error
 

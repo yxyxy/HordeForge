@@ -65,6 +65,13 @@ jobs:
         run: |
           pytest -q tests/unit/pipelines/test_pipeline_catalog_validation.py tests/integration/test_pipeline_catalog_runtime.py
 
+      - name: Enforce patch-loop KPI thresholds
+        run: |
+          python scripts/evaluate_patch_loop.py \
+            --sessions-dir tests/fixtures/patch_loop_sessions \
+            --min-parsed-rate 0.80 \
+            --max-analysis-only-rate 0.05
+
   test-unit:
     name: Test Unit
     runs-on: ubuntu-latest

@@ -35,6 +35,23 @@ budget_system = TokenBudgetSystem(
 
 ## Metrics Categories
 
+### Patch Loop Stabilization Metrics
+
+For `ci_fix_pipeline`, persist per-attempt patch quality signals:
+
+- `quality_gate.passed`
+- `quality_gate.reasons[]`
+- `quality_gate.enforced`
+- `quality_gate.target_files_count`
+- `quality_gate.selected_files_count`
+- `strategy_class` (from `fix_agent`)
+
+Track these aggregate KPIs:
+
+- `patch_quality_gate_pass_rate`
+- `analysis_only_or_placeholder_patch_rate`
+- `loop_escape_rate`
+
 ### Performance Metrics
 
 #### Pipeline Metrics

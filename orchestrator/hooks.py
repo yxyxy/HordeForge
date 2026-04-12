@@ -140,6 +140,69 @@ class MemoryHook:
         )
 
 
+class ExecutionGuardrailHook:
+    """Pre/post execution checks for orchestrator steps."""
+
+    def before_step(self, *, step_name: str, context: dict[str, Any]) -> None:
+        return None
+
+    def after_step(
+        self, *, step_name: str, output: dict[str, Any], context: dict[str, Any]
+    ) -> None:
+        return None
+
+
+class BasicExecutionGuardrailHook(ExecutionGuardrailHook):
+    """Default guardrails for permission and output contract checks."""
+
+    STEP_PERMISSIONS_KEY = "__step_permissions"
+    GRANTED_PERMISSIONS_KEY = "__granted_permissions"
+    REQUIRED_OUTPUT_KEYS: tuple[str, ...] = (
+        "status",
+        "artifacts",
+        "decisions",
+        "logs",
+        "next_actions",
+    )
+
+    def before_step(self, *, step_name: str, context: dict[str, Any]) -> None:
+        permissions_map = context.get(self.STEP_PERMISSIONS_KEY)
+        if not isinstance(permissions_map, dict):
+            return
+        required_raw = permissions_map.get(step_name, [])
+        if isinstance(required_raw, str):
+            required = [required_raw]
+        elif isinstance(required_raw, list):
+            required = [str(item).strip() for item in required_raw if str(item).strip()]
+        else:
+            required = []
+        if not required:
+            return
+
+        granted_raw = context.get(self.GRANTED_PERMISSIONS_KEY, [])
+        if isinstance(granted_raw, str):
+            granted = {granted_raw.strip()} if granted_raw.strip() else set()
+        elif isinstance(granted_raw, list):
+            granted = {str(item).strip() for item in granted_raw if str(item).strip()}
+        else:
+            granted = set()
+
+        missing = sorted(item for item in required if item not in granted)
+        if missing:
+            raise PermissionError(f"missing_permissions_for_step:{step_name}:{','.join(missing)}")
+
+    def after_step(
+        self, *, step_name: str, output: dict[str, Any], context: dict[str, Any]
+    ) -> None:
+        if not isinstance(output, dict):
+            raise ValueError(f"invalid_step_output_type:{step_name}")
+        missing_keys = [key for key in self.REQUIRED_OUTPUT_KEYS if key not in output]
+        if missing_keys:
+            raise ValueError(f"missing_output_keys:{step_name}:{','.join(missing_keys)}")
+        if not isinstance(output.get("artifacts"), list):
+            raise ValueError(f"invalid_output_artifacts_type:{step_name}")
+
+
 _active_memory_hook: MemoryHook | None = None
 
 

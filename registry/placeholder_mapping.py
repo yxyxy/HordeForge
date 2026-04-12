@@ -13,13 +13,36 @@ PLACEHOLDER_CONTRACT_MAP: dict[str, str] = {
     "final_code_patch": "context.code_patch.v1",
 }
 
-_PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
+_TEMPLATE_EXPR_PATTERN = re.compile(r"\{\{\s*(.*?)\s*\}\}")
+_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+_IGNORED_IDENTIFIERS = {
+    "true",
+    "false",
+    "none",
+    "and",
+    "or",
+    "not",
+    "in",
+    "is",
+}
 
 
 def extract_placeholders(value: Any) -> list[str]:
     """Extract placeholders like {{name}} from nested values."""
     if isinstance(value, str):
-        return _PLACEHOLDER_PATTERN.findall(value)
+        refs: list[str] = []
+        for expr_match in _TEMPLATE_EXPR_PATTERN.finditer(value):
+            expr = expr_match.group(1)
+            for identifier_match in _IDENTIFIER_PATTERN.finditer(expr):
+                identifier = identifier_match.group(0)
+                if identifier.lower() in _IGNORED_IDENTIFIERS:
+                    continue
+                remainder = expr[identifier_match.end() :].lstrip()
+                if "." not in identifier and remainder.startswith("("):
+                    # Function/filter call name, not a context placeholder.
+                    continue
+                refs.append(identifier)
+        return refs
     if isinstance(value, dict):
         refs: list[str] = []
         for item in value.values():

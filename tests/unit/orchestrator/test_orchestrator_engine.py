@@ -65,6 +65,30 @@ class AlwaysFailAgent:
         }
 
 
+class BlockedEnvAgent:
+    def run(self, _context):
+        return {
+            "status": "BLOCKED",
+            "artifacts": [
+                {
+                    "type": "test_results",
+                    "content": {
+                        "framework": "pytest",
+                        "exit_code": -1,
+                        "failed": 0,
+                        "passed": 0,
+                        "total": 0,
+                        "result_type": "dependency_error",
+                        "stderr": "missing required secret HORDEFORGE_DATADOG_API_KEY",
+                    },
+                }
+            ],
+            "decisions": [{"reason": "env_doctor_missing_required_secrets", "confidence": 0.99}],
+            "logs": ["env_doctor_blocked=true"],
+            "next_actions": ["provide_env_secrets"],
+        }
+
+
 class RulesAwareAgent:
     def run(self, context):
         rules_payload = context.get("rules")
@@ -272,10 +296,10 @@ def test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests():
     )
 
     assert result["status"] in {"SUCCESS", "PARTIAL_SUCCESS"}
-    # Проверяем, что результаты тестов существуют и имеют ожидаемую структуру
+    # Р СџРЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С, РЎвЂЎРЎвЂљР С• РЎР‚Р ВµР В·РЎС“Р В»РЎРЉРЎвЂљР В°РЎвЂљРЎвЂ№ РЎвЂљР ВµРЎРѓРЎвЂљР С•Р Р† РЎРѓРЎС“РЎвЂ°Р ВµРЎРѓРЎвЂљР Р†РЎС“РЎР‹РЎвЂљ Р С‘ Р С‘Р СР ВµРЎР‹РЎвЂљ Р С•Р В¶Р С‘Р Т‘Р В°Р ВµР СРЎС“РЎР‹ РЎРѓРЎвЂљРЎР‚РЎС“Р С”РЎвЂљРЎС“РЎР‚РЎС“
     test_results = result["steps"]["test_runner"].get("test_results", {})
     assert isinstance(test_results, dict)
-    # Проверяем, что количество неудачных тестов меньше или равно общему количеству
+    # Р СџРЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С, РЎвЂЎРЎвЂљР С• Р С”Р С•Р В»Р С‘РЎвЂЎР ВµРЎРѓРЎвЂљР Р†Р С• Р Р…Р ВµРЎС“Р Т‘Р В°РЎвЂЎР Р…РЎвЂ№РЎвЂ¦ РЎвЂљР ВµРЎРѓРЎвЂљР С•Р Р† Р СР ВµР Р…РЎРЉРЎв‚¬Р Вµ Р С‘Р В»Р С‘ РЎР‚Р В°Р Р†Р Р…Р С• Р С•Р В±РЎвЂ°Р ВµР СРЎС“ Р С”Р С•Р В»Р С‘РЎвЂЎР ВµРЎРѓРЎвЂљР Р†РЎС“
     total = test_results.get("total", 0)
     failed = test_results.get("failed", 0)
     assert 0 <= failed <= total
@@ -339,6 +363,51 @@ steps:
     assert fail_state["attempts"] == 2
     assert "final_step" not in result["steps"]
     assert result["summary"]["total_retries"] == 1
+
+
+def test_engine_does_not_run_test_runner_when_code_generation_is_blocked():
+    pipeline_path = Path("tests/unit/_tmp_quality_gate_block_pipeline.yaml")
+    pipeline_path.write_text(
+        """
+pipeline_name: quality_gate_block_pipeline
+steps:
+  - name: code_generator
+    agent: always_fail_agent
+    on_failure: retry_step
+    retry_limit: 1
+  - name: test_runner
+    agent: success_agent
+    depends_on:
+      - code_generator
+    on_failure: stop_pipeline
+""".strip(),
+        encoding="utf-8",
+    )
+
+    fail_state = {"attempts": 0}
+
+    def _agent_factory(agent_name: str):
+        if agent_name == "always_fail_agent":
+            return AlwaysFailAgent(fail_state)
+        if agent_name == "success_agent":
+            return SuccessAgent()
+        raise RuntimeError(f"unknown agent: {agent_name}")
+
+    engine = OrchestratorEngine(
+        pipelines_dir="pipelines",
+        step_executor=StepExecutor(agent_factory=_agent_factory),
+        retry_policy=RetryPolicy(retry_limit=1, backoff_seconds=0.0),
+    )
+
+    try:
+        result = engine.run(str(pipeline_path), {}, run_id="run-quality-gate-block")
+    finally:
+        if pipeline_path.exists():
+            pipeline_path.unlink()
+
+    assert result["status"] == "BLOCKED"
+    assert fail_state["attempts"] == 2
+    assert "test_runner" not in result["steps"]
 
 
 def test_engine_routes_log_warning_to_skip_and_continues():
@@ -422,6 +491,60 @@ steps:
     assert result["status"] == "BLOCKED"
     assert result["steps"]["blocked_step"]["status"] == "FAILED"
     assert "final_step" not in result["steps"]
+
+
+def test_engine_marks_run_partial_when_pr_merge_is_skipped_by_failed_gates():
+    pipeline_path = Path("tests/unit/_tmp_pr_gate_partial_pipeline.yaml")
+    pipeline_path.write_text(
+        """
+pipeline_name: pr_gate_partial_pipeline
+steps:
+  - name: test_runner
+    agent: blocked_env_agent
+    output: "{{test_results}}"
+    on_failure: continue
+  - name: review_agent
+    agent: success_agent
+    condition: "{{ (test_results.failed | default(0)) == 0 and (test_results.exit_code | default(1)) == 0 }}"
+    on_failure: stop_pipeline
+  - name: pr_merge_agent
+    agent: success_agent
+    depends_on:
+      - review_agent
+    depends_on_explicit: true
+    condition: "{{ (review_result.decision | default(review_result.overall_decision)) == 'approve' and (test_results.failed | default(0)) == 0 and (test_results.exit_code | default(1)) == 0 }}"
+    on_failure: stop_pipeline
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def _agent_factory(agent_name: str):
+        if agent_name == "blocked_env_agent":
+            return BlockedEnvAgent()
+        if agent_name == "success_agent":
+            return SuccessAgent()
+        raise RuntimeError(f"unknown agent: {agent_name}")
+
+    engine = OrchestratorEngine(
+        pipelines_dir="pipelines",
+        step_executor=StepExecutor(agent_factory=_agent_factory),
+    )
+
+    try:
+        result = engine.run(str(pipeline_path), {}, run_id="run-pr-gate-partial")
+    finally:
+        if pipeline_path.exists():
+            pipeline_path.unlink()
+
+    assert result["status"] == "PARTIAL_SUCCESS"
+    assert result["steps"]["test_runner"]["status"] == "BLOCKED"
+    assert result["steps"]["review_agent"]["status"] == "SKIPPED"
+    assert result["steps"]["pr_merge_agent"]["status"] == "SKIPPED"
+    assert result["summary"]["pr_reached"] is False
+    assert result["summary"]["pr_merge_status"] == "SKIPPED"
+    assert result["summary"]["pr_merged"] is False
+    assert result["summary"]["blocked_by"] == "env_missing_secrets"
+    assert "test_runner" in result["summary"]["blocked_steps"]
 
 
 def test_engine_injects_rule_pack_into_execution_context():
@@ -854,3 +977,92 @@ steps:
 
     assert second["status"] == "BLOCKED"
     assert fail_state["attempts"] == 4
+
+
+class RejectPostExecutionGuardrail:
+    def before_step(self, *, step_name: str, context: dict[str, object]) -> None:
+        return None
+
+    def after_step(
+        self,
+        *,
+        step_name: str,
+        output: dict[str, object],
+        context: dict[str, object],
+    ) -> None:
+        raise RuntimeError("forced_post_guardrail_failure")
+
+
+def test_engine_blocks_step_when_pre_execution_permissions_are_missing():
+    pipeline_path = Path("tests/unit/_tmp_pre_guardrail_pipeline.yaml")
+    pipeline_path.write_text(
+        """
+pipeline_name: pre_guardrail_pipeline
+steps:
+  - name: guarded_step
+    agent: success_agent
+    on_failure: stop_pipeline
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def _agent_factory(agent_name: str):
+        if agent_name == "success_agent":
+            return SuccessAgent()
+        raise RuntimeError(f"unknown agent: {agent_name}")
+
+    engine = OrchestratorEngine(
+        pipelines_dir="pipelines",
+        step_executor=StepExecutor(agent_factory=_agent_factory),
+    )
+
+    try:
+        result = engine.run(
+            str(pipeline_path),
+            {
+                "__step_permissions": {"guarded_step": ["pipeline:execute"]},
+                "__granted_permissions": [],
+            },
+            run_id="run-pre-guardrail",
+        )
+    finally:
+        if pipeline_path.exists():
+            pipeline_path.unlink()
+
+    assert result["status"] == "BLOCKED"
+    assert result["steps"]["guarded_step"]["status"] == "BLOCKED"
+
+
+def test_engine_fails_step_when_post_execution_guardrail_rejects_output():
+    pipeline_path = Path("tests/unit/_tmp_post_guardrail_pipeline.yaml")
+    pipeline_path.write_text(
+        """
+pipeline_name: post_guardrail_pipeline
+steps:
+  - name: guarded_step
+    agent: success_agent
+    on_failure: stop_pipeline
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def _agent_factory(agent_name: str):
+        if agent_name == "success_agent":
+            return SuccessAgent()
+        raise RuntimeError(f"unknown agent: {agent_name}")
+
+    engine = OrchestratorEngine(
+        pipelines_dir="pipelines",
+        step_executor=StepExecutor(agent_factory=_agent_factory),
+        execution_guardrail_hook=RejectPostExecutionGuardrail(),
+    )
+
+    try:
+        result = engine.run(str(pipeline_path), {}, run_id="run-post-guardrail")
+    finally:
+        if pipeline_path.exists():
+            pipeline_path.unlink()
+
+    assert result["status"] == "FAILED"
+    assert result["steps"]["guarded_step"]["status"] == "FAILED"
+    assert "post-execution guardrail" in " ".join(result["steps"]["guarded_step"].get("logs", []))

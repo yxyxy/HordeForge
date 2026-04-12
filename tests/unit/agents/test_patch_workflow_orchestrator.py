@@ -6,6 +6,9 @@ from agents.patch_workflow_orchestrator import (
     apply_patch_atomically,
     apply_patch_with_revert,
     detect_partial_patch,
+    materialize_patch_operations,
+    materialize_patch_text,
+    resolve_code_patch_files,
 )
 
 
@@ -124,3 +127,112 @@ class TestCleanupBehavior:
         assert result is True
         assert any(ignore_errors and not has_onerror for _path, ignore_errors, has_onerror in calls)
         assert any(not ignore_errors and has_onerror for _path, ignore_errors, has_onerror in calls)
+
+
+class TestPatchTextMaterialization:
+    def test_materialize_patch_text_add_file(self, tmp_path):
+        patch = "*** Begin Patch\n*** Add File: src/new_file.py\n+print('hello')\n*** End Patch\n"
+
+        files = materialize_patch_text(patch, base_dir=tmp_path)
+
+        assert files == [
+            {
+                "path": "src/new_file.py",
+                "change_type": "create",
+                "content": "print('hello')\n",
+            }
+        ]
+
+    def test_materialize_patch_text_update_file(self, tmp_path):
+        target = tmp_path / "src" / "engine.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            "def run() -> str:\n    return 'old'\n",
+            encoding="utf-8",
+        )
+        patch = (
+            "*** Begin Patch\n"
+            "*** Update File: src/engine.py\n"
+            "@@\n"
+            " def run() -> str:\n"
+            "-    return 'old'\n"
+            "+    return 'new'\n"
+            "*** End Patch\n"
+        )
+
+        files = materialize_patch_text(patch, base_dir=tmp_path)
+
+        assert files == [
+            {
+                "path": "src/engine.py",
+                "change_type": "modify",
+                "content": "def run() -> str:\n    return 'new'\n",
+            }
+        ]
+
+    def test_materialize_patch_text_rejects_invalid_patch(self, tmp_path):
+        patch = "*** Begin Patch\n*** End Patch\n"
+
+        try:
+            materialize_patch_text(patch, base_dir=tmp_path)
+        except ValueError as exc:
+            assert "empty patch" in str(exc).lower()
+        else:
+            raise AssertionError("expected ValueError")
+
+    def test_materialize_patch_operations_edit_file(self, tmp_path):
+        target = tmp_path / "src" / "engine.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("status = 'old'\n", encoding="utf-8")
+
+        files, notes = materialize_patch_operations(
+            [
+                {
+                    "type": "edit",
+                    "path": "src/engine.py",
+                    "old_string": "'old'",
+                    "new_string": "'new'",
+                }
+            ],
+            base_dir=tmp_path,
+        )
+
+        assert notes == []
+        assert files == [
+            {
+                "path": "src/engine.py",
+                "change_type": "modify",
+                "content": "status = 'new'\n",
+            }
+        ]
+
+    def test_resolve_code_patch_files_merges_runtime_fields(self, tmp_path):
+        target = tmp_path / "src" / "engine.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("status = 'old'\n", encoding="utf-8")
+
+        files, notes = resolve_code_patch_files(
+            {
+                "patch_text": (
+                    "*** Begin Patch\n"
+                    "*** Update File: src/engine.py\n"
+                    "@@\n"
+                    "-status = 'old'\n"
+                    "+status = 'patched'\n"
+                    "*** End Patch"
+                ),
+                "test_changes": [
+                    {
+                        "path": "tests/test_engine.py",
+                        "change_type": "create",
+                        "content": "def test_engine() -> None:\n    assert True\n",
+                    }
+                ],
+            },
+            base_dir=tmp_path,
+        )
+
+        assert notes == []
+        assert files[0]["path"] == "src/engine.py"
+        assert files[0]["content"] == "status = 'patched'\n"
+        assert files[1]["path"] == "tests/test_engine.py"

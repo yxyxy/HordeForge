@@ -100,7 +100,15 @@ class PrMergeAgent(BaseAgent):
         pr_url: str | None = None
         publish_error: str | None = None
 
-        if publish_pr_in_merge_agent and not has_pr and github_client is not None:
+        should_publish_pr = (
+            publish_pr_in_merge_agent
+            and not has_pr
+            and github_client is not None
+            and approved
+            and tests_passed
+        )
+
+        if should_publish_pr:
             patch_for_publish = self._resolve_patch_for_publish(context, code_patch)
             if isinstance(patch_for_publish, dict) and patch_for_publish.get("pr_url"):
                 existing_pr_url = patch_for_publish.get("pr_url")
@@ -148,6 +156,13 @@ class PrMergeAgent(BaseAgent):
                 if mergeable:
                     result = github_client.merge_pull_request(int(pr_number), merge_method="squash")
                     merged = bool(result.get("merged", False))
+                    if merged:
+                        self._mark_issue_as_merged(
+                            context=context,
+                            github_client=github_client,
+                            pr_url=pr_url,
+                            pr_number=pr_number if isinstance(pr_number, int) else None,
+                        )
                 else:
                     merge_error = "PR not mergeable (conflicts or checks failing)"
             except Exception as e:  # noqa: BLE001
@@ -463,6 +478,52 @@ class PrMergeAgent(BaseAgent):
             f"PR {pr_ref} created for this issue.\n"
             f"Link: {pr_url}\n\n"
             "Label `agent:fixed` applied automatically."
+        )
+        try:
+            github_client.comment_issue(issue_number, comment=comment)
+        except Exception:
+            return
+
+    def _mark_issue_as_merged(
+        self,
+        *,
+        context: dict[str, Any],
+        github_client: Any,
+        pr_url: str | None = None,
+        pr_number: int | None = None,
+    ) -> None:
+        issue = context.get("issue")
+        if not isinstance(issue, dict):
+            return
+
+        issue_number = issue.get("number")
+        if not isinstance(issue_number, int) or issue_number <= 0:
+            return
+
+        if not hasattr(github_client, "update_issue_labels"):
+            return
+
+        labels_set = set(self._extract_issue_label_names(issue))
+        labels_set.discard("agent:opened")
+        labels_set.discard("agent:planning")
+        labels_set.discard("agent:ready")
+        labels_set.discard("agent:fixed")
+        labels_set.add("agent:merged")
+
+        try:
+            github_client.update_issue_labels(issue_number, labels=sorted(labels_set))
+        except Exception:
+            return
+
+        if not pr_url or not hasattr(github_client, "comment_issue"):
+            return
+
+        pr_ref = f"#{pr_number}" if isinstance(pr_number, int) and pr_number > 0 else pr_url
+        comment = (
+            "## Service update\n\n"
+            f"PR {pr_ref} merged for this issue.\n"
+            f"Link: {pr_url}\n\n"
+            "Label `agent:merged` applied automatically."
         )
         try:
             github_client.comment_issue(issue_number, comment=comment)

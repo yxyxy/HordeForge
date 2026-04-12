@@ -200,6 +200,107 @@ class TestSpecificationWriterAgent:
         assert "spec_fallback_draft" in content
         assert "llm_error" in content
 
+    def test_run_repairs_invalid_llm_json_when_required(self, monkeypatch):
+        class _RepairingWrapper:
+            def __init__(self):
+                self.calls = 0
+
+            def complete(self, prompt: str):
+                self.calls += 1
+                if self.calls == 1:
+                    return '{"summary":"x","requirements":[{"id":"id":"REQ-1","description":"d","test_criteria":"t","priority":"must"}],"technical_notes":[],"file_changes":[]}'
+                return '{"summary":"x","requirements":[{"id":"REQ-1","description":"d","test_criteria":"t","priority":"must"}],"technical_notes":[],"file_changes":[]}'
+
+            def close(self):
+                return None
+
+        wrapper = _RepairingWrapper()
+        monkeypatch.setattr(
+            specification_writer_module,
+            "get_llm_wrapper",
+            lambda *args, **kwargs: wrapper,
+        )
+        monkeypatch.setattr(
+            specification_writer_module,
+            "get_legacy_llm_wrapper",
+            lambda *args, **kwargs: None,
+        )
+
+        result = SpecificationWriter().run(
+            {
+                "use_llm": True,
+                "require_llm": True,
+                "issue": {
+                    "title": "Fix CI incident",
+                    "body": "Test failure in pytest",
+                },
+            }
+        )
+
+        assert result["status"] == "SUCCESS"
+        assert wrapper.calls == 2
+        content = _artifact_content(result, "spec")
+        assert content.get("summary") == "x"
+
+    def test_run_enriches_prompt_context_with_ci_handoff_fields(self, monkeypatch):
+        captured_context = {}
+
+        class _Wrapper:
+            def complete(self, prompt: str):
+                return '{"summary":"ok","requirements":[{"id":"REQ-1","description":"d","test_criteria":"t","priority":"must"}],"technical_notes":[],"file_changes":[]}'
+
+            def close(self):
+                return None
+
+        def _fake_build_spec_prompt(summary, requirements, context, spec_type=None):
+            captured_context.update(context)
+            return "prompt"
+
+        monkeypatch.setattr(
+            specification_writer_module,
+            "build_spec_prompt",
+            _fake_build_spec_prompt,
+        )
+        monkeypatch.setattr(
+            specification_writer_module,
+            "get_llm_wrapper",
+            lambda *args, **kwargs: _Wrapper(),
+        )
+        monkeypatch.setattr(
+            specification_writer_module,
+            "get_legacy_llm_wrapper",
+            lambda *args, **kwargs: None,
+        )
+
+        SpecificationWriter().run(
+            {
+                "use_llm": True,
+                "require_llm": False,
+                "issue": {
+                    "title": "[CI Incident] run failed",
+                    "body": """
+### Candidate Files
+- `tests/unit/orchestrator/test_orchestrator_engine.py`
+
+### Test Targets
+- `tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests`
+
+### Failed Jobs / Details
+1. **Test Unit**: failed steps: Run unit pytest
+   - logs: `excerpt=E   AssertionError: assert 'BLOCKED' in {'PARTIAL_SUCCESS', 'SUCCESS'}`
+""",
+                    "labels": [{"name": "kind:ci-incident"}],
+                },
+            }
+        )
+
+        assert "candidate_files" in captured_context
+        assert "tests/unit/orchestrator/test_orchestrator_engine.py" in str(
+            captured_context["candidate_files"]
+        )
+        assert "test_targets" in captured_context
+        assert "failed_job_excerpt" in captured_context
+
     def test_run_passthrough_existing_spec(self):
         context = {
             "spec": {

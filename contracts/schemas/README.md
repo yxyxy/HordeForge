@@ -13,5 +13,6 @@ This directory contains runtime JSON schemas used by orchestrator validation.
 ## Versioning
 
 - Version is encoded in file name suffix `.v1.schema.json`.
-- Context payloads include required `schema_version: "1.0"`.
+- Context payloads include required `schema_version`.
+- `context.code_patch.v1.schema.json` accepts both legacy `1.0` payloads and `2.0` payloads with `patch_text` / `operations`.
 - Future incompatible changes should be added as new files (`.v2.schema.json`) without rewriting v1.

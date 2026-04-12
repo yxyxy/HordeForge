@@ -132,6 +132,14 @@ def test_classify_failure_text_test_failure_pytest():
     assert classify_failure_text(text) == "test_failure"
 
 
+def test_classify_failure_text_prefers_test_failure_over_infra_noise():
+    text = (
+        "runner error while collecting logs; "
+        "FAILED tests/unit/test_auth.py::test_login - AssertionError: expected 200 got 500"
+    )
+    assert classify_failure_text(text) == "test_failure"
+
+
 def test_classify_failure_text_infrastructure():
     text = "docker error: image pull failed due to connection timeout"
     assert classify_failure_text(text) == "infrastructure"
@@ -515,6 +523,49 @@ def test_agent_run_issue_handoff_extracts_candidates_from_excerpt():
     )
 
 
+def test_agent_run_issue_handoff_extracts_candidates_from_markdown_sections():
+    agent = CiFailureAnalyzer()
+    context = {
+        "issue": {
+            "number": 30,
+            "title": "[CI Incident] yxyxy/HordeForge run#24102822256 failure",
+            "body": """
+            ## CI Incident Handoff
+
+            - ci_run.id: `24102822256`
+            - ci_run.head_branch: `main`
+
+            ### Candidate Files
+            - `tests/unit/orchestrator/test_orchestrator_engine.py`
+
+            ### Test Targets
+            - `tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests`
+
+            ### Failed Jobs / Details
+            1. **Test Unit**: failed steps: Run unit pytest
+               - logs: `excerpt=2026-04-07T20:39:09.9835800Z E   AssertionError: assert 'BLOCKED' in {'PARTIAL_SUCCESS', 'SUCCESS'}`
+            """,
+        }
+    }
+
+    result = agent.run(context)
+    artifact = result["artifacts"][0]["content"]
+
+    assert (
+        "tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests"
+        in artifact["test_targets"]
+    )
+    assert "tests/unit/orchestrator/test_orchestrator_engine.py" in artifact["files"]
+    handoff_sections = artifact.get("handoff_sections", {})
+    assert "tests/unit/orchestrator/test_orchestrator_engine.py" in handoff_sections.get(
+        "candidate_files", []
+    )
+    assert (
+        "tests/unit/orchestrator/test_orchestrator_engine.py::test_engine_feature_pipeline_completes_fix_loop_and_stabilizes_tests"
+        in handoff_sections.get("test_targets", [])
+    )
+
+
 def test_agent_run_prefers_raw_log_when_logs_only_have_assertion_excerpt():
     agent = CiFailureAnalyzer()
     context = {
@@ -587,3 +638,69 @@ def test_agent_run_preserves_backward_compatible_fields():
     assert "dominant_language" in artifact
     assert "job_languages" in artifact
     assert "per_job_analysis" in artifact
+
+
+def test_agent_run_per_job_classification_prefers_test_failure_over_runner_noise():
+    agent = CiFailureAnalyzer()
+    context = {
+        "ci_run": {
+            "status": "failed",
+            "failed_jobs": [
+                {
+                    "name": "Test Unit",
+                    "reason": "runner timeout while collecting logs",
+                    "logs": "FAILED tests/unit/test_auth.py::test_login - AssertionError: expected 200 got 500",
+                }
+            ],
+        }
+    }
+
+    result = agent.run(context)
+
+    assert result["status"] == "SUCCESS"
+    artifact = result["artifacts"][0]["content"]
+    assert artifact["classification"] == "test_failure"
+    assert artifact["per_job_analysis"][0]["classification"] == "test_failure"
+
+
+def test_agent_run_emits_handoff_contract_and_grounded_snippets(tmp_path, monkeypatch):
+    repo_root = tmp_path / "workspace" / "repo"
+    (repo_root / "tests" / "unit" / "orchestrator").mkdir(parents=True, exist_ok=True)
+    (repo_root / "orchestrator").mkdir(parents=True, exist_ok=True)
+    (repo_root / "tests" / "unit" / "orchestrator" / "test_orchestrator_engine.py").write_text(
+        "def test_status() -> None:\n    assert True\n", encoding="utf-8"
+    )
+    (repo_root / "orchestrator" / "engine.py").write_text(
+        "def resolve_status() -> str:\n    return 'BLOCKED'\n", encoding="utf-8"
+    )
+
+    monkeypatch.chdir(tmp_path)
+
+    agent = CiFailureAnalyzer()
+    context = {
+        "ci_run": {
+            "status": "failed",
+            "failed_jobs": [
+                {
+                    "name": "unit-tests",
+                    "reason": "pytest failed",
+                    "logs": (
+                        "Traceback (most recent call last):\n"
+                        '  File "tests/unit/orchestrator/test_orchestrator_engine.py", line 2, in test_status\n'
+                        "AssertionError: assert 'BLOCKED' in {'PARTIAL_SUCCESS', 'SUCCESS'}\n"
+                        "FAILED tests/unit/orchestrator/test_orchestrator_engine.py::test_status\n"
+                    ),
+                }
+            ],
+        }
+    }
+
+    result = agent.run(context)
+
+    assert result["status"] == "SUCCESS"
+    content = result["artifacts"][0]["content"]
+    assert content["classification"] == "test_failure"
+    assert "required_change_scope" in content
+    assert "source_candidates" in content
+    assert "grounded_snippets" in content
+    assert isinstance(content["grounded_snippets"], list)

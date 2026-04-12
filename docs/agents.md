@@ -86,7 +86,7 @@
 
 ### ci_failure_analyzer
 
-- **Описание**: Анализирует ошибки CI
+- **Описание**: Анализирует ошибки CI с расширенным извлечением метаданных
 
 - **Класс**: `agents.ci_failure_analyzer.CiFailureAnalyzer`
 
@@ -99,6 +99,12 @@
 - **Версия**: Не указана
 
 - **Автор**: Не указан
+
+- **Особенности**:
+  - **Markdown Section Extraction**: Извлечение `Candidate Files`, `Test Targets`, `Failed Jobs / Details`
+  - **Metadata-Rich Output**: Возвращает `files_metadata`, `test_targets_metadata`, `handoff_sections`
+  - **Enhanced Classification**: Приоритет `test_failure` над `infrastructure` noise
+  - **ANSI Stripping**: Очистка ANSI escape-последовательностей
 
 
 ### ci_monitor_agent
@@ -120,7 +126,7 @@
 
 ### code_generator
 
-- **Описание**: Генерирует код
+- **Описание**: Генерирует код с контролем качества патчей
 
 - **Класс**: `agents.code_generator.CodeGeneratorAgent`
 
@@ -133,6 +139,14 @@
 - **Версия**: Не указана
 
 - **Автор**: Не указан
+
+- **Особенности**:
+  - **Patch Quality Gate**: Валидация патчей (`passed`, `reasons`, `enforced`, `mode`)
+  - **Проверки**: неоправданные полные переписывания, analysis-only ответы, test-only изменения
+  - **Candidate File Snippets**: Загрузка реальных фрагментов файлов для grounding LLM
+  - **Test-to-Source Inference**: Автоматический вывод исходного кода из путей тестов
+  - **Strict Target Files Mode**: Ограничение изменений файлами-кандидатами
+  - **Instruction Stack**: Версионированный стек инструкций
 
 
 ### dependency_checker_agent
@@ -171,7 +185,7 @@
 
 ### fix_agent
 
-- **Описание**: Исправляет ошибки в коде
+- **Описание**: Исправляет ошибки в коде с ротацией стратегий
 
 - **Класс**: `agents.fix_agent.FixAgent`
 
@@ -184,6 +198,12 @@
 - **Версия**: Не указана
 
 - **Автор**: Не указан
+
+- **Особенности**:
+  - **Ротация стратегий**: Последовательность `status_transition_guard` → `failing_test_alignment` → `minimal_source_correction`
+  - **Plan/Act Gate**: Создает `fix_plan` с валидацией целевых файлов перед генерацией кода
+  - **Блокировка повторений**: Возвращает `FAILED` при повторении стратегии
+  - **Лимит итераций**: После исчерпания стратегий возвращает `max_strategy_classes_exhausted`
 
 
 ### issue_closer
@@ -256,7 +276,7 @@
 
 ### pr_merge_agent
 
-- **Описание**: Объединяет pull request
+- **Описание**: Объединяет pull request с авто-лейблингом
 
 - **Класс**: `agents.pr_merge_agent.PrMergeAgent`
 
@@ -269,6 +289,12 @@
 - **Версия**: Не указана
 
 - **Автор**: Не указан
+
+- **Особенности**:
+  - **Условие создания PR**: Только при `approved AND tests_passed`
+  - **Auto-Labeling**: Применяет `agent:merged`, удаляет planning лейблы
+  - **Service Comment**: Публикует комментарий в issue с ссылкой на PR
+  - **Зависимости**: Не зависит от `memory_writer`
 
 
 ### rag_initializer
@@ -324,7 +350,7 @@
 
 ### specification_writer
 
-- **Описание**: Генерирует техническую спецификацию
+- **Описание**: Генерирует техническую спецификацию с LLM JSON repair
 
 - **Класс**: `agents.specification_writer.SpecificationWriterAgent`
 
@@ -337,6 +363,12 @@
 - **Версия**: Не указана
 
 - **Автор**: Не указан
+
+- **Особенности**:
+  - **LLM JSON Repair**: Повторный вызов LLM для исправления ошибок JSON
+  - **CI Handoff Context Enrichment**: Извлечение `candidate_files`, `test_targets`, `failed_job_excerpt`
+  - **RAG Context Injection**: Добавление `source_ref` из RAG в `requirements`
+  - **Transient Error Handling**: `invalid json`, `jsondecodeerror` классифицируются как транзиентные ошибки
 
 
 ### stub_agent

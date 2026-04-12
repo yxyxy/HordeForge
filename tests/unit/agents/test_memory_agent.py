@@ -117,3 +117,30 @@ class TestMemoryAgentModes:
         artifact = result["artifacts"][0]["content"]
         assert artifact["quality_signals"]["memory_mode"] == "write"
         assert artifact["quality_signals"]["write_persisted"] is False
+
+
+def test_semantic_search_skips_missing_collection_without_warning(monkeypatch, caplog):
+    import agents.memory_agent as memory_agent_module
+
+    class _FakeStore:
+        def embed_text(self, _texts):
+            return [[0.1, 0.2, 0.3]]
+
+        def collection_exists(self, _collection_name):
+            return False
+
+        def search(self, **_kwargs):
+            raise AssertionError("search must not be called when collection is missing")
+
+    monkeypatch.setattr(memory_agent_module, "QdrantStore", object())
+    monkeypatch.setattr(MemoryAgent, "_get_semantic_store", lambda self, mode: _FakeStore())
+
+    with caplog.at_level("WARNING"):
+        matches = MemoryAgent()._semantic_search(
+            query="auth",
+            rag_index={"collection_name": "repo_chunks"},
+            limit=3,
+        )
+
+    assert matches == []
+    assert not any("memory_semantic_search_failed" in record.message for record in caplog.records)

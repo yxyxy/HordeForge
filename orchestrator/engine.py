@@ -15,7 +15,13 @@ from uuid import uuid4
 from logging_utils import redact_mapping
 from orchestrator.context import ExecutionContext
 from orchestrator.executor import StepExecutor
-from orchestrator.hooks import MemoryHook, trigger_memory_hook, trigger_memory_promotion
+from orchestrator.hooks import (
+    BasicExecutionGuardrailHook,
+    ExecutionGuardrailHook,
+    MemoryHook,
+    trigger_memory_hook,
+    trigger_memory_promotion,
+)
 from orchestrator.loader import LoopDefinition, PipelineDefinition, PipelineLoader, StepDefinition
 from orchestrator.override import RUN_OVERRIDE_REGISTRY
 from orchestrator.parallel import build_step_dependency_graph, select_lock_aware_batch
@@ -63,6 +69,7 @@ class OrchestratorEngine:
         contracts_dir: str = "contracts/schemas",
         use_registry_bootstrap: bool = True,
         allow_pipeline_fallback: bool = True,
+        execution_guardrail_hook: ExecutionGuardrailHook | None = None,
     ):
         registry_bundle: dict[str, Any] | None = None
         runtime_registry: RuntimeRegistryAdapter | None = None
@@ -98,6 +105,7 @@ class OrchestratorEngine:
         else:
             self.step_executor = step_executor
         self.retry_policy = retry_policy or RetryPolicy(retry_limit=0, backoff_seconds=0.0)
+        self.execution_guardrail_hook = execution_guardrail_hook or BasicExecutionGuardrailHook()
         self.summary_builder = summary_builder or RunSummaryBuilder()
         self.max_loop_iterations = max_loop_iterations
         self.max_parallel_workers = max(1, int(max_parallel_workers))
@@ -361,7 +369,65 @@ class OrchestratorEngine:
         except Exception:
             retry_attempt = 0
         while True:
+            try:
+                self.execution_guardrail_hook.before_step(
+                    step_name=step.name,
+                    context=context.state,
+                )
+            except Exception as exc:  # noqa: BLE001
+                blocked_output = {
+                    "status": "BLOCKED",
+                    "artifacts": [],
+                    "decisions": [
+                        {
+                            "reason": f"pre_execution_guardrail_failed:{exc}",
+                            "confidence": 1.0,
+                        }
+                    ],
+                    "logs": [f"Step blocked by pre-execution guardrail: {exc}"],
+                    "next_actions": [],
+                }
+                run_state.set_run_status(StepStatus.BLOCKED)
+                run_state.mark_step_status(
+                    step.name,
+                    StepStatus.BLOCKED,
+                    finished_at=self._now_iso(),
+                    error=str(exc),
+                    output=blocked_output,
+                )
+                context.record_step_result(step.name, blocked_output)
+                self._emit_checkpoint(context=context, run_state=run_state)
+                self._log_event(
+                    logging.WARNING,
+                    context.run_id,
+                    "step_blocked_by_pre_execution_guardrail",
+                    step_name=step.name,
+                    error=str(exc),
+                    correlation_id=context.metadata.get("correlation_id"),
+                )
+                return blocked_output, True
+
             output = self.step_executor.execute_step(step, context, run_state)
+            try:
+                self.execution_guardrail_hook.after_step(
+                    step_name=step.name,
+                    output=output,
+                    context=context.state,
+                )
+            except Exception as exc:  # noqa: BLE001
+                output = {
+                    "status": "FAILED",
+                    "artifacts": [],
+                    "decisions": [
+                        {
+                            "reason": f"post_execution_guardrail_failed:{exc}",
+                            "confidence": 1.0,
+                        }
+                    ],
+                    "logs": [f"Step failed post-execution guardrail: {exc}"],
+                    "next_actions": [],
+                }
+
             context.record_step_result(step.name, output)
             if self._is_step_success(output):
                 run_state.advance_index()
@@ -419,6 +485,13 @@ class OrchestratorEngine:
         step_results: dict[str, dict[str, Any]],
     ) -> bool:
         iterations = 0
+        stagnant_iterations = 0
+        previous_signature = None
+        no_progress_threshold = (
+            int(loop.no_progress_threshold) if loop.no_progress_threshold is not None else None
+        )
+        signature_path = loop.progress_signature_path or "test_results.failure_signature"
+
         while self._evaluate_loop_condition(loop.condition, context.state):
             iterations += 1
             if iterations > self.max_loop_iterations:
@@ -477,6 +550,39 @@ class OrchestratorEngine:
                     return True
             if retry_iteration:
                 continue
+
+            if no_progress_threshold is not None and no_progress_threshold > 0:
+                signature_value = self._resolve_path(context.state, signature_path)
+                signature = str(signature_value or "").strip()
+                if signature:
+                    if signature == previous_signature:
+                        stagnant_iterations += 1
+                    else:
+                        stagnant_iterations = 0
+                    previous_signature = signature
+
+                if stagnant_iterations >= no_progress_threshold:
+                    self._log_event(
+                        logging.WARNING,
+                        context.run_id,
+                        "loop_no_progress_detected",
+                        condition=loop.condition,
+                        stagnant_iterations=stagnant_iterations,
+                        signature_path=signature_path,
+                        threshold=no_progress_threshold,
+                        correlation_id=context.metadata.get("correlation_id"),
+                    )
+                    context.state.setdefault("loop_guard", {})
+                    if isinstance(context.state["loop_guard"], dict):
+                        context.state["loop_guard"].update(
+                            {
+                                "no_progress_detected": True,
+                                "stagnant_iterations": stagnant_iterations,
+                                "signature_path": signature_path,
+                                "last_signature": previous_signature,
+                            }
+                        )
+                    break
         return False
 
     def _execute_step_batch(
@@ -576,6 +682,16 @@ class OrchestratorEngine:
     ) -> str:
         if run_state.run_status in {StepStatus.FAILED.value, StepStatus.BLOCKED.value}:
             return run_state.run_status
+        has_pr_merge_step = any(step.name == "pr_merge_agent" for step in run_state.steps)
+        if has_pr_merge_step:
+            pr_merge_output = step_results.get("pr_merge_agent")
+            pr_merge_status = (
+                str(pr_merge_output.get("status") or "").strip().upper()
+                if isinstance(pr_merge_output, dict)
+                else ""
+            )
+            if pr_merge_status not in {"SUCCESS", "PARTIAL_SUCCESS"}:
+                return StepStatus.PARTIAL_SUCCESS.value
         if any(output.get("status") == "PARTIAL_SUCCESS" for output in step_results.values()):
             return "PARTIAL_SUCCESS"
         return StepStatus.SUCCESS.value
@@ -612,17 +728,20 @@ class OrchestratorEngine:
                 "error": step.error,
             }
 
+        step_results_snapshot = context.snapshot_step_results()
+        context_snapshot = context.snapshot_state()
+
         return {
             "run_id": context.run_id,
             "pipeline_name": context.pipeline_name,
             "status": status,
-            "steps": deepcopy(context.step_results),
+            "steps": step_results_snapshot,
             "run_state": run_state.to_dict(),
             "checkpoint": {
                 "step_cursor": run_state.current_step_index,
                 "run_status": run_state.run_status,
-                "context_snapshot": deepcopy(context.state),
-                "step_results_snapshot": deepcopy(context.step_results),
+                "context_snapshot": context_snapshot,
+                "step_results_snapshot": step_results_snapshot,
                 "run_state_snapshot": run_state.to_dict(),
                 "retry_metadata": retry_metadata,
             },
@@ -947,6 +1066,7 @@ class OrchestratorEngine:
             "pipeline_name": pipeline.pipeline_name,
             "status": final_status,
             "steps": step_results,
+            "state": context.snapshot_state(),
             "summary": summary,
             "run_state": run_state.to_dict(),
             "trace": {

@@ -467,6 +467,14 @@ class MemoryAgent(BaseAgent):
             vectors = store.embed_text([query])
             if not vectors:
                 return []
+            if hasattr(store, "collection_exists") and not store.collection_exists(
+                collection or "repo_chunks"
+            ):
+                logger.info(
+                    "memory_semantic_search_skipped_missing_collection collection=%s",
+                    collection,
+                )
+                return []
             results = store.search(
                 collection_name=collection or "repo_chunks",
                 query_vector=vectors[0],

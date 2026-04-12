@@ -19,6 +19,16 @@ The system is in late MVP / pre-production hardening:
 - **Unified Interface**: Consistent API across all providers with streaming support
 - **Token Budget System**: Comprehensive cost tracking and budget enforcement
 - **Context Optimization**: Advanced compression and deduplication for efficient token usage
+- **LLM Session Logging**: Automatic per-request session recording with sensitive data redaction for debugging and audit
+
+### Patch Quality & Safety
+- **Patch Quality Gates**: Automated validation of generated patches to prevent low-quality changes
+  - Detects unjustified full file rewrites (>400 lines without justification)
+  - Blocks analysis-only responses without source code changes
+  - Prevents test-only patches when source files are available
+- **Strict Target Files Mode**: Ensures code changes only affect identified candidate files
+- **Instruction Stack System**: Versioned, layered instruction prompts for deterministic behavior
+- **Execution Guardrails**: Pre/post execution hooks for permission checks and output validation
 
 ### Memory System
 - **Agent Memory**: Store and retrieve historical solutions for knowledge reuse
@@ -37,7 +47,12 @@ The system is in late MVP / pre-production hardening:
 Core layers: agents → orchestrator → scheduler → integrations → storage
 
 - **Agents**: `agents/` - DoD extraction, spec generation, test generation, code generation, fix loop, review, merge
+  - `fix_agent`: Strategy rotation through `status_transition_guard` → `failing_test_alignment` → `minimal_source_correction`
+  - `ci_failure_analyzer`: Enhanced metadata extraction from CI logs and issue handoff markdown
+  - `pr_merge_agent`: Auto-labeling with `agent:merged` and service comment posting
 - **Orchestrator**: `orchestrator/` - Pipeline engine, step lifecycle, retry/timeout/loops, run summary
+  - `ExecutionGuardrailHook`: Pre/post execution validation for permissions and output contracts
+  - Concurrency-safe state snapshots with mutation tolerance
 - **Scheduler**: `scheduler/` - Gateway (FastAPI), cron jobs, manual override, idempotency, rate limiting, tenant isolation
 - **Integrations**: GitHub issues/PR/actions, git branch workflow, scheduler trigger adapters
 - **Storage**: `storage/` - Run state, agent artifacts, decision logs, retry history (JSON + Postgres backends)
@@ -80,6 +95,8 @@ Unified runtime configuration is loaded from environment variables via `RunConfi
 - `HORDEFORGE_CONTEXT_MAX_TOKENS` (default: `4000`)
 - `HORDEFORGE_MEMORY_ENABLED` (default: `true`)
 - `HORDEFORGE_VECTOR_STORE_MODE` (default: `auto`)
+- `HORDEFORGE_LLM_SESSION_LOGGING` (default: `all`, options: `off`, `errors`, `all`) — Controls LLM session file logging
+- `HORDEFORGE_LLM_SESSION_DIR` (default: auto) — Optional explicit directory for LLM session JSON files
 
 ## LLM Configuration
 
@@ -262,9 +279,10 @@ fix_agent (loop) -> review_agent -> memory_writer -> pr_merge_agent
 
 Safety gates in `pr_merge_agent`:
 - review decision must be `approve`
-- tests must pass
+- tests must pass (failed=0, exit_code=0)
 - PR must exist
 - in dry-run/no-live mode `merged=false`
+- auto-labeling: applies `agent:merged` label and removes planning labels on successful merge
 
 ### CI Scanner Pipeline
 CI failure triage and handoff:
@@ -280,6 +298,11 @@ rag_initializer -> memory_retrieval -> ci_failure_analysis -> specification_pass
 subtasks_passthrough -> bdd_passthrough -> code_generator -> test_runner ->
 fix_agent (loop) -> review_agent -> memory_writer -> pr_merge_agent
 ```
+
+**Quality Gates**: 
+- `strict_target_files: true` - restricts changes to identified candidate files
+- `enforce_patch_quality_gate: true` - blocks low-quality patches before test execution
+- Quality gate checks: unjustified rewrites, analysis-only patches, test-only changes
 
 ### Issue Scanner Pipeline
 Scans staged issues (`agent:opened`, `agent:planning`, `agent:ready`, `agent:fixed`) and dispatches implementation:

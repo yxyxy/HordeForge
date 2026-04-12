@@ -19,6 +19,7 @@ from scheduler.gateway import (
     app,
 )
 from scheduler.tenant_registry import TenantRepositoryRegistry
+from storage.models import RunRecord
 
 
 @pytest.fixture(autouse=True)
@@ -312,6 +313,56 @@ def test_run_pipeline_logs_duplicate_suppression(caplog):
     assert first.status_code == 200
     assert second.status_code == 200
     assert any("idempotency_duplicate_suppressed" in record.message for record in caplog.records)
+
+
+def test_persist_step_and_artifact_logs_tolerates_mutating_steps_dict():
+    class _MutatingSteps(dict):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._mutated = False
+
+        def items(self):
+            if self._mutated:
+                return super().items()
+            self._mutated = True
+            iterator = super().items()
+
+            def _iterate():
+                first = True
+                for key, value in iterator:
+                    if first:
+                        first = False
+                        self["late_step"] = {"status": "SUCCESS"}
+                    yield key, value
+
+            return _iterate()
+
+    run = RunRecord(
+        run_id="run-mutating-steps",
+        pipeline_name="ci_fix_pipeline",
+        status="FAILED",
+        source="test",
+        correlation_id="corr-mutating-steps",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        tenant_id="default",
+        result={
+            "steps": _MutatingSteps(
+                {
+                    "code_generator": {
+                        "status": "SUCCESS",
+                        "logs": [],
+                        "artifacts": [],
+                    }
+                }
+            ),
+            "run_state": {"steps": []},
+        },
+    )
+
+    gateway._persist_step_and_artifact_logs(run)
+
+    step_logs = STEP_LOG_REPOSITORY.list_by_run(run.run_id, tenant_id=run.tenant_id)
+    assert len(step_logs) >= 1
 
 
 def test_cron_jobs_endpoint_lists_registered_jobs():

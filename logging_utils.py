@@ -20,6 +20,17 @@ SENSITIVE_VALUE_PATTERNS = (
 )
 
 
+def _snapshot_dict_items(value: dict[Any, Any]) -> list[tuple[Any, Any]]:
+    """Take a best-effort snapshot of dict items even under concurrent mutation."""
+    for _ in range(3):
+        try:
+            return list(value.items())
+        except RuntimeError as exc:
+            if "dictionary changed size during iteration" not in str(exc):
+                raise
+    return []
+
+
 def _is_sensitive_key(key: str | None) -> bool:
     if not key:
         return False
@@ -39,7 +50,7 @@ def redact_sensitive_data(value: Any, key: str | None = None) -> Any:
         return REDACTED
 
     if isinstance(value, dict):
-        return {k: redact_sensitive_data(v, k) for k, v in value.items()}
+        return {k: redact_sensitive_data(v, k) for k, v in _snapshot_dict_items(value)}
     if isinstance(value, list):
         return [redact_sensitive_data(item, key) for item in value]
     if isinstance(value, tuple):

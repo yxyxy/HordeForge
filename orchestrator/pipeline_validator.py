@@ -123,8 +123,15 @@ class PipelineValidator:
 
         # Detect cycles using DFS
         cycles = self._detect_cycles(dependencies)
+        loop_step_sets = [set(loop.steps) for loop in pipeline.loops if loop.steps]
         if cycles:
             for cycle in cycles:
+                cycle_nodes = set(cycle[:-1]) if len(cycle) > 1 else set(cycle)
+                if cycle_nodes and any(
+                    cycle_nodes.issubset(loop_steps) for loop_steps in loop_step_sets
+                ):
+                    # Explicit loop cycles are allowed when declared in pipeline.loops.
+                    continue
                 cycle_str = " -> ".join(cycle)
                 errors.append(f"Cyclic dependency detected: {cycle_str}")
 
@@ -209,28 +216,51 @@ class PipelineValidator:
 
     def _validate_contract_compatibility(self, pipeline: PipelineDefinition) -> list[str]:
         """
-        Validate that step inputs are compatible with previous step outputs.
+        Validate that step inputs are compatible with expected step outputs.
 
-        This checks that any placeholder in input_mapping refers to an output
-        that is produced by a previous step, OR is an external input.
-        External inputs (like repo_url, github_token, issue, etc.) are allowed
-        as they come from the pipeline's input parameters.
+        This check mirrors orchestrator loop execution phases:
+        - pre-loop steps execute in file order
+        - loop steps execute in loop order and may consume outputs from previous loop iterations
+        - post-loop steps execute after loops and may consume loop outputs
         """
         errors: list[str] = []
 
-        # Build output aliases map
-        producer_by_key: dict[str, str] = {}
-
+        step_index = {step.name: index for index, step in enumerate(pipeline.steps)}
+        output_keys_by_step: dict[str, set[str]] = {}
         for step in pipeline.steps:
-            producer_by_key.setdefault(step.name, step.name)
+            aliases: set[str] = {step.name}
             if step.output_mapping is not None:
                 for placeholder in extract_placeholders(step.output_mapping):
                     key = root_key(placeholder)
                     if key:
-                        producer_by_key[key] = step.name
+                        aliases.add(key)
+            output_keys_by_step[step.name] = aliases
 
-        # Known external inputs that don't need to be produced by steps
-        # These are common pipeline inputs that come from external sources
+        loop_step_names = {step_name for loop in pipeline.loops for step_name in loop.steps}
+        loop_anchor_indexes = [
+            step_index[loop.steps[0]]
+            for loop in pipeline.loops
+            if isinstance(loop.steps, list) and loop.steps and loop.steps[0] in step_index
+        ]
+        first_loop_index = min(loop_anchor_indexes) if loop_anchor_indexes else None
+
+        pre_loop_names = {
+            step.name
+            for index, step in enumerate(pipeline.steps)
+            if first_loop_index is None or index < first_loop_index
+        }
+        post_loop_names = {
+            step.name
+            for index, step in enumerate(pipeline.steps)
+            if first_loop_index is not None
+            and index >= first_loop_index
+            and step.name not in loop_step_names
+        }
+        loop_output_keys: set[str] = set()
+        for step_name in loop_step_names:
+            loop_output_keys.update(output_keys_by_step.get(step_name, set()))
+
+        # Known external inputs that don't need to be produced by steps.
         external_inputs = {
             "repo_url",
             "github_token",
@@ -254,12 +284,15 @@ class PipelineValidator:
             "rules",
             "rag_context",
             "dod",
+            "spec",
             "specification",
             "feature_spec",
             "subtasks",
+            "bdd_specification",
             "bdd_scenarios",
             "tests",
             "code_patch",
+            "final_code_patch",
             "test_results",
             "fixed_code_patch",
             "review_result",
@@ -268,44 +301,52 @@ class PipelineValidator:
             "pipeline_status",
         }
 
-        # Check each step's input mappings
+        produced_before_pre_loop: set[str] = set()
+        produced_before_post_loop: set[str] = set()
+
         for step in pipeline.steps:
-            if not step.input_mapping:
-                continue
+            if step.name in pre_loop_names:
+                available_inputs = produced_before_pre_loop
+            elif step.name in loop_step_names:
+                available_inputs = produced_before_pre_loop | loop_output_keys
+            else:
+                available_inputs = (
+                    produced_before_pre_loop | loop_output_keys | produced_before_post_loop
+                )
 
-            for input_name, input_value in step.input_mapping.items():
-                expected_contract = resolve_contract_for_key(root_key(input_name))
-                placeholders = extract_placeholders(input_value)
-                for placeholder in placeholders:
-                    key = root_key(placeholder)
-                    if not key:
-                        continue
+            if step.input_mapping:
+                for input_name, input_value in step.input_mapping.items():
+                    expected_contract = resolve_contract_for_key(root_key(input_name))
+                    placeholders = extract_placeholders(input_value)
+                    for placeholder in placeholders:
+                        key = root_key(placeholder)
+                        if not key:
+                            continue
 
-                    actual_contract = resolve_contract_for_placeholder(placeholder)
-                    if (
-                        expected_contract
-                        and actual_contract
-                        and expected_contract != actual_contract
-                    ):
-                        errors.append(
-                            f"Contract mismatch in step '{step.name}' for input '{input_name}': "
-                            f"expected '{expected_contract}' but placeholder '{key}' provides '{actual_contract}'"
-                        )
+                        actual_contract = resolve_contract_for_placeholder(placeholder)
+                        if (
+                            expected_contract
+                            and actual_contract
+                            and expected_contract != actual_contract
+                        ):
+                            errors.append(
+                                f"Contract mismatch in step '{step.name}' for input '{input_name}': "
+                                f"expected '{expected_contract}' but placeholder '{key}' provides '{actual_contract}'"
+                            )
 
-                    # Skip external inputs - they come from pipeline parameters
-                    if key in external_inputs:
-                        continue
+                        if key in external_inputs:
+                            continue
 
-                    # Check if this key is produced by any step
-                    producer = producer_by_key.get(key)
+                        if key not in available_inputs:
+                            errors.append(
+                                f"Step '{step.name}' expects input '{key}' which is not available "
+                                "at this execution phase"
+                            )
 
-                    if producer is None:
-                        # This is a warning, not an error - the input might be
-                        # produced by a step later in the pipeline or be a typo
-                        # We only warn about this
-                        errors.append(
-                            f"Step '{step.name}' expects input '{key}' which is not produced by any preceding step"
-                        )
+            if step.name in pre_loop_names:
+                produced_before_pre_loop.update(output_keys_by_step[step.name])
+            elif step.name in post_loop_names:
+                produced_before_post_loop.update(output_keys_by_step[step.name])
 
         return errors
 

@@ -56,6 +56,7 @@ steps:
       spec: "{{spec}}"
       dod: "{{dod}}"
       issue: "{{issue}}"
+      ci_failure_context: "{{ci_failure_context}}"
       require_llm: true
     output: "{{spec}}"
     on_failure: continue
@@ -103,27 +104,55 @@ steps:
       repository: "{{repository}}"
       memory_context: "{{memory_context}}"
       ci_failure_context: "{{ci_failure_context}}"
+      open_mode: true
+      strict_target_files: false
+      enforce_patch_quality_gate: true
+      quality_gate_mode: "shadow"
+      enforce_semantic_patch_gate: true
+      enforce_semantic_gate_blocking: true
+      force_plan_after_semantic_failure: true
+      patch_strategy: "patch_first"
+      allow_full_file_rewrite: false
       require_llm: true
       publish_pr_in_code_generator: false
     output:
       code_patch: "{{code_patch}}"
       final_code_patch: "{{final_code_patch}}"
     on_failure: retry_step
-    retry_limit: 2
+    retry_limit: 4
 
-  - name: test_runner
-    agent: test_runner
-    description: Run existing affected tests/checks against the generated patch
+  - name: patch_apply_agent
+    agent: patch_apply_agent
+    description: Materialize candidate patch into isolated workspace before tests
     depends_on:
       - code_generator
     depends_on_explicit: true
     input:
       code_patch: "{{ fixed_code_patch | default(final_code_patch) }}"
+      repository: "{{repository}}"
+      isolate_test_environment: true
+    output: "{{prepared_workspace}}"
+    on_failure: continue
+
+  - name: test_runner
+    agent: test_runner
+    description: Run existing affected tests/checks against the generated patch
+    depends_on:
+      - patch_apply_agent
+    depends_on_explicit: true
+    input:
+      code_patch: "{{ fixed_code_patch | default(final_code_patch) }}"
+      prepared_workspace: "{{prepared_workspace}}"
       tests: "{{tests}}"
       ci_failure_context: "{{ci_failure_context}}"
       memory_context: "{{memory_context}}"
       mock_test_execution: false
       isolate_test_environment: true
+      bootstrap_test_env: true
+      prepare_env_from_example: true
+      enforce_env_doctor: true
+      enforce_strict_test_targets: true
+      auto_test_targeting: true
       require_llm: true
     output: "{{test_results}}"
     on_failure: trigger_fix_loop
@@ -139,9 +168,11 @@ steps:
       code_patch: "{{final_code_patch}}"
       test_results: "{{ test_results }}"
       ci_failure_context: "{{ ci_failure_context }}"
+      open_mode: true
+      strict_target_files: false
       require_llm: true
     output: "{{fixed_code_patch}}"
-    retry_limit: 5
+    retry_limit: 8
     on_failure: create_issue_for_human
 
   - name: review_agent
@@ -150,6 +181,7 @@ steps:
     depends_on:
       - test_runner
     depends_on_explicit: true
+    condition: "{{ (test_results.failed | default(0)) == 0 and (test_results.exit_code | default(1)) == 0 }}"
     input:
       fixed_code_patch: "{{ fixed_code_patch | default(final_code_patch) }}"
       repository: "{{repository}}"
@@ -165,6 +197,7 @@ steps:
     depends_on:
       - review_agent
     depends_on_explicit: true
+    condition: "{{ (review_result.decision | default(review_result.overall_decision)) == 'approve' and (test_results.failed | default(0)) == 0 and (test_results.exit_code | default(0)) == 0 }}"
     input:
       task_description: "{{issue.title}}"
       result: "{{review_result}}"
@@ -179,8 +212,8 @@ steps:
     description: Merge PR only when review is approved and tests/checks passed
     depends_on:
       - review_agent
-      - memory_writer
     depends_on_explicit: true
+    condition: "{{ (review_result.decision | default(review_result.overall_decision)) == 'approve' and (test_results.failed | default(0)) == 0 and (test_results.exit_code | default(1)) == 0 }}"
     input:
       review_result: "{{review_result}}"
       test_results: "{{test_results}}"
@@ -193,8 +226,11 @@ steps:
 
 loops:
   - condition: "{{ (test_results.failed | default(0)) > 0 or (test_results.exit_code | default(0)) != 0 }}"
+    no_progress_threshold: 4
+    progress_signature_path: "test_results.failure_signature"
     steps:
       - fix_agent
+      - patch_apply_agent
       - test_runner
 
 logging:

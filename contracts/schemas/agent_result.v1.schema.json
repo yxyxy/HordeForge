@@ -110,6 +110,12 @@
           "type": "integer",
           "minimum": 0
         },
+        "exit_code": {
+          "type": "integer"
+        },
+        "failure_signature": {
+          "type": "string"
+        },
         "mode": {
           "type": "string"
         }

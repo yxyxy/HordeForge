@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -189,3 +190,18 @@ def test_archive_and_prune_rotated_logs_compresses_and_removes_by_retention():
         assert (archive_dir / "2026-03-20T10-15-33Z__runs.json.gz").exists()
         assert not old_rotated.exists()
         assert not old_archive.exists()
+
+
+def test_json_storage_backend_recreates_missing_parent_directory_before_write():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage_file = Path(tmp_dir) / "logs" / "current" / "runs.json"
+        backend = JsonStorageBackend(storage_file)
+
+        # Simulate runtime cleanup/race that removes current log directory.
+        shutil.rmtree(storage_file.parent, ignore_errors=True)
+
+        backend.write_all([{"run_id": "run-1", "status": "SUCCESS"}])
+
+        assert storage_file.exists()
+        assert backend.read_all() == [{"run_id": "run-1", "status": "SUCCESS"}]
+        backend.close()

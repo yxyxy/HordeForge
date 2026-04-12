@@ -353,3 +353,78 @@ def test_repositories_write_into_logs_current_directory():
         assert (tmp_dir / "logs" / "current" / "artifacts.json").exists()
     finally:
         _cleanup_tmp_dir(tmp_dir)
+
+
+def test_run_repository_redacts_sensitive_inputs_and_result_payloads():
+    tmp_dir = _workspace_tmp_dir()
+    repo = RunRepository(storage_dir=str(tmp_dir))
+    try:
+        repo.create(
+            RunRecord(
+                run_id="r-redact",
+                pipeline_name="feature_pipeline",
+                status="SUCCESS",
+                source="test",
+                correlation_id="c-redact",
+                started_at="2026-04-10T10:00:00+00:00",
+                inputs={"github_token": "github_pat_11ABCDEFGHIJKLMNOPQRST_uvwx"},
+                result={
+                    "status": "SUCCESS",
+                    "steps": {"x": {"logs": ["Authorization: Bearer abc.def.ghi"]}},
+                },
+            )
+        )
+
+        loaded = repo.get("r-redact")
+        assert loaded is not None
+        assert loaded.inputs["github_token"] == "[REDACTED]"
+        assert "Bearer abc.def.ghi" not in loaded.result["steps"]["x"]["logs"][0]
+    finally:
+        _cleanup_tmp_dir(tmp_dir)
+
+
+def test_step_log_and_artifact_repositories_redact_sensitive_values():
+    tmp_dir = _workspace_tmp_dir()
+    step_repo = StepLogRepository(storage_dir=str(tmp_dir))
+    artifact_repo = ArtifactRepository(storage_dir=str(tmp_dir))
+    try:
+        step_repo.replace_for_run(
+            "r-redact",
+            [
+                StepLogRecord(
+                    run_id="r-redact",
+                    step_name="test_runner",
+                    status="BLOCKED",
+                    error="Authorization: Bearer secret.jwt.token",
+                )
+            ],
+        )
+        artifact_repo.replace_for_run(
+            "r-redact",
+            [
+                ArtifactRecord(
+                    run_id="r-redact",
+                    step_name="code_generator",
+                    artifact_type="code_patch",
+                    content={
+                        "notes": [
+                            "token=ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+                            "safe",
+                        ]
+                    },
+                    size_bytes=0,
+                )
+            ],
+        )
+
+        step_logs = step_repo.list_by_run("r-redact")
+        artifacts = artifact_repo.list_by_run("r-redact")
+
+        assert step_logs and step_logs[0].error is not None
+        assert "secret.jwt.token" not in step_logs[0].error
+        assert artifacts
+        note = artifacts[0].content["notes"][0]
+        assert "ghp_1234567890abcdefghijklmnopqrstuvwxyz" not in note
+        assert "[REDACTED]" in note
+    finally:
+        _cleanup_tmp_dir(tmp_dir)

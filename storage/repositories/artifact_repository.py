@@ -4,6 +4,7 @@ import json
 import os
 from collections.abc import Iterable
 
+from logging_utils import redact_sensitive_data
 from storage.backends import StorageBackend, get_current_log_path, get_storage_backend
 from storage.models import ArtifactRecord
 
@@ -53,7 +54,14 @@ class ArtifactRepository:
         return records
 
     def _save(self, items: list[ArtifactRecord]) -> None:
-        self.store.write_all([item.to_dict() for item in items])
+        safe_items: list[dict[str, object]] = []
+        for item in items:
+            payload = redact_sensitive_data(item.to_dict())
+            if isinstance(payload, dict):
+                safe_items.append(payload)
+                continue
+            safe_items.append(item.to_dict())
+        self.store.write_all(safe_items)
 
     def _compute_size(self, content: dict) -> int:
         encoded = json.dumps(content, ensure_ascii=False).encode("utf-8")
@@ -79,13 +87,16 @@ class ArtifactRepository:
         for record in records:
             if not isinstance(record.content, dict):
                 continue
+            redacted_content = redact_sensitive_data(record.content)
+            if not isinstance(redacted_content, dict):
+                continue
             artifact_type = record.artifact_type.strip() or "unknown"
             if (
                 self.allowed_artifact_types is not None
                 and artifact_type not in self.allowed_artifact_types
             ):
                 continue
-            size = self._compute_size(record.content)
+            size = self._compute_size(redacted_content)
             if size > self.max_artifact_bytes:
                 continue
             filtered.append(
@@ -93,7 +104,7 @@ class ArtifactRepository:
                     run_id=normalized_run_id,
                     step_name=record.step_name,
                     artifact_type=artifact_type,
-                    content=record.content,
+                    content=redacted_content,
                     size_bytes=size,
                     tenant_id=normalized_tenant,
                 )

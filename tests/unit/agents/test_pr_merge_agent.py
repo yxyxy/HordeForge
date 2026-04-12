@@ -76,6 +76,10 @@ class TestPrMergeAgentGates:
 
     def test_live_merge_runs_only_when_all_gates_pass(self):
         class FakeGitHubClient:
+            def __init__(self):
+                self.updated_labels = []
+                self.comments = []
+
             def get_mergeable_status(self, pr_number: int) -> dict:
                 return {"mergeable": True, "draft": False}
 
@@ -88,12 +92,22 @@ class TestPrMergeAgentGates:
             def merge_pull_request(self, pr_number: int, merge_method: str = "squash") -> dict:
                 return {"merged": True}
 
+            def update_issue_labels(self, issue_number: int, labels: list[str]):
+                self.updated_labels.append((issue_number, labels))
+                return {"number": issue_number, "labels": labels}
+
+            def comment_issue(self, issue_number: int, comment: str):
+                self.comments.append((issue_number, comment))
+                return {"issue_number": issue_number, "body": comment}
+
+        client = FakeGitHubClient()
         agent = PrMergeAgent()
         result = agent.run(
             {
-                "github_client": FakeGitHubClient(),
+                "github_client": client,
                 "pr_number": 42,
                 "live_merge": True,
+                "issue": {"number": 99, "labels": [{"name": "agent:fixed"}]},
                 "review_agent": {
                     "status": "SUCCESS",
                     "artifacts": [{"type": "review_result", "content": {"decision": "approve"}}],
@@ -102,6 +116,18 @@ class TestPrMergeAgentGates:
                     "status": "SUCCESS",
                     "artifacts": [{"type": "test_results", "content": {"failed": 0}}],
                 },
+                "code_generator": {
+                    "status": "SUCCESS",
+                    "artifacts": [
+                        {
+                            "type": "code_patch",
+                            "content": {
+                                "pr_number": 42,
+                                "pr_url": "https://github.com/acme/hordeforge/pull/42",
+                            },
+                        }
+                    ],
+                },
             }
         )
 
@@ -109,6 +135,9 @@ class TestPrMergeAgentGates:
         assert result["status"] == "SUCCESS"
         assert content["merged"] is True
         assert content["dry_run"] is False
+        assert client.updated_labels
+        assert any("agent:merged" in labels for _, labels in client.updated_labels)
+        assert client.comments
 
     def test_pr_number_falls_back_to_code_generator_patch(self):
         agent = PrMergeAgent()
@@ -244,9 +273,11 @@ class TestPrMergeAgentGates:
         assert content["merged"] is False
         assert content["dry_run"] is True
         assert client.updated_labels
+        assert any("agent:fixed" in labels for _, labels in client.updated_labels)
         assert client.comments
+        assert "created for this issue" in client.comments[0][1]
 
-    def test_creates_pr_even_when_review_not_approved_if_publish_enabled(self, monkeypatch):
+    def test_does_not_create_pr_when_review_not_approved_if_publish_enabled(self, monkeypatch):
         class FakeGitHubClient:
             def __init__(self):
                 self.updated_labels = []
@@ -319,12 +350,14 @@ class TestPrMergeAgentGates:
         )
 
         content = result["artifacts"][0]["content"]
-        assert content["pr_created"] is True
-        assert content["pr_number"] == 88
+        assert content["pr_created"] is False
+        assert content["pr_number"] is None
         assert content["merged"] is False
         assert content["dry_run"] is True
         assert "review_not_approved" in content["reason"]
         assert "tests_not_passed" in content["reason"]
+        assert client.updated_labels == []
+        assert client.comments == []
 
     def test_uses_existing_pr_url_from_patch(self):
         agent = PrMergeAgent()

@@ -42,7 +42,8 @@ tests/_tmp_runtime/
 **/_tmp_*/
 *tmp*/
 
-
 # Development tasks
 # development_tasks/
 # development_tasks/subtasks/
+.research*
+.temp

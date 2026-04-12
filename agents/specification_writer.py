@@ -580,11 +580,78 @@ def _build_quality_signals(spec_content: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _extract_ci_handoff_sections(issue_body: str) -> dict[str, str]:
+    sections: dict[str, str] = {}
+    if not issue_body:
+        return sections
+
+    patterns = {
+        "candidate_files": r"### Candidate Files(?P<body>.*?)(?:\n### |\Z)",
+        "test_targets": r"### Test Targets(?P<body>.*?)(?:\n### |\Z)",
+        "failed_jobs_details": r"### Failed Jobs / Details(?P<body>.*?)(?:\n### |\Z)",
+    }
+    for key, pattern in patterns.items():
+        match = re.search(pattern, issue_body, flags=re.DOTALL | re.IGNORECASE)
+        if not match:
+            continue
+        body = _normalize_text(match.group("body"))
+        if body:
+            sections[key] = body
+    return sections
+
+
+def _extract_inline_values_from_backticks(section_text: str) -> list[str]:
+    values: list[str] = []
+    if not section_text:
+        return values
+    for item in re.findall(r"`([^`]+)`", section_text):
+        text = _normalize_text(item)
+        if text:
+            values.append(text)
+    return _coerce_str_list(values)
+
+
+def _extract_failed_job_excerpt(details_text: str) -> str | None:
+    if not details_text:
+        return None
+    excerpt_match = re.search(r"excerpt=([^\n`]+)", details_text, flags=re.IGNORECASE)
+    if excerpt_match:
+        excerpt = _normalize_text(excerpt_match.group(1))
+        if excerpt:
+            return excerpt
+    condensed = _normalize_text(details_text)
+    return condensed[:500] if condensed else None
+
+
 class SpecificationWriter(BaseAgent):
     """Generates structured specifications with user stories, acceptance criteria, and technical specs."""
 
     name = "specification_writer"
     description = "Generates structured specifications with user stories, acceptance criteria, and technical specs."
+
+    @staticmethod
+    def _repair_spec_output_with_llm(
+        *,
+        llm: Any,
+        raw_response: str,
+    ) -> str | None:
+        raw = _normalize_text(raw_response)
+        if not raw:
+            return None
+        repair_prompt = (
+            "You are a JSON repair function.\n"
+            "Fix syntax errors in the JSON below and return ONLY valid JSON.\n"
+            "Do not add markdown fences or explanations.\n\n"
+            f"{raw}\n"
+        )
+        try:
+            repaired = llm.complete(repair_prompt, temperature=0.0)
+        except TypeError:
+            repaired = llm.complete(repair_prompt)
+        except Exception:  # noqa: BLE001
+            return None
+        repaired_text = _normalize_text(repaired)
+        return repaired_text or None
 
     def _validate_prepared_plan(self, context: dict[str, Any]) -> dict:
         dod = _resolve_context_payload(context, "dod", ["dod_extractor"])
@@ -726,9 +793,12 @@ class SpecificationWriter(BaseAgent):
         llm_error: str | None = None
 
         if use_llm:
+            llm = None
             try:
                 llm = get_llm_wrapper() or get_legacy_llm_wrapper()
                 if llm is not None:
+                    issue_body = resolved["issue_body"]
+                    ci_handoff_sections = _extract_ci_handoff_sections(issue_body)
                     repo_context = {
                         "feature_description": feature_description,
                         "issue_labels": resolved["labels"],
@@ -736,19 +806,53 @@ class SpecificationWriter(BaseAgent):
                         "dod_acceptance_criteria": resolved["acceptance_criteria"],
                         "spec_mode": resolved["spec_mode"],
                     }
+                    candidate_files = _extract_inline_values_from_backticks(
+                        ci_handoff_sections.get("candidate_files", "")
+                    )
+                    test_targets = _extract_inline_values_from_backticks(
+                        ci_handoff_sections.get("test_targets", "")
+                    )
+                    failed_job_excerpt = _extract_failed_job_excerpt(
+                        ci_handoff_sections.get("failed_jobs_details", "")
+                    )
+                    if candidate_files:
+                        repo_context["candidate_files"] = candidate_files
+                    if test_targets:
+                        repo_context["test_targets"] = test_targets
+                    if failed_job_excerpt:
+                        repo_context["failed_job_excerpt"] = failed_job_excerpt
                     try:
                         prompt = build_spec_prompt(feature_description, [], repo_context)
                     except AttributeError:
                         prompt = legacy_build_spec_prompt(feature_description, [], repo_context)
 
                     response = llm.complete(prompt)
-                    llm.close()
                     try:
                         llm_spec = parse_spec_output(response)
                     except AttributeError:
                         llm_spec = legacy_parse_spec_output(response)
+                    except Exception as parse_exc:  # noqa: BLE001
+                        repaired = self._repair_spec_output_with_llm(
+                            llm=llm,
+                            raw_response=response,
+                        )
+                        if repaired:
+                            try:
+                                llm_spec = parse_spec_output(repaired)
+                            except AttributeError:
+                                llm_spec = legacy_parse_spec_output(repaired)
+                            except Exception as repaired_exc:  # noqa: BLE001
+                                llm_error = str(repaired_exc)
+                        else:
+                            llm_error = str(parse_exc)
             except Exception as exc:  # pragma: no cover - defensive compatibility path
                 llm_error = str(exc)
+            finally:
+                if llm is not None:
+                    try:
+                        llm.close()
+                    except Exception:  # noqa: BLE001
+                        pass
 
         if use_llm and require_llm and not llm_spec:
             fallback_draft = self._build_deterministic_spec(context, resolved, llm_error)
@@ -798,6 +902,23 @@ class SpecificationWriter(BaseAgent):
             if rules_version:
                 result_content.setdefault("notes", [])
                 result_content["notes"].append(f"rules_version={rules_version}")
+
+        rag_context = _resolve_context_payload(
+            context, "rag_context", ["rag_retriever", "memory_agent"]
+        )
+        if isinstance(rag_context, dict):
+            rag_items = rag_context.get("items", [])
+            if isinstance(rag_items, list) and rag_items:
+                rag_sources = [
+                    _normalize_text(item.get("source_ref"))
+                    for item in rag_items
+                    if isinstance(item, dict) and _normalize_text(item.get("source_ref"))
+                ]
+                if rag_sources:
+                    result_content.setdefault("requirements", [])
+                    result_content["requirements"].extend(rag_sources)
+                result_content.setdefault("notes", [])
+                result_content["notes"].append(f"rag_items_used={len(rag_items)}")
 
         result_content["quality_signals"] = _build_quality_signals(result_content)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any
@@ -23,6 +24,32 @@ class ExecutionContext:
     pipeline_state: PipelineState | None = None
 
     _lock: RLock = field(default_factory=RLock, init=False, repr=False, compare=False)
+
+    @staticmethod
+    def _snapshot_mapping_items(value: dict[Any, Any]) -> list[tuple[Any, Any]]:
+        for _ in range(3):
+            try:
+                return list(value.items())
+            except RuntimeError as exc:
+                if "dictionary changed size during iteration" not in str(exc):
+                    raise
+        return []
+
+    @classmethod
+    def _safe_deepcopy(cls, value: Any) -> Any:
+        for _ in range(3):
+            try:
+                return deepcopy(value)
+            except RuntimeError as exc:
+                if "dictionary changed size during iteration" not in str(exc):
+                    raise
+        if isinstance(value, dict):
+            return {k: cls._safe_deepcopy(v) for k, v in cls._snapshot_mapping_items(value)}
+        if isinstance(value, list):
+            return [cls._safe_deepcopy(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(cls._safe_deepcopy(item) for item in value)
+        return value
 
     def __post_init__(self) -> None:
         if not self.state:
@@ -113,3 +140,13 @@ class ExecutionContext:
                 "step_results": dict(self.step_results),
                 "pipeline_state": self.pipeline_state.model_dump(mode="json"),
             }
+
+    def snapshot_state(self) -> dict[str, Any]:
+        with self._lock:
+            snapshot = self._safe_deepcopy(self.state)
+        return snapshot if isinstance(snapshot, dict) else {}
+
+    def snapshot_step_results(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            snapshot = self._safe_deepcopy(self.step_results)
+        return snapshot if isinstance(snapshot, dict) else {}

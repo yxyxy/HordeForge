@@ -16,6 +16,27 @@ The project follows a test pyramid approach with emphasis on different types of 
 
 ### Test Categories
 
+### Patch-Loop Stabilization QA
+
+For `ci_fix_pipeline`, add dedicated regression coverage:
+
+- Replay historical looping incidents from `.hordeforge_data/last_logs/current/llm_sessions/`
+- Assert `code_generator` quality gate behavior (`passed/reasons`)
+- Assert `fix_agent` plan/act fields (`fix_plan`, `strategy_class`)
+- Assert strict target-file behavior in pipeline definition
+
+Minimum acceptance targets:
+
+- `patch_quality_gate_pass_rate >= 90%`
+- `analysis_only_or_placeholder_patch_rate <= 5%`
+- `loop_escape_rate >= 80%`
+
+Quick evaluation command:
+
+```bash
+python scripts/evaluate_patch_loop.py --sessions-dir .hordeforge_data/last_logs/current/llm_sessions
+```
+
 #### Unit Tests
 - Test individual agent methods
 - Test utility functions

@@ -9,7 +9,10 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import anthropic
 import google.genai as genai
@@ -33,12 +36,73 @@ from agents.qwen_dashscope import (
 from agents.qwen_dashscope import (
     to_dashscope_content_parts as to_qwen_dashscope_content_parts,
 )
+from logging_utils import redact_sensitive_data
 
 logger = logging.getLogger(__name__)
 
 # Default timeout for API calls (seconds)
 DEFAULT_TIMEOUT = 60
 DEFAULT_MAX_RETRIES = 3
+_LLM_SESSION_LOGGING_ENV = "HORDEFORGE_LLM_SESSION_LOGGING"
+
+
+def _llm_session_logging_mode() -> str:
+    mode = str(os.getenv(_LLM_SESSION_LOGGING_ENV, "all") or "all").strip().lower()
+    if mode not in {"off", "errors", "all"}:
+        return "all"
+    return mode
+
+
+def _coerce_jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _coerce_jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_coerce_jsonable(item) for item in value]
+    if isinstance(value, tuple):
+        return [_coerce_jsonable(item) for item in value]
+    return repr(value)
+
+
+def _sanitize_for_session_log(value: Any) -> Any:
+    return _coerce_jsonable(redact_sensitive_data(value))
+
+
+def _resolve_llm_sessions_dir() -> Path:
+    override_dir = str(os.getenv("HORDEFORGE_LLM_SESSION_DIR", "") or "").strip()
+    if override_dir:
+        target = Path(override_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    storage_dir = Path(os.getenv("HORDEFORGE_STORAGE_DIR", ".hordeforge_data"))
+    last_logs_dir = storage_dir / "last_logs"
+    if last_logs_dir.exists():
+        target = last_logs_dir / "llm_sessions"
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    target = storage_dir / "logs" / "current" / "llm_sessions"
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _write_llm_session_record(payload: dict[str, Any]) -> None:
+    try:
+        sessions_dir = _resolve_llm_sessions_dir()
+        now = datetime.now(timezone.utc)
+        timestamp = now.strftime("%Y%m%dT%H%M%S%fZ")
+        file_name = f"{timestamp}_{uuid4().hex}.json"
+        target_path = sessions_dir / file_name
+        temp_path = target_path.with_suffix(".tmp")
+        temp_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temp_path.replace(target_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("llm_session_write_failed error=%s", str(exc)[:300])
 
 
 @dataclass
@@ -274,6 +338,115 @@ class LLMWrapper(ABC):
         return retry_config(func)(*args, **kwargs)
 
 
+class SessionLoggingLLMWrapper(LLMWrapper):
+    """Decorator that logs each LLM request/response into a dedicated session file."""
+
+    def __init__(self, delegate: LLMWrapper, provider_name: str | None = None):
+        model = str(getattr(delegate, "_model", "") or "unknown")
+        super().__init__(api_key="", model=model, timeout=DEFAULT_TIMEOUT, max_retries=1)
+        self._delegate = delegate
+        self._provider_name = provider_name or delegate.__class__.__name__
+
+    def _get_api_key_from_env(self) -> str:
+        return ""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def _build_record(
+        self,
+        *,
+        prompt: str,
+        kwargs: dict[str, Any],
+        started_at: datetime,
+        latency_ms: int,
+        status: str,
+        response: str | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "timestamp": started_at.isoformat(),
+            "provider": self._provider_name,
+            "model": str(getattr(self._delegate, "_model", "") or "unknown"),
+            "status": status,
+            "latency_ms": latency_ms,
+            "prompt": _sanitize_for_session_log(prompt),
+            "request_kwargs": _sanitize_for_session_log(kwargs),
+            "response": _sanitize_for_session_log(response) if response is not None else None,
+            "error": _sanitize_for_session_log(error) if error is not None else None,
+        }
+
+    def complete(self, prompt: str, **kwargs) -> str:
+        started_at = datetime.now(timezone.utc)
+        start = time.perf_counter()
+        mode = _llm_session_logging_mode()
+        try:
+            response = self._delegate.complete(prompt, **kwargs)
+            if mode == "all":
+                _write_llm_session_record(
+                    self._build_record(
+                        prompt=prompt,
+                        kwargs=kwargs,
+                        started_at=started_at,
+                        latency_ms=int((time.perf_counter() - start) * 1000),
+                        status="success",
+                        response=response,
+                    )
+                )
+            return response
+        except Exception as exc:  # noqa: BLE001
+            if mode in {"all", "errors"}:
+                _write_llm_session_record(
+                    self._build_record(
+                        prompt=prompt,
+                        kwargs=kwargs,
+                        started_at=started_at,
+                        latency_ms=int((time.perf_counter() - start) * 1000),
+                        status="error",
+                        error=str(exc),
+                    )
+                )
+            raise
+
+    def complete_stream(self, prompt: str, **kwargs) -> Generator[str, None, None]:
+        started_at = datetime.now(timezone.utc)
+        start = time.perf_counter()
+        mode = _llm_session_logging_mode()
+        chunks: list[str] = []
+        try:
+            for chunk in self._delegate.complete_stream(prompt, **kwargs):
+                chunks.append(chunk)
+                yield chunk
+            if mode == "all":
+                _write_llm_session_record(
+                    self._build_record(
+                        prompt=prompt,
+                        kwargs=kwargs,
+                        started_at=started_at,
+                        latency_ms=int((time.perf_counter() - start) * 1000),
+                        status="success",
+                        response="".join(chunks),
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001
+            if mode in {"all", "errors"}:
+                _write_llm_session_record(
+                    self._build_record(
+                        prompt=prompt,
+                        kwargs=kwargs,
+                        started_at=started_at,
+                        latency_ms=int((time.perf_counter() - start) * 1000),
+                        status="error",
+                        response="".join(chunks) if chunks else None,
+                        error=str(exc),
+                    )
+                )
+            raise
+
+    def close(self) -> None:
+        self._delegate.close()
+
+
 class OpenAIWrapper(LLMWrapper, ApiHandler):
     """OpenAI API wrapper with streaming support and Cline compatibility."""
 
@@ -437,6 +610,62 @@ class OpenAIWrapper(LLMWrapper, ApiHandler):
         """Get stream usage information."""
         # This would be populated during streaming
         return None
+
+    def complete_with_tools(
+        self,
+        *,
+        prompt: str,
+        tools: list[dict[str, Any]],
+        tool_choice: str = "required",
+        **kwargs,
+    ) -> dict[str, Any]:
+        """Function calling completion: returns tool_call arguments dict.
+
+        Use this when you want the model to invoke a tool and return the parsed
+        arguments directly, avoiding text-completion JSON parsing.
+
+        Returns:
+            dict with keys: {"name": str, "arguments": dict}
+        """
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("OpenAI client not available. Check API key.")
+
+        model = kwargs.get("model", self._model)
+        max_tokens = kwargs.get("max_tokens", 8000)
+        temperature = kwargs.get("temperature", 0.0)
+
+        response = self._apply_retry(
+            client.chat.completions.create,
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+
+        if not response.choices:
+            raise RuntimeError("Empty response from OpenAI API (complete_with_tools)")
+
+        message = response.choices[0].message
+        if not message.tool_calls:
+            raise RuntimeError("No tool_calls returned from OpenAI API (complete_with_tools)")
+
+        tool_call = message.tool_calls[0]
+
+        try:
+            arguments = json.loads(tool_call.function.arguments)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"Failed to parse tool_call arguments: {e}. Raw: {tool_call.function.arguments[:200]}"
+            ) from e
+
+        return {
+            "name": tool_call.function.name,
+            "arguments": arguments,
+            "call_id": tool_call.id,
+        }
 
     def abort(self) -> None:
         """Abort current request."""
@@ -1087,6 +1316,129 @@ class QwenCodeWrapper(LLMWrapper):
 
         raise RuntimeError(f"Qwen Code API call failed: {last_exc}") from last_exc
 
+    def complete_with_tools(
+        self,
+        *,
+        prompt: str,
+        tools: list[dict[str, Any]],
+        tool_choice: str = "required",
+        **kwargs,
+    ) -> dict[str, Any]:
+        """Function calling completion: returns tool_call arguments dict.
+
+        Use this when you want the model to invoke a tool and return the parsed
+        arguments directly, avoiding text-completion JSON parsing.
+
+        Returns:
+            dict with keys: {"name": str, "arguments": dict}
+        """
+        self._raise_if_auth_cooldown()
+        client = self._client()
+        model = kwargs.get("model", self._model)
+        max_tokens = kwargs.get("max_tokens", 8000)
+        temperature = kwargs.get("temperature", 0.0)
+        attempts = max(1, int(kwargs.get("max_retries", self._max_retries)))
+        last_exc: Exception | None = None
+
+        for attempt in range(1, attempts + 1):
+            try:
+                openai_messages = build_qwen_chat_messages(user_prompt=prompt, system_prompt="")
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=openai_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                )
+
+                if not response.choices:
+                    raise RuntimeError("Empty response from Qwen Code API (complete_with_tools)")
+
+                message = response.choices[0].message
+                if not message.tool_calls:
+                    raise RuntimeError(
+                        "No tool_calls returned from Qwen Code API (complete_with_tools)"
+                    )
+
+                tool_call = message.tool_calls[0]
+                try:
+                    arguments = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError as e:
+                    raise RuntimeError(
+                        f"Failed to parse tool_call arguments: {e}. Raw: {tool_call.function.arguments[:200]}"
+                    ) from e
+
+                return {
+                    "name": tool_call.function.name,
+                    "arguments": arguments,
+                    "call_id": tool_call.id,
+                }
+
+            except Exception as exc:  # noqa: BLE001
+                if self._is_auth_error_message(str(exc)):
+                    diagnostics = self._extract_error_diagnostics(exc)
+                    logger.warning(
+                        "qwen_llm_auth_failed provider=qwen-code model=%s request_id=%s "
+                        "status_code=%s error_code=%s content_type=%s raw_len=%s raw_excerpt=%s error=%s",
+                        model,
+                        diagnostics.get("request_id"),
+                        diagnostics.get("status_code"),
+                        diagnostics.get("error_code"),
+                        diagnostics.get("content_type"),
+                        diagnostics.get("raw_len"),
+                        diagnostics.get("raw_excerpt"),
+                        str(exc)[:300],
+                    )
+                    self._mark_auth_failure()
+                    raise RuntimeError(f"Qwen Code authentication failed: {exc}") from exc
+
+                diagnostics = self._extract_error_diagnostics(exc)
+                status_code = diagnostics.get("status_code")
+                is_empty = "empty response body" in str(exc).lower()
+                retryable = bool(
+                    is_empty
+                    or self._is_retryable_status(
+                        status_code if isinstance(status_code, int) else None
+                    )
+                    or self._is_retryable_exception(exc)
+                )
+                if self._is_non_retryable_status(
+                    status_code if isinstance(status_code, int) else None
+                ):
+                    retryable = False
+
+                logger.warning(
+                    "qwen_llm_request_failed provider=qwen-code model=%s attempt=%s/%s retryable=%s "
+                    "request_id=%s status_code=%s error_code=%s content_type=%s raw_len=%s raw_excerpt=%s error=%s",
+                    model,
+                    attempt,
+                    attempts,
+                    retryable,
+                    diagnostics.get("request_id"),
+                    diagnostics.get("status_code"),
+                    diagnostics.get("error_code"),
+                    diagnostics.get("content_type"),
+                    diagnostics.get("raw_len"),
+                    diagnostics.get("raw_excerpt"),
+                    str(exc)[:300],
+                )
+
+                last_exc = exc
+                if not retryable or attempt >= attempts:
+                    break
+
+                sleep_seconds = self._backoff_with_jitter(attempt)
+                logger.info(
+                    "qwen_llm_retry_scheduled provider=qwen-code model=%s attempt=%s sleep_seconds=%.2f",
+                    model,
+                    attempt,
+                    sleep_seconds,
+                )
+                time.sleep(sleep_seconds)
+
+        raise RuntimeError(f"Qwen Code API call failed: {last_exc}") from last_exc
+
     def complete_stream(self, prompt: str, **kwargs) -> Generator[str, None, None]:
         client = self._client()
         model = kwargs.get("model", self._model)
@@ -1493,17 +1845,18 @@ def get_llm_wrapper(
     if not resolved_provider:
         return None
 
+    wrapper: LLMWrapper | None
     if resolved_provider == "openai":
-        return OpenAIWrapper(**kwargs)
+        wrapper = OpenAIWrapper(**kwargs)
     elif resolved_provider == "anthropic":
-        return AnthropicWrapper(**kwargs)
+        wrapper = AnthropicWrapper(**kwargs)
     elif resolved_provider == "google":
-        return GoogleGenAIWrapper(**kwargs)
+        wrapper = GoogleGenAIWrapper(**kwargs)
     elif resolved_provider == "qwen":
         qwen_base_url = (
             kwargs.pop("base_url", None) or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
-        return OpenAIWrapper(
+        wrapper = OpenAIWrapper(
             base_url=qwen_base_url,
             env_var_name="QWEN_API_KEY",
             **kwargs,
@@ -1514,14 +1867,24 @@ def get_llm_wrapper(
             raise RuntimeError("Qwen Code profile is missing OAuth credentials in secret store.")
         qwen_model = kwargs.get("model", "qwen3-coder-plus")
         api_key_ref = kwargs.get("api_key_ref")
-        return QwenCodeWrapper(
+        wrapper = QwenCodeWrapper(
             oauth_credentials_json=oauth_json,
             model=qwen_model,
             credentials_secret_ref=api_key_ref if isinstance(api_key_ref, str) else None,
         )
-    elif resolved_provider:
+    else:
         raise ValueError(f"Unknown LLM provider: {resolved_provider}")
-    return None
+
+    if wrapper is None:
+        return None
+
+    if isinstance(wrapper, SessionLoggingLLMWrapper):
+        return wrapper
+
+    if _llm_session_logging_mode() == "off":
+        return wrapper
+
+    return SessionLoggingLLMWrapper(wrapper, provider_name=resolved_provider)
 
 
 # Backward compatibility imports and utilities
@@ -2273,6 +2636,58 @@ def detect_language(repo_context: dict[str, Any]) -> str:
     return "python"  # Default
 
 
+def _get_code_prompt_template() -> str:
+    base_dir = Path(__file__).resolve().parent
+    template_path = base_dir / "prompts" / "code_generator" / "base_prompt.v1.md"
+    if template_path.exists():
+        try:
+            return template_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+    return (
+        "You are a senior __LANGUAGE_TITLE__ engineer. Generate a minimal repository patch "
+        "that satisfies the specification.\n\n"
+        "## Language Standards\n"
+        "- Style: __STYLE__\n"
+        "- Typing: __TYPING__\n"
+        "- Docstrings: __DOCSTRINGS__\n"
+        "- Imports: __IMPORTS__\n\n"
+        "## Specification\n"
+        "__SPEC_JSON__\n\n"
+        "## Tests To Satisfy\n"
+        "__TESTS_JSON__\n\n"
+        "## Repository Context\n"
+        "__REPO_CONTEXT_JSON__\n\n"
+        "## Relevant Existing Code\n"
+        "__EXISTING_CODE__\n\n"
+        "## Output Rules\n"
+        "- Return VALID JSON only.\n"
+        "- Do not wrap the JSON in markdown fences.\n"
+        "- Touch the smallest possible number of files.\n"
+        "- Prefer modifying existing likely files over inventing brand new modules.\n"
+        "- Preferred output is patch_text in Codex apply_patch format.\n"
+        "- Prefer operations over raw full-file rewrites whenever possible.\n"
+        "- If you use edit operations, NEVER escape old_string/new_string; send exact literal text.\n"
+        "- Raw files[] fallback is allowed, but only when an exact edit/write operation would be worse.\n"
+        "- For each touched file entry in files[], include the final full content for that touched file only.\n"
+        "- Preserve untouched regions byte-for-byte where possible; do not rewrite entire files without need.\n"
+        '- If a test file is included, put it in "test_changes" or "test_operations".\n'
+        "- Do not output prose before or after the JSON object.\n\n"
+        "## Required JSON Schema\n"
+        "{\n"
+        '  "patch_text": "*** Begin Patch\\n*** Update File: path/to/file.py\\n@@\\n-old\\n+new\\n*** End Patch",\n'
+        '  "operations": [\n'
+        '    {"type":"edit|write","path":"relative/path/to/file.py","old_string":"exact old text for edit","new_string":"exact new text for edit","replace_all":false,"content":"final content for write","change_type":"create|modify|delete"}\n'
+        "  ],\n"
+        '  "files": [{"path":"relative/path/to/file.py","change_type":"create|modify|delete","content":"final content of the touched file"}],\n'
+        '  "decisions":[{"description":"Architectural decision made","rationale":"Why this approach was chosen"}],\n'
+        '  "test_operations":[{"type":"edit|write","path":"tests/test_example.py","old_string":"exact old text","new_string":"exact new text","replace_all":false,"content":"final content for write","change_type":"create|modify|delete"}],\n'
+        '  "test_changes":[{"path":"tests/test_example.py","change_type":"create|modify","content":"final content of the touched test file"}]\n'
+        "}\n\n"
+        "Respond with valid JSON only.\n"
+    )
+
+
 def build_code_prompt(
     spec: dict[str, Any],
     test_cases: list[dict[str, Any]],
@@ -2306,62 +2721,22 @@ def build_code_prompt(
                 "expected_result": case.get("expected_result"),
             }
         )
+    compact_repo_context = _compact_repo_context_for_prompt(repo_context)
 
-    template = f"""You are a senior {language.title()} engineer. Generate a minimal repository patch that satisfies the specification.
-
-## Language Standards
-- Style: {standards["style"]}
-- Typing: {standards["typing"]}
-- Docstrings: {standards["docstrings"]}
-- Imports: {standards["imports"]}
-
-## Specification
-{json.dumps(compact_spec, ensure_ascii=False, indent=2)}
-
-## Tests To Satisfy
-{json.dumps(compact_tests, ensure_ascii=False, indent=2)}
-
-## Repository Context
-{json.dumps(repo_context, ensure_ascii=False, indent=2)}
-
-## Relevant Existing Code
-{existing_code}
-
-## Output Rules
-- Return VALID JSON only.
-- Do not wrap the JSON in markdown fences.
-- Touch the smallest possible number of files.
-- Prefer modifying existing likely files over inventing brand new modules.
-- For every file entry, include the FULL file content.
-- If a test file is included, put it in "test_changes" and also include full content.
-- Do not output prose before or after the JSON object.
-
-## Required JSON Schema
-{{
-  "files": [
-    {{
-      "path": "relative/path/to/file.py",
-      "change_type": "create|modify|delete",
-      "content": "FULL file content"
-    }}
-  ],
-  "decisions": [
-    {{
-      "description": "Architectural decision made",
-      "rationale": "Why this approach was chosen"
-    }}
-  ],
-  "test_changes": [
-    {{
-      "path": "tests/test_example.py",
-      "change_type": "create|modify",
-      "content": "FULL file content"
-    }}
-  ]
-}}
-
-Respond with valid JSON only.
-"""
+    template = _get_code_prompt_template()
+    replacements = {
+        "__LANGUAGE_TITLE__": language.title(),
+        "__STYLE__": standards["style"],
+        "__TYPING__": standards["typing"],
+        "__DOCSTRINGS__": standards["docstrings"],
+        "__IMPORTS__": standards["imports"],
+        "__SPEC_JSON__": json.dumps(compact_spec, ensure_ascii=False, indent=2),
+        "__TESTS_JSON__": json.dumps(compact_tests, ensure_ascii=False, indent=2),
+        "__REPO_CONTEXT_JSON__": json.dumps(compact_repo_context, ensure_ascii=False, indent=2),
+        "__EXISTING_CODE__": existing_code,
+    }
+    for token, value in replacements.items():
+        template = template.replace(token, value)
     return template
 
 
@@ -2378,21 +2753,56 @@ def _extract_relevant_code(repo_context: dict[str, Any], spec: dict[str, Any]) -
             # Get directory
             dir_path = path.rsplit("/", 1)[0]
             needed_paths.add(dir_path)
+    if not needed_paths:
+        for path in repo_context.get("candidate_files", [])[:4]:
+            normalized = str(path or "").strip()
+            if "/" in normalized:
+                needed_paths.add(normalized.rsplit("/", 1)[0])
 
     # Include files in same directories
     relevant = []
     for f in files:
-        for needed in needed_paths:
-            if f.startswith(needed) or needed in f:
-                content = file_contents.get(f, "")
-                if content:
-                    relevant.append(f"=== {f} ===\n{content[:2000]}")
-                break
+        if not isinstance(f, str) or not f.strip():
+            continue
+        if needed_paths and not any(f.startswith(needed) or needed in f for needed in needed_paths):
+            continue
+        content = file_contents.get(f, "")
+        if content:
+            relevant.append(f"=== {f} ===\n{content}")
+        if len(relevant) >= 3:
+            break
 
     if not relevant:
         return "No relevant existing code found."
 
     return "\n\n".join(relevant)
+
+
+def _compact_repo_context_for_prompt(repo_context: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(repo_context)
+    file_contents = compact.pop("file_contents", {})
+    if isinstance(file_contents, dict) and file_contents:
+        compact["loaded_file_context"] = [
+            {
+                "path": str(path),
+                "chars": len(str(content)),
+            }
+            for path, content in list(file_contents.items())[:4]
+            if str(path).strip()
+        ]
+    snippets = compact.get("candidate_file_snippets")
+    if isinstance(snippets, list):
+        compact["candidate_file_snippets"] = [
+            {
+                "path": item.get("path"),
+                "snippet": item.get("snippet"),
+                "truncated": item.get("truncated", False),
+                "has_full_content": bool(item.get("content")),
+            }
+            for item in snippets[:4]
+            if isinstance(item, dict)
+        ]
+    return compact
 
 
 def parse_code_output(output: str) -> dict[str, Any]:
@@ -2418,22 +2828,48 @@ def parse_code_output(output: str) -> dict[str, Any]:
         except json.JSONDecodeError as exc:
             last_error = exc
             continue
-        if isinstance(candidate, dict) and "files" in candidate:
+        if isinstance(candidate, dict) and (
+            "files" in candidate
+            or "operations" in candidate
+            or "patch_text" in candidate
+            or "required_files" in candidate
+        ):
             parsed_result = candidate
             break
 
     if parsed_result is None:
-        raise ValueError(f"No valid JSON object with 'files' found in LLM output: {last_error}")
+        raise ValueError(
+            "No valid JSON object with 'files', 'operations', or 'patch_text' found "
+            f"in LLM output: {last_error}"
+        )
 
     result = parsed_result
 
-    if "files" not in result:
-        raise ValueError("Missing required field: files")
-    if not isinstance(result["files"], list) or not result["files"]:
-        raise ValueError("Field 'files' must be a non-empty list")
-
+    result.setdefault("files", [])
+    result.setdefault("operations", [])
+    result.setdefault("patch_text", "")
     result.setdefault("decisions", [])
+    result.setdefault("test_operations", [])
     result.setdefault("test_changes", [])
+    if not isinstance(result.get("files"), list):
+        raise ValueError("Field 'files' must be a list")
+    if not isinstance(result.get("operations"), list):
+        raise ValueError("Field 'operations' must be a list")
+    if not isinstance(result.get("patch_text"), str):
+        raise ValueError("Field 'patch_text' must be a string")
+    if not isinstance(result.get("decisions"), list):
+        raise ValueError("Field 'decisions' must be a list")
+    if not isinstance(result.get("test_operations"), list):
+        raise ValueError("Field 'test_operations' must be a list")
+    if not isinstance(result.get("test_changes"), list):
+        raise ValueError("Field 'test_changes' must be a list")
+
+    if not result["files"] and not result["operations"] and not result["patch_text"].strip():
+        required_files = result.get("required_files")
+        if not isinstance(required_files, list) or not required_files:
+            raise ValueError(
+                "At least one of 'files', 'operations', or 'patch_text' must be non-empty"
+            )
 
     for i, f in enumerate(result.get("files", [])):
         if not isinstance(f, dict):
@@ -2445,6 +2881,23 @@ def parse_code_output(output: str) -> dict[str, Any]:
         if "content" not in f or not isinstance(f.get("content"), str):
             raise ValueError(f"File {i} missing 'content'")
 
+    for i, operation in enumerate(result.get("operations", [])):
+        if not isinstance(operation, dict):
+            raise ValueError(f"Operation {i} is not an object")
+        operation_type = operation.get("type")
+        if not isinstance(operation_type, str) or operation_type not in {"edit", "write"}:
+            raise ValueError(f"Operation {i} missing valid 'type'")
+        if "path" not in operation or not isinstance(operation.get("path"), str):
+            raise ValueError(f"Operation {i} missing valid 'path'")
+        if operation_type == "edit":
+            if "old_string" not in operation or not isinstance(operation.get("old_string"), str):
+                raise ValueError(f"Operation {i} missing 'old_string'")
+            if "new_string" not in operation or not isinstance(operation.get("new_string"), str):
+                raise ValueError(f"Operation {i} missing 'new_string'")
+        if operation_type == "write":
+            if "content" not in operation or not isinstance(operation.get("content"), str):
+                raise ValueError(f"Operation {i} missing 'content'")
+
     for i, f in enumerate(result.get("test_changes", [])):
         if not isinstance(f, dict):
             raise ValueError(f"Test change {i} is not an object")
@@ -2454,6 +2907,15 @@ def parse_code_output(output: str) -> dict[str, Any]:
             raise ValueError(f"Test change {i} missing 'change_type'")
         if "content" not in f or not isinstance(f.get("content"), str):
             raise ValueError(f"Test change {i} missing 'content'")
+
+    for i, operation in enumerate(result.get("test_operations", [])):
+        if not isinstance(operation, dict):
+            raise ValueError(f"Test operation {i} is not an object")
+        operation_type = operation.get("type")
+        if not isinstance(operation_type, str) or operation_type not in {"edit", "write"}:
+            raise ValueError(f"Test operation {i} missing valid 'type'")
+        if "path" not in operation or not isinstance(operation.get("path"), str):
+            raise ValueError(f"Test operation {i} missing valid 'path'")
 
     return result
 

@@ -54,9 +54,9 @@ class StepExecutor:
         self.logger = logging.getLogger("hordeforge.orchestrator.step_executor")
 
     def _create_registry_from_factory(self, base_registry, factory):
-        """РЎРѕР·РґР°РµС‚ РѕР±РµСЂС‚РєСѓ СЂРµРµСЃС‚СЂР°, РєРѕС‚РѕСЂС‹Р№ РёСЃРїРѕР»СЊР·СѓРµС‚ С„Р°Р±СЂРёРєСѓ РґР»СЏ СЃРѕР·РґР°РЅРёСЏ Р°РіРµРЅС‚РѕРІ."""
+        """Р РЋР С•Р В·Р Т‘Р В°Р ВµРЎвЂљ Р С•Р В±Р ВµРЎР‚РЎвЂљР С”РЎС“ РЎР‚Р ВµР ВµРЎРѓРЎвЂљРЎР‚Р В°, Р С”Р С•РЎвЂљР С•РЎР‚РЎвЂ№Р в„– Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµРЎвЂљ РЎвЂћР В°Р В±РЎР‚Р С‘Р С”РЎС“ Р Т‘Р В»РЎРЏ РЎРѓР С•Р В·Р Т‘Р В°Р Р…Р С‘РЎРЏ Р В°Р С–Р ВµР Р…РЎвЂљР С•Р Р†."""
 
-        # РЎРѕР·РґР°РµРј РѕР±РµСЂС‚РєСѓ РІРѕРєСЂСѓРі Р±Р°Р·РѕРІРѕРіРѕ СЂРµРµСЃС‚СЂР°, РєРѕС‚РѕСЂР°СЏ РјРѕР¶РµС‚ РґРёРЅР°РјРёС‡РµСЃРєРё СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊ Р°РіРµРЅС‚РѕРІ
+        # Р РЋР С•Р В·Р Т‘Р В°Р ВµР С Р С•Р В±Р ВµРЎР‚РЎвЂљР С”РЎС“ Р Р†Р С•Р С”РЎР‚РЎС“Р С– Р В±Р В°Р В·Р С•Р Р†Р С•Р С–Р С• РЎР‚Р ВµР ВµРЎРѓРЎвЂљРЎР‚Р В°, Р С”Р С•РЎвЂљР С•РЎР‚Р В°РЎРЏ Р СР С•Р В¶Р ВµРЎвЂљ Р Т‘Р С‘Р Р…Р В°Р СР С‘РЎвЂЎР ВµРЎРѓР С”Р С‘ РЎР‚Р ВµР С–Р С‘РЎРѓРЎвЂљРЎР‚Р С‘РЎР‚Р С•Р Р†Р В°РЎвЂљРЎРЉ Р В°Р С–Р ВµР Р…РЎвЂљР С•Р Р†
         class DynamicRegistryWrapper:
             def __init__(self, base_reg, factory_func):
                 self.base_registry = base_reg
@@ -64,30 +64,30 @@ class StepExecutor:
                 self.dynamic_agents = {}
 
             def has(self, agent_name: str) -> bool:
-                # РџСЂРѕРІРµСЂСЏРµРј СЃРЅР°С‡Р°Р»Р° РІ Р±Р°Р·РѕРІРѕРј СЂРµРµСЃС‚СЂРµ, Р·Р°С‚РµРј РїСЂРѕР±СѓРµРј С„Р°Р±СЂРёРєСѓ
+                # Р СџРЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С РЎРѓР Р…Р В°РЎвЂЎР В°Р В»Р В° Р Р† Р В±Р В°Р В·Р С•Р Р†Р С•Р С РЎР‚Р ВµР ВµРЎРѓРЎвЂљРЎР‚Р Вµ, Р В·Р В°РЎвЂљР ВµР С Р С—РЎР‚Р С•Р В±РЎС“Р ВµР С РЎвЂћР В°Р В±РЎР‚Р С‘Р С”РЎС“
                 if self.base_registry.has(agent_name):
                     return True
 
-                # РџСЂРѕР±СѓРµРј СЃРѕР·РґР°С‚СЊ Р°РіРµРЅС‚ С‡РµСЂРµР· С„Р°Р±СЂРёРєСѓ, С‡С‚РѕР±С‹ РїСЂРѕРІРµСЂРёС‚СЊ РµРіРѕ РЅР°Р»РёС‡РёРµ
+                # Р СџРЎР‚Р С•Р В±РЎС“Р ВµР С РЎРѓР С•Р В·Р Т‘Р В°РЎвЂљРЎРЉ Р В°Р С–Р ВµР Р…РЎвЂљ РЎвЂЎР ВµРЎР‚Р ВµР В· РЎвЂћР В°Р В±РЎР‚Р С‘Р С”РЎС“, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚Р С‘РЎвЂљРЎРЉ Р ВµР С–Р С• Р Р…Р В°Р В»Р С‘РЎвЂЎР С‘Р Вµ
                 try:
                     agent = self.factory(agent_name)
-                    # РЎРѕС…СЂР°РЅСЏРµРј Р°РіРµРЅС‚ РІРѕ РІСЂРµРјРµРЅРЅС‹Р№ РєСЌС€
+                    # Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏР ВµР С Р В°Р С–Р ВµР Р…РЎвЂљ Р Р†Р С• Р Р†РЎР‚Р ВµР СР ВµР Р…Р Р…РЎвЂ№Р в„– Р С”РЎРЊРЎв‚¬
                     self.dynamic_agents[agent_name] = agent.__class__
                     return True
                 except Exception:
                     return False
 
             def create(self, agent_name: str) -> Any:
-                # Р•СЃР»Рё Р°РіРµРЅС‚ РІ Р±Р°Р·РѕРІРѕРј СЂРµРµСЃС‚СЂРµ - РёСЃРїРѕР»СЊР·СѓРµРј РµРіРѕ
+                # Р вЂўРЎРѓР В»Р С‘ Р В°Р С–Р ВµР Р…РЎвЂљ Р Р† Р В±Р В°Р В·Р С•Р Р†Р С•Р С РЎР‚Р ВµР ВµРЎРѓРЎвЂљРЎР‚Р Вµ - Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С Р ВµР С–Р С•
                 if self.base_registry.has(agent_name):
                     return self.base_registry.create(agent_name)
 
-                # РРЅР°С‡Рµ СЃРѕР·РґР°РµРј С‡РµСЂРµР· С„Р°Р±СЂРёРєСѓ РєР°Р¶РґС‹Р№ СЂР°Р·, С‡С‚РѕР±С‹ РёР·Р±РµР¶Р°С‚СЊ РїСЂРѕР±Р»РµРј СЃ СЃРѕСЃС‚РѕСЏРЅРёРµРј
+                # Р ВР Р…Р В°РЎвЂЎР Вµ РЎРѓР С•Р В·Р Т‘Р В°Р ВµР С РЎвЂЎР ВµРЎР‚Р ВµР В· РЎвЂћР В°Р В±РЎР‚Р С‘Р С”РЎС“ Р С”Р В°Р В¶Р Т‘РЎвЂ№Р в„– РЎР‚Р В°Р В·, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р С‘Р В·Р В±Р ВµР В¶Р В°РЎвЂљРЎРЉ Р С—РЎР‚Р С•Р В±Р В»Р ВµР С РЎРѓ РЎРѓР С•РЎРѓРЎвЂљР С•РЎРЏР Р…Р С‘Р ВµР С
                 agent = self.factory(agent_name)
                 return agent
 
             def get(self, agent_name: str):
-                # Р”Р»СЏ СЃРѕРІРјРµСЃС‚РёРјРѕСЃС‚Рё СЃ РёРЅС‚РµСЂС„РµР№СЃРѕРј AgentRegistry
+                # Р вЂќР В»РЎРЏ РЎРѓР С•Р Р†Р СР ВµРЎРѓРЎвЂљР С‘Р СР С•РЎРѓРЎвЂљР С‘ РЎРѓ Р С‘Р Р…РЎвЂљР ВµРЎР‚РЎвЂћР ВµР в„–РЎРѓР С•Р С AgentRegistry
                 if self.base_registry.has(agent_name):
                     item = self.base_registry.get(agent_name)
                     if isinstance(item, AgentMetadata):
@@ -95,16 +95,16 @@ class StepExecutor:
                     return item
 
                 if agent_name in self.dynamic_agents:
-                    # Р’РѕР·РІСЂР°С‰Р°РµРј РєР»Р°СЃСЃ Р°РіРµРЅС‚Р°, Р° РЅРµ СЌРєР·РµРјРїР»СЏСЂ
+                    # Р вЂ™Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµР С Р С”Р В»Р В°РЎРѓРЎРѓ Р В°Р С–Р ВµР Р…РЎвЂљР В°, Р В° Р Р…Р Вµ РЎРЊР С”Р В·Р ВµР СР С—Р В»РЎРЏРЎР‚
                     return self.dynamic_agents[agent_name]
 
-                # Р•СЃР»Рё Р°РіРµРЅС‚ РЅРµ СЃСѓС‰РµСЃС‚РІСѓРµС‚, РїСЂРѕР±СѓРµРј СЃРѕР·РґР°С‚СЊ С‡РµСЂРµР· С„Р°Р±СЂРёРєСѓ
+                # Р вЂўРЎРѓР В»Р С‘ Р В°Р С–Р ВµР Р…РЎвЂљ Р Р…Р Вµ РЎРѓРЎС“РЎвЂ°Р ВµРЎРѓРЎвЂљР Р†РЎС“Р ВµРЎвЂљ, Р С—РЎР‚Р С•Р В±РЎС“Р ВµР С РЎРѓР С•Р В·Р Т‘Р В°РЎвЂљРЎРЉ РЎвЂЎР ВµРЎР‚Р ВµР В· РЎвЂћР В°Р В±РЎР‚Р С‘Р С”РЎС“
                 try:
                     agent = self.factory(agent_name)
                     self.dynamic_agents[agent_name] = agent.__class__
                     return agent.__class__
                 except Exception:
-                    # Р•СЃР»Рё Р°РіРµРЅС‚ РЅРµ СЃСѓС‰РµСЃС‚РІСѓРµС‚, РІС‹Р·С‹РІР°РµРј РёСЃРєР»СЋС‡РµРЅРёРµ РєР°Рє РІ РѕСЂРёРіРёРЅР°Р»СЊРЅРѕРј РјРµС‚РѕРґРµ
+                    # Р вЂўРЎРѓР В»Р С‘ Р В°Р С–Р ВµР Р…РЎвЂљ Р Р…Р Вµ РЎРѓРЎС“РЎвЂ°Р ВµРЎРѓРЎвЂљР Р†РЎС“Р ВµРЎвЂљ, Р Р†РЎвЂ№Р В·РЎвЂ№Р Р†Р В°Р ВµР С Р С‘РЎРѓР С”Р В»РЎР‹РЎвЂЎР ВµР Р…Р С‘Р Вµ Р С”Р В°Р С” Р Р† Р С•РЎР‚Р С‘Р С–Р С‘Р Р…Р В°Р В»РЎРЉР Р…Р С•Р С Р СР ВµРЎвЂљР С•Р Т‘Р Вµ
                     raise KeyError(f"Agent '{agent_name}' is not registered") from None
 
         return DynamicRegistryWrapper(base_registry, factory)
@@ -146,8 +146,35 @@ class StepExecutor:
         }
         self.logger.log(level, json.dumps(payload, ensure_ascii=False))
 
+    @staticmethod
+    def _resolve_step_end_log_level(step_status: StepStatus) -> int:
+        if step_status == StepStatus.SUCCESS:
+            return logging.INFO
+        if step_status == StepStatus.PARTIAL_SUCCESS:
+            return logging.WARNING
+        if step_status == StepStatus.SKIPPED:
+            return logging.INFO
+        return logging.ERROR
+
+    @staticmethod
+    def _extract_primary_reason(output: dict[str, Any]) -> str | None:
+        decisions = output.get("decisions")
+        if isinstance(decisions, list):
+            for item in decisions:
+                if not isinstance(item, dict):
+                    continue
+                reason = item.get("reason")
+                if isinstance(reason, str) and reason.strip():
+                    return reason.strip()
+        logs = output.get("logs")
+        if isinstance(logs, list):
+            for item in logs:
+                if isinstance(item, str) and item.strip():
+                    return item.strip()[:300]
+        return None
+
     def _get_agent_from_registry(self, agent_name: str, run_id: str) -> Any:
-        """РџРѕР»СѓС‡РёС‚СЊ Р°РіРµРЅС‚ РёР· СЂРµРµСЃС‚СЂР°, СЃ РѕР±СЂР°Р±РѕС‚РєРѕР№ РѕС€РёР±РѕРє РґР»СЏ РЅРµР·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРЅС‹С… Р°РіРµРЅС‚РѕРІ."""
+        """Р СџР С•Р В»РЎС“РЎвЂЎР С‘РЎвЂљРЎРЉ Р В°Р С–Р ВµР Р…РЎвЂљ Р С‘Р В· РЎР‚Р ВµР ВµРЎРѓРЎвЂљРЎР‚Р В°, РЎРѓ Р С•Р В±РЎР‚Р В°Р В±Р С•РЎвЂљР С”Р С•Р в„– Р С•РЎв‚¬Р С‘Р В±Р С•Р С” Р Т‘Р В»РЎРЏ Р Р…Р ВµР В·Р В°РЎР‚Р ВµР С–Р С‘РЎРѓРЎвЂљРЎР‚Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р Р…РЎвЂ№РЎвЂ¦ Р В°Р С–Р ВµР Р…РЎвЂљР С•Р Р†."""
         if not self.agent_registry.has(agent_name):
             error_msg = f"Agent '{agent_name}' is not registered in AgentRegistry"
             self._log_event(
@@ -164,10 +191,10 @@ class StepExecutor:
     @staticmethod
     def _normalize_agent_output(output: dict[str, Any]) -> dict[str, Any]:
         """
-        РќРѕСЂРјР°Р»РёР·СѓРµС‚ СЂРµР·СѓР»СЊС‚Р°С‚ Р°РіРµРЅС‚Р°, С‡С‚РѕР±С‹ РѕРЅ СЃРѕРѕС‚РІРµС‚СЃС‚РІРѕРІР°Р» СЃС…РµРјРµ.
-        РЈРґР°Р»СЏРµС‚ РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅС‹Рµ РїРѕР»СЏ, РєРѕС‚РѕСЂС‹Рµ РЅРµ РїСЂРµРґСѓСЃРјРѕС‚СЂРµРЅС‹ СЃС…РµРјРѕР№.
+        Р СњР С•РЎР‚Р СР В°Р В»Р С‘Р В·РЎС“Р ВµРЎвЂљ РЎР‚Р ВµР В·РЎС“Р В»РЎРЉРЎвЂљР В°РЎвЂљ Р В°Р С–Р ВµР Р…РЎвЂљР В°, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р С•Р Р… РЎРѓР С•Р С•РЎвЂљР Р†Р ВµРЎвЂљРЎРѓРЎвЂљР Р†Р С•Р Р†Р В°Р В» РЎРѓРЎвЂ¦Р ВµР СР Вµ.
+        Р Р€Р Т‘Р В°Р В»РЎРЏР ВµРЎвЂљ Р Т‘Р С•Р С—Р С•Р В»Р Р…Р С‘РЎвЂљР ВµР В»РЎРЉР Р…РЎвЂ№Р Вµ Р С—Р С•Р В»РЎРЏ, Р С”Р С•РЎвЂљР С•РЎР‚РЎвЂ№Р Вµ Р Р…Р Вµ Р С—РЎР‚Р ВµР Т‘РЎС“РЎРѓР СР С•РЎвЂљРЎР‚Р ВµР Р…РЎвЂ№ РЎРѓРЎвЂ¦Р ВµР СР С•Р в„–.
         """
-        # РћРїСЂРµРґРµР»СЏРµРј РґРѕРїСѓСЃС‚РёРјС‹Рµ РїРѕР»СЏ РІ СЃРѕРѕС‚РІРµС‚СЃС‚РІРёРё СЃРѕ СЃС…РµРјРѕР№
+        # Р С›Р С—РЎР‚Р ВµР Т‘Р ВµР В»РЎРЏР ВµР С Р Т‘Р С•Р С—РЎС“РЎРѓРЎвЂљР С‘Р СРЎвЂ№Р Вµ Р С—Р С•Р В»РЎРЏ Р Р† РЎРѓР С•Р С•РЎвЂљР Р†Р ВµРЎвЂљРЎРѓРЎвЂљР Р†Р С‘Р С‘ РЎРѓР С• РЎРѓРЎвЂ¦Р ВµР СР С•Р в„–
         allowed_keys = {
             "status",
             "artifacts",
@@ -179,13 +206,13 @@ class StepExecutor:
             "schema_version",
         }
 
-        # РЎРѕР·РґР°РµРј РЅРѕРІС‹Р№ СЃР»РѕРІР°СЂСЊ С‚РѕР»СЊРєРѕ СЃ СЂР°Р·СЂРµС€РµРЅРЅС‹РјРё РєР»СЋС‡Р°РјРё
+        # Р РЋР С•Р В·Р Т‘Р В°Р ВµР С Р Р…Р С•Р Р†РЎвЂ№Р в„– РЎРѓР В»Р С•Р Р†Р В°РЎР‚РЎРЉ РЎвЂљР С•Р В»РЎРЉР С”Р С• РЎРѓ РЎР‚Р В°Р В·РЎР‚Р ВµРЎв‚¬Р ВµР Р…Р Р…РЎвЂ№Р СР С‘ Р С”Р В»РЎР‹РЎвЂЎР В°Р СР С‘
         normalized = {}
         for key in allowed_keys:
             if key in output:
                 normalized[key] = output[key]
 
-        # Р•СЃР»Рё РѕР±СЏР·Р°С‚РµР»СЊРЅС‹Рµ РїРѕР»СЏ РѕС‚СЃСѓС‚СЃС‚РІСѓСЋС‚, РґРѕР±Р°РІР»СЏРµРј РёС… СЃРѕ Р·РЅР°С‡РµРЅРёСЏРјРё РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ
+        # Р вЂўРЎРѓР В»Р С‘ Р С•Р В±РЎРЏР В·Р В°РЎвЂљР ВµР В»РЎРЉР Р…РЎвЂ№Р Вµ Р С—Р С•Р В»РЎРЏ Р С•РЎвЂљРЎРѓРЎС“РЎвЂљРЎРѓРЎвЂљР Р†РЎС“РЎР‹РЎвЂљ, Р Т‘Р С•Р В±Р В°Р Р†Р В»РЎРЏР ВµР С Р С‘РЎвЂ¦ РЎРѓР С• Р В·Р Р…Р В°РЎвЂЎР ВµР Р…Р С‘РЎРЏР СР С‘ Р С—Р С• РЎС“Р СР С•Р В»РЎвЂЎР В°Р Р…Р С‘РЎР‹
         if "status" not in normalized:
             normalized["status"] = output.get("status", "FAILED")
 
@@ -233,24 +260,35 @@ class StepExecutor:
     def _coerce_code_patch_content_for_validation(content: Any) -> dict[str, Any]:
         content_dict = content if isinstance(content, dict) else {}
 
-        raw_files = content_dict.get("files")
-        normalized_files: list[dict[str, str]] = []
-        if isinstance(raw_files, list):
+        def _normalize_file_entries(raw_files: Any) -> list[dict[str, Any]]:
+            normalized_entries: list[dict[str, Any]] = []
+            if not isinstance(raw_files, list):
+                return normalized_entries
+
             for item in raw_files:
                 if not isinstance(item, dict):
-                    normalized_files.append({"path": "unknown_path", "diff": "# modify"})
+                    normalized_entries.append({"path": "unknown_path", "diff": "# modify"})
                     continue
 
                 path_value = item.get("path")
                 path = str(path_value).strip() if path_value else "unknown_path"
+                content_value = item.get("content")
+                change_type = str(item.get("change_type") or "modify").strip().lower() or "modify"
                 diff = item.get("diff")
 
+                normalized_file: dict[str, Any] = {
+                    "path": path,
+                    "change_type": change_type,
+                }
+
+                if isinstance(content_value, str):
+                    normalized_file["content"] = content_value
+
                 if isinstance(diff, str) and diff.strip():
-                    normalized_files.append({"path": path, "diff": diff})
+                    normalized_file["diff"] = diff
+                    normalized_entries.append(normalized_file)
                     continue
 
-                content_value = item.get("content")
-                change_type = str(item.get("change_type") or "modify").strip() or "modify"
                 if isinstance(content_value, str) and content_value.strip():
                     generated_diff = f"# {change_type}\n{content_value}"
                 elif content_value is None:
@@ -260,15 +298,52 @@ class StepExecutor:
                         f"# {change_type}\n{json.dumps(content_value, ensure_ascii=False)}"
                     )
 
-                normalized_files.append({"path": path, "diff": generated_diff or "# modify"})
+                normalized_file["diff"] = generated_diff or "# modify"
+                normalized_entries.append(normalized_file)
 
-        if not normalized_files:
+            return normalized_entries
+
+        schema_version = str(content_dict.get("schema_version", "1.0")).strip()
+        if schema_version not in {"1.0", "2.0"}:
+            schema_version = "1.0"
+
+        normalized_files = _normalize_file_entries(content_dict.get("files"))
+        normalized_test_changes = _normalize_file_entries(content_dict.get("test_changes"))
+        has_runtime_patch_fields = (
+            bool(str(content_dict.get("patch_text", "") or "").strip())
+            or (
+                isinstance(content_dict.get("operations"), list)
+                and bool(content_dict.get("operations"))
+            )
+            or (
+                isinstance(content_dict.get("test_operations"), list)
+                and bool(content_dict.get("test_operations"))
+            )
+            or bool(normalized_test_changes)
+        )
+
+        if not normalized_files and not has_runtime_patch_fields:
             normalized_files = [{"path": "unknown_path", "diff": "# modify"}]
 
         normalized_content: dict[str, Any] = {
-            "schema_version": "1.0",
-            "files": normalized_files,
+            "schema_version": schema_version,
         }
+        if normalized_files:
+            normalized_content["files"] = normalized_files
+        if normalized_test_changes:
+            normalized_content["test_changes"] = normalized_test_changes
+
+        patch_text = content_dict.get("patch_text")
+        if isinstance(patch_text, str) and patch_text.strip():
+            normalized_content["patch_text"] = patch_text
+
+        operations = content_dict.get("operations")
+        if isinstance(operations, list):
+            normalized_content["operations"] = operations
+
+        test_operations = content_dict.get("test_operations")
+        if isinstance(test_operations, list):
+            normalized_content["test_operations"] = test_operations
 
         decisions = content_dict.get("decisions")
         if isinstance(decisions, list):
@@ -480,6 +555,17 @@ class StepExecutor:
             "passed": max(0, passed),
             "failed": max(0, failed),
         }
+
+        exit_code_raw = test_results.get("exit_code")
+        if exit_code_raw is not None:
+            try:
+                normalized["exit_code"] = int(exit_code_raw)
+            except (TypeError, ValueError):
+                pass
+
+        failure_signature = test_results.get("failure_signature")
+        if isinstance(failure_signature, str) and failure_signature.strip():
+            normalized["failure_signature"] = failure_signature.strip()
 
         mode = test_results.get("mode")
         if isinstance(mode, str) and mode.strip():
@@ -949,13 +1035,13 @@ class StepExecutor:
 
         error_message: str | None = None
         try:
-            # Р’СЃРµРіРґР° РїРѕР»СѓС‡Р°РµРј Р°РіРµРЅС‚ С‡РµСЂРµР· СЂРµРµСЃС‚СЂ, Р±РµР· РІРѕР·РјРѕР¶РЅРѕСЃС‚Рё РїСЂСЏРјРѕРіРѕ СЃРѕР·РґР°РЅРёСЏ
+            # Р вЂ™РЎРѓР ВµР С–Р Т‘Р В° Р С—Р С•Р В»РЎС“РЎвЂЎР В°Р ВµР С Р В°Р С–Р ВµР Р…РЎвЂљ РЎвЂЎР ВµРЎР‚Р ВµР В· РЎР‚Р ВµР ВµРЎРѓРЎвЂљРЎР‚, Р В±Р ВµР В· Р Р†Р С•Р В·Р СР С•Р В¶Р Р…Р С•РЎРѓРЎвЂљР С‘ Р С—РЎР‚РЎРЏР СР С•Р С–Р С• РЎРѓР С•Р В·Р Т‘Р В°Р Р…Р С‘РЎРЏ
             agent = self._get_agent_from_registry(step.agent, run_id)
 
             # Apply input_mapping from step definition to context.state
             step_payload = dict(step_payload_for_hash)
 
-            # Р›РѕРіРёСЂСѓРµРј РёРЅС„РѕСЂРјР°С†РёСЋ Рѕ РІС‹Р·РѕРІРµ Р°РіРµРЅС‚Р°
+            # Р вЂєР С•Р С–Р С‘РЎР‚РЎС“Р ВµР С Р С‘Р Р…РЎвЂћР С•РЎР‚Р СР В°РЎвЂ Р С‘РЎР‹ Р С• Р Р†РЎвЂ№Р В·Р С•Р Р†Р Вµ Р В°Р С–Р ВµР Р…РЎвЂљР В°
             self._log_event(
                 logging.DEBUG,
                 run_id,
@@ -967,8 +1053,8 @@ class StepExecutor:
                 else type(step_payload).__name__,
             )
 
-            # РЎРѕР·РґР°РµРј РєРѕРЅС‚РµРєСЃС‚ РІС‹РїРѕР»РЅРµРЅРёСЏ РґР»СЏ Р°РіРµРЅС‚Р°, РєРѕС‚РѕСЂС‹Р№ РІРєР»СЋС‡Р°РµС‚ РІ СЃРµР±СЏ state Рё РјРµС‚РѕРґС‹ РґРѕСЃС‚СѓРїР° Рє РЅРµРјСѓ
-            # РСЃРїРѕР»СЊР·СѓРµРј РѕР±СЉРµРєС‚, РєРѕС‚РѕСЂС‹Р№ РїСЂРµРґРѕСЃС‚Р°РІР»СЏРµС‚ РґРѕСЃС‚СѓРї Рє СЃРѕСЃС‚РѕСЏРЅРёСЋ РєР°Рє С‡РµСЂРµР· Р°С‚СЂРёР±СѓС‚ state, С‚Р°Рє Рё С‡РµСЂРµР· РјРµС‚РѕРґ get
+            # Р РЋР С•Р В·Р Т‘Р В°Р ВµР С Р С”Р С•Р Р…РЎвЂљР ВµР С”РЎРѓРЎвЂљ Р Р†РЎвЂ№Р С—Р С•Р В»Р Р…Р ВµР Р…Р С‘РЎРЏ Р Т‘Р В»РЎРЏ Р В°Р С–Р ВµР Р…РЎвЂљР В°, Р С”Р С•РЎвЂљР С•РЎР‚РЎвЂ№Р в„– Р Р†Р С”Р В»РЎР‹РЎвЂЎР В°Р ВµРЎвЂљ Р Р† РЎРѓР ВµР В±РЎРЏ state Р С‘ Р СР ВµРЎвЂљР С•Р Т‘РЎвЂ№ Р Т‘Р С•РЎРѓРЎвЂљРЎС“Р С—Р В° Р С” Р Р…Р ВµР СРЎС“
+            # Р ВРЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С Р С•Р В±РЎР‰Р ВµР С”РЎвЂљ, Р С”Р С•РЎвЂљР С•РЎР‚РЎвЂ№Р в„– Р С—РЎР‚Р ВµР Т‘Р С•РЎРѓРЎвЂљР В°Р Р†Р В»РЎРЏР ВµРЎвЂљ Р Т‘Р С•РЎРѓРЎвЂљРЎС“Р С— Р С” РЎРѓР С•РЎРѓРЎвЂљР С•РЎРЏР Р…Р С‘РЎР‹ Р С”Р В°Р С” РЎвЂЎР ВµРЎР‚Р ВµР В· Р В°РЎвЂљРЎР‚Р С‘Р В±РЎС“РЎвЂљ state, РЎвЂљР В°Р С” Р С‘ РЎвЂЎР ВµРЎР‚Р ВµР В· Р СР ВµРЎвЂљР С•Р Т‘ get
 
             mapped_overrides: dict[str, Any] = {}
             if step.input_mapping and isinstance(step_payload, dict):
@@ -1079,7 +1165,7 @@ class StepExecutor:
             if not isinstance(output, dict):
                 raise TypeError("Agent output must be a dict")
 
-            # Р›РѕРіРёСЂСѓРµРј СЂРµР·СѓР»СЊС‚Р°С‚ РІС‹РїРѕР»РЅРµРЅРёСЏ Р°РіРµРЅС‚Р°
+            # Р вЂєР С•Р С–Р С‘РЎР‚РЎС“Р ВµР С РЎР‚Р ВµР В·РЎС“Р В»РЎРЉРЎвЂљР В°РЎвЂљ Р Р†РЎвЂ№Р С—Р С•Р В»Р Р…Р ВµР Р…Р С‘РЎРЏ Р В°Р С–Р ВµР Р…РЎвЂљР В°
             self._log_event(
                 logging.DEBUG,
                 run_id,
@@ -1089,14 +1175,14 @@ class StepExecutor:
                 output_status=output.get("status", "unknown"),
             )
 
-            # РЎРЅР°С‡Р°Р»Р° РїСЂРѕРІРµСЂСЏРµРј СЃС…РµРјСѓ СЃ РѕСЂРёРіРёРЅР°Р»СЊРЅС‹Рј СЂРµР·СѓР»СЊС‚Р°С‚РѕРј
+            # Р РЋР Р…Р В°РЎвЂЎР В°Р В»Р В° Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С РЎРѓРЎвЂ¦Р ВµР СРЎС“ РЎРѓ Р С•РЎР‚Р С‘Р С–Р С‘Р Р…Р В°Р В»РЎРЉР Р…РЎвЂ№Р С РЎР‚Р ВµР В·РЎС“Р В»РЎРЉРЎвЂљР В°РЎвЂљР С•Р С
             validation_payload = self._sanitize_output_for_validation(output)
 
             validation_errors = self.schema_validator.validate_step_output(
                 step.name, validation_payload
             )
             if validation_errors:
-                # Р•СЃР»Рё РµСЃС‚СЊ РѕС€РёР±РєРё РІР°Р»РёРґР°С†РёРё, РЅРѕСЂРјР°Р»РёР·СѓРµРј СЂРµР·СѓР»СЊС‚Р°С‚ Рё РґРѕР±Р°РІР»СЏРµРј РѕС€РёР±РєРё
+                # Р вЂўРЎРѓР В»Р С‘ Р ВµРЎРѓРЎвЂљРЎРЉ Р С•РЎв‚¬Р С‘Р В±Р С”Р С‘ Р Р†Р В°Р В»Р С‘Р Т‘Р В°РЎвЂ Р С‘Р С‘, Р Р…Р С•РЎР‚Р СР В°Р В»Р С‘Р В·РЎС“Р ВµР С РЎР‚Р ВµР В·РЎС“Р В»РЎРЉРЎвЂљР В°РЎвЂљ Р С‘ Р Т‘Р С•Р В±Р В°Р Р†Р В»РЎРЏР ВµР С Р С•РЎв‚¬Р С‘Р В±Р С”Р С‘
                 normalized_output = self._normalize_agent_output(validation_payload)
                 existing_errors = normalized_output.get("validation_errors", [])
                 normalized_errors = (
@@ -1106,7 +1192,7 @@ class StepExecutor:
                 normalized_output["validation_errors"] = normalized_errors
                 output = normalized_output
                 if self.strict_schema_validation:
-                    # Р’ СЃС‚СЂРѕРіРѕРј СЂРµР¶РёРјРµ РІР°Р»РёРґР°С†РёРё РІРѕР·РІСЂР°С‰Р°РµРј РѕС€РёР±РєСѓ
+                    # Р вЂ™ РЎРѓРЎвЂљРЎР‚Р С•Р С–Р С•Р С РЎР‚Р ВµР В¶Р С‘Р СР Вµ Р Р†Р В°Р В»Р С‘Р Т‘Р В°РЎвЂ Р С‘Р С‘ Р Р†Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµР С Р С•РЎв‚¬Р С‘Р В±Р С”РЎС“
                     error_message = "; ".join(validation_errors)
                     self._log_event(
                         logging.WARNING,
@@ -1119,7 +1205,7 @@ class StepExecutor:
                     )
                     output = self._error_result(f"Schema validation failed: {error_message}")
                 else:
-                    # Р’ РЅРµСЃС‚СЂРѕРіРѕРј СЂРµР¶РёРјРµ РїСЂРѕРґРѕР»Р¶Р°РµРј СЃ РЅРѕСЂРјР°Р»РёР·РѕРІР°РЅРЅС‹Рј СЂРµР·СѓР»СЊС‚Р°С‚РѕРј
+                    # Р вЂ™ Р Р…Р ВµРЎРѓРЎвЂљРЎР‚Р С•Р С–Р С•Р С РЎР‚Р ВµР В¶Р С‘Р СР Вµ Р С—РЎР‚Р С•Р Т‘Р С•Р В»Р В¶Р В°Р ВµР С РЎРѓ Р Р…Р С•РЎР‚Р СР В°Р В»Р С‘Р В·Р С•Р Р†Р В°Р Р…Р Р…РЎвЂ№Р С РЎР‚Р ВµР В·РЎС“Р В»РЎРЉРЎвЂљР В°РЎвЂљР С•Р С
                     error_message = "; ".join(validation_errors)
                     self._log_event(
                         logging.WARNING,
@@ -1131,7 +1217,7 @@ class StepExecutor:
                         strict_mode=self.strict_schema_validation,
                     )
             else:
-                # Р•СЃР»Рё РѕС€РёР±РѕРє РІР°Р»РёРґР°С†РёРё РЅРµС‚, РЅРѕСЂРјР°Р»РёР·СѓРµРј СЂРµР·СѓР»СЊС‚Р°С‚ РґР»СЏ СЃРѕРіР»Р°СЃРѕРІР°РЅРЅРѕСЃС‚Рё
+                # Р вЂўРЎРѓР В»Р С‘ Р С•РЎв‚¬Р С‘Р В±Р С•Р С” Р Р†Р В°Р В»Р С‘Р Т‘Р В°РЎвЂ Р С‘Р С‘ Р Р…Р ВµРЎвЂљ, Р Р…Р С•РЎР‚Р СР В°Р В»Р С‘Р В·РЎС“Р ВµР С РЎР‚Р ВµР В·РЎС“Р В»РЎРЉРЎвЂљР В°РЎвЂљ Р Т‘Р В»РЎРЏ РЎРѓР С•Р С–Р В»Р В°РЎРѓР С•Р Р†Р В°Р Р…Р Р…Р С•РЎРѓРЎвЂљР С‘
                 output = self._normalize_agent_output(validation_payload)
 
             step_status = self._normalize_step_status(output.get("status"))
@@ -1149,7 +1235,7 @@ class StepExecutor:
             output = self._error_result(f"Agent '{step.agent}' failed: {exc}")
             step_status = StepStatus.FAILED
 
-        if step_status in {StepStatus.SUCCESS, StepStatus.PARTIAL_SUCCESS}:
+        if step_status in {StepStatus.SUCCESS, StepStatus.PARTIAL_SUCCESS, StepStatus.BLOCKED}:
             try:
                 self._apply_output_mapping(step, context, output)
             except Exception as exc:  # pylint: disable=broad-except
@@ -1179,13 +1265,14 @@ class StepExecutor:
             input_hash=step_input_hash,
         )
         self._log_event(
-            logging.INFO if step_status == StepStatus.SUCCESS else logging.ERROR,
+            self._resolve_step_end_log_level(step_status),
             run_id,
             "step_end",
             step_name=step.name,
             agent=step.agent,
             pipeline_name=context.pipeline_name,
             status=step_status.value,
+            reason=self._extract_primary_reason(output),
             correlation_id=correlation_id,
             trace_id=trace_id,
             span_id=span_id,

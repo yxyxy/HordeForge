@@ -11,6 +11,7 @@ import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +284,315 @@ class PatchWorkflowOrchestrator:
             return True
         except Exception:
             return False
+
+
+def _normalize_patch_path(path: str) -> str:
+    return str(path or "").strip().replace("\\", "/").lstrip("/")
+
+
+def _read_patch_target(base_dir: Path, relative_path: str) -> str | None:
+    target = base_dir / relative_path
+    if not target.exists() or not target.is_file():
+        return None
+    try:
+        return target.read_text(encoding="utf-8")
+    except Exception:
+        return None
+
+
+def _strip_end_of_file_marker(lines: list[str]) -> list[str]:
+    return [line for line in lines if line != "*** End of File"]
+
+
+def _apply_update_block(current: str, block_lines: list[str]) -> str:
+    normalized_lines = _strip_end_of_file_marker(block_lines)
+    chunks: list[list[str]] = []
+    current_chunk: list[str] = []
+    for line in normalized_lines:
+        if line.startswith("@@"):
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = []
+            continue
+        current_chunk.append(line)
+    if current_chunk:
+        chunks.append(current_chunk)
+    if not chunks and normalized_lines:
+        chunks = [normalized_lines]
+
+    updated = current
+    for chunk in chunks:
+        old_lines: list[str] = []
+        new_lines: list[str] = []
+        for raw_line in chunk:
+            if not raw_line:
+                prefix = " "
+                text = ""
+            else:
+                prefix = raw_line[0]
+                text = raw_line[1:] if prefix in {" ", "+", "-"} else raw_line
+            if prefix in {" ", "-"}:
+                old_lines.append(text)
+            if prefix in {" ", "+"}:
+                new_lines.append(text)
+
+        old_block = "\n".join(old_lines)
+        new_block = "\n".join(new_lines)
+        if chunk:
+            old_block += "\n"
+            new_block += "\n"
+
+        if not old_block.strip() and new_block:
+            updated = updated + new_block
+            continue
+
+        if old_block not in updated:
+            raise ValueError("context mismatch while applying update hunk")
+        updated = updated.replace(old_block, new_block, 1)
+    return updated
+
+
+def materialize_patch_text(
+    patch_data: str,
+    *,
+    base_dir: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    normalized = str(patch_data or "").replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+    if not normalized:
+        raise ValueError("empty patch")
+
+    lines = normalized.split("\n")
+    if not lines or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
+        raise ValueError("patch missing begin/end markers")
+
+    root = Path(base_dir) if base_dir is not None else Path.cwd()
+    result: list[dict[str, Any]] = []
+    index = 1
+
+    while index < len(lines) - 1:
+        header = lines[index]
+        if header.startswith("*** Add File: "):
+            path = _normalize_patch_path(header.removeprefix("*** Add File: "))
+            index += 1
+            content_lines: list[str] = []
+            while index < len(lines) - 1 and not lines[index].startswith("*** "):
+                line = lines[index]
+                if not line.startswith("+"):
+                    raise ValueError(f"invalid add-file line for {path}")
+                content_lines.append(line[1:])
+                index += 1
+            result.append(
+                {
+                    "path": path,
+                    "change_type": "create",
+                    "content": "\n".join(content_lines) + ("\n" if content_lines else ""),
+                }
+            )
+            continue
+
+        if header.startswith("*** Delete File: "):
+            path = _normalize_patch_path(header.removeprefix("*** Delete File: "))
+            result.append({"path": path, "change_type": "delete", "content": ""})
+            index += 1
+            continue
+
+        if header.startswith("*** Update File: "):
+            path = _normalize_patch_path(header.removeprefix("*** Update File: "))
+            move_to: str | None = None
+            index += 1
+            if index < len(lines) - 1 and lines[index].startswith("*** Move to: "):
+                move_to = _normalize_patch_path(lines[index].removeprefix("*** Move to: "))
+                index += 1
+            block_lines: list[str] = []
+            while index < len(lines) - 1 and not lines[index].startswith("*** "):
+                block_lines.append(lines[index])
+                index += 1
+            current = _read_patch_target(root, path)
+            if current is None:
+                raise ValueError(f"failed to read file to update: {path}")
+            updated = _apply_update_block(current.replace("\r\n", "\n"), block_lines)
+            if move_to:
+                result.append({"path": path, "change_type": "delete", "content": ""})
+                result.append({"path": move_to, "change_type": "create", "content": updated})
+            else:
+                result.append({"path": path, "change_type": "modify", "content": updated})
+            continue
+
+        raise ValueError(f"unsupported patch header: {header}")
+
+    if not result:
+        raise ValueError("empty patch")
+    return result
+
+
+def _merge_materialized_files(
+    left: list[dict[str, Any]], right: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    latest: dict[str, dict[str, Any]] = {}
+    for item in [*(left or []), *(right or [])]:
+        if not isinstance(item, dict):
+            continue
+        path = _normalize_patch_path(str(item.get("path", "")))
+        if not path:
+            continue
+        normalized = dict(item)
+        normalized["path"] = path
+        latest[path] = normalized
+    for item in [*(left or []), *(right or [])]:
+        if not isinstance(item, dict):
+            continue
+        path = _normalize_patch_path(str(item.get("path", "")))
+        if not path:
+            continue
+        if latest.get(path) is None:
+            continue
+        merged.append(latest.pop(path))
+    merged.extend(latest.values())
+    return merged
+
+
+def materialize_patch_operations(
+    operations: Any,
+    *,
+    base_dir: str | Path | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if not isinstance(operations, list) or not operations:
+        return [], []
+
+    root = Path(base_dir) if base_dir is not None else Path.cwd()
+    staged_contents: dict[str, str | None] = {}
+    touched_paths: list[str] = []
+    notes: list[str] = []
+
+    for index, operation in enumerate(operations):
+        if not isinstance(operation, dict):
+            notes.append(f"invalid_operation_schema:index={index}")
+            continue
+
+        operation_type = str(operation.get("type", "")).strip().lower()
+        if operation_type not in {"edit", "write"}:
+            notes.append(f"invalid_operation_type:index={index}")
+            continue
+
+        normalized_path = _normalize_patch_path(str(operation.get("path", "")))
+        if not normalized_path or ".." in normalized_path.split("/"):
+            notes.append(f"invalid_operation_path:index={index}")
+            continue
+
+        current_content = (
+            staged_contents[normalized_path]
+            if normalized_path in staged_contents
+            else _read_patch_target(root, normalized_path)
+        )
+        file_exists = current_content is not None
+
+        if operation_type == "write":
+            change_type = str(operation.get("change_type", "")).strip().lower()
+            if change_type not in {"create", "modify", "delete"}:
+                change_type = "modify" if file_exists else "create"
+            content = str(operation.get("content", ""))
+            staged_contents[normalized_path] = "" if change_type == "delete" else content
+            touched_paths.append(normalized_path)
+            continue
+
+        old_string = str(operation.get("old_string", ""))
+        new_string = str(operation.get("new_string", ""))
+        replace_all = bool(operation.get("replace_all", False))
+        if old_string == new_string:
+            notes.append(f"operation_no_change:{normalized_path}")
+            continue
+        if not file_exists:
+            if old_string == "":
+                staged_contents[normalized_path] = new_string
+                touched_paths.append(normalized_path)
+                continue
+            notes.append(f"operation_target_missing:{normalized_path}")
+            continue
+        if current_content is None:
+            notes.append(f"operation_read_failed:{normalized_path}")
+            continue
+        occurrences = current_content.count(old_string)
+        if occurrences == 0:
+            notes.append(f"operation_old_string_not_found:{normalized_path}")
+            continue
+        if occurrences > 1 and not replace_all:
+            notes.append(f"operation_ambiguous_match:{normalized_path}")
+            continue
+        updated_content = (
+            current_content.replace(old_string, new_string)
+            if replace_all
+            else current_content.replace(old_string, new_string, 1)
+        )
+        staged_contents[normalized_path] = updated_content
+        touched_paths.append(normalized_path)
+
+    materialized: list[dict[str, Any]] = []
+    for path in touched_paths:
+        if path not in staged_contents:
+            continue
+        content = staged_contents[path]
+        if content is None:
+            continue
+        original = _read_patch_target(root, path)
+        change_type = "modify" if original is not None else "create"
+        if content == "":
+            change_type = "delete"
+        materialized.append(
+            {
+                "path": path,
+                "change_type": change_type,
+                "content": content,
+            }
+        )
+
+    return _merge_materialized_files([], materialized), notes
+
+
+def resolve_code_patch_files(
+    code_patch: dict[str, Any] | None,
+    *,
+    base_dir: str | Path | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if not isinstance(code_patch, dict):
+        return [], []
+
+    notes: list[str] = []
+    materialized: list[dict[str, Any]] = []
+
+    patch_text = str(code_patch.get("patch_text", "") or "").strip()
+    if patch_text:
+        try:
+            materialized = _merge_materialized_files(
+                materialized,
+                materialize_patch_text(patch_text, base_dir=base_dir),
+            )
+        except ValueError as exc:
+            notes.append(f"invalid_patch_text:{str(exc)[:200]}")
+
+    operation_files, operation_notes = materialize_patch_operations(
+        code_patch.get("operations", []),
+        base_dir=base_dir,
+    )
+    materialized = _merge_materialized_files(materialized, operation_files)
+    notes.extend(operation_notes)
+
+    test_operation_files, test_operation_notes = materialize_patch_operations(
+        code_patch.get("test_operations", []),
+        base_dir=base_dir,
+    )
+    materialized = _merge_materialized_files(materialized, test_operation_files)
+    notes.extend(test_operation_notes)
+
+    files = code_patch.get("files")
+    if isinstance(files, list):
+        materialized = _merge_materialized_files(materialized, files)
+
+    test_changes = code_patch.get("test_changes")
+    if isinstance(test_changes, list):
+        materialized = _merge_materialized_files(materialized, test_changes)
+
+    return materialized, notes
 
 
 # Convenience functions for backward compatibility with tests

@@ -280,6 +280,17 @@ def _sanitize_run_result(result: dict[str, Any] | None) -> dict[str, Any]:
     return redact_sensitive_data(result) if isinstance(result, dict) else {}
 
 
+def _snapshot_mapping_items(value: dict[Any, Any]) -> list[tuple[Any, Any]]:
+    """Take a best-effort snapshot of dict items under concurrent mutation."""
+    for _ in range(3):
+        try:
+            return list(value.items())
+        except RuntimeError as exc:
+            if "dictionary changed size during iteration" not in str(exc):
+                raise
+    return []
+
+
 def _remember_runtime_inputs(run_id: str, inputs: dict[str, Any]) -> None:
     RUN_RUNTIME_INPUTS[run_id] = dict(inputs if isinstance(inputs, dict) else {})
 
@@ -730,7 +741,7 @@ def _persist_step_and_artifact_logs(run_record: RunRecord) -> None:
 
     step_logs: list[StepLogRecord] = []
     artifacts: list[ArtifactRecord] = []
-    for step_name, step_result in steps.items():
+    for step_name, step_result in _snapshot_mapping_items(steps):
         if not isinstance(step_result, dict):
             continue
         step_state = run_state_steps.get(step_name, {})

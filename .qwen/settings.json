@@ -4,7 +4,9 @@
       "Bash(ruff *)",
       "Bash(pytest *)",
       "Bash(python *)",
-      "Bash(d:\\python\\python.exe *)"
+      "Bash(d:\\python\\python.exe *)",
+      "Bash(py *)",
+      "Bash(dir *)"
     ]
   },
   "$version": 3
