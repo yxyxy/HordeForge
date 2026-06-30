@@ -5,6 +5,7 @@ import logging
 import os
 import random
 import re
+import subprocess
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Generator
@@ -37,6 +38,11 @@ from agents.qwen_dashscope import (
     to_dashscope_content_parts as to_qwen_dashscope_content_parts,
 )
 from logging_utils import redact_sensitive_data
+from observability.circuit_breaker import (
+    CircuitBreakerConfig,
+    CircuitBreakerOpenError,
+    get_circuit_breaker_registry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -442,6 +448,57 @@ class SessionLoggingLLMWrapper(LLMWrapper):
                     )
                 )
             raise
+
+    def close(self) -> None:
+        self._delegate.close()
+
+
+class CircuitBreakerLLMWrapper(LLMWrapper):
+    """Decorator that wraps LLM calls with circuit breaker protection."""
+
+    def __init__(self, delegate: LLMWrapper, provider_name: str | None = None):
+        model = str(getattr(delegate, "_model", "") or "unknown")
+        super().__init__(api_key="", model=model, timeout=DEFAULT_TIMEOUT, max_retries=1)
+        self._delegate = delegate
+        self._provider_name = provider_name or delegate.__class__.__name__
+        self._circuit_breaker = get_circuit_breaker_registry().get_or_create(
+            name=f"llm.{provider_name or model}",
+            config=CircuitBreakerConfig(
+                failure_threshold=5,
+                success_threshold=2,
+                timeout_seconds=60.0,
+                half_open_max_calls=3,
+                ignore_exceptions=(RuntimeError,),
+            ),
+        )
+
+    def _get_api_key_from_env(self) -> str:
+        return ""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def complete(self, prompt: str, **kwargs) -> str:
+        def _call() -> str:
+            return self._delegate.complete(prompt, **kwargs)
+
+        try:
+            return self._circuit_breaker.call(_call)
+        except CircuitBreakerOpenError as exc:
+            raise RuntimeError(
+                f"LLM provider '{self._provider_name}' temporarily unavailable "
+                f"(circuit breaker open): {exc}"
+            ) from exc
+
+    def complete_stream(self, prompt: str, **kwargs) -> Generator[str, None, None]:
+        try:
+            # Yield chunks directly without buffering to avoid memory issues
+            yield from self._delegate.complete_stream(prompt, **kwargs)
+        except CircuitBreakerOpenError as exc:
+            raise RuntimeError(
+                f"LLM provider '{self._provider_name}' temporarily unavailable "
+                f"(circuit breaker open): {exc}"
+            ) from exc
 
     def close(self) -> None:
         self._delegate.close()
@@ -995,7 +1052,6 @@ class QwenCodeWrapper(LLMWrapper):
     """Qwen Code wrapper backed by OAuth credentials JSON from profile store."""
 
     _AUTH_FAILURE_COOLDOWN_SECONDS = 300
-    _auth_failure_until_by_fingerprint: dict[str, float] = {}
 
     def __init__(
         self,
@@ -1009,6 +1065,7 @@ class QwenCodeWrapper(LLMWrapper):
         super().__init__(
             api_key=oauth_credentials_json, model=model, timeout=timeout, max_retries=max_retries
         )
+        self._auth_failure_until_by_fingerprint: dict[str, float] = {}
         from agents.qwen_oauth_token_manager import QwenOAuthTokenManager
 
         self._token_manager = QwenOAuthTokenManager(
@@ -1114,7 +1171,8 @@ class QwenCodeWrapper(LLMWrapper):
             if callable(body):
                 try:
                     body = body()
-                except Exception:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("response_body_attr_access_failed error=%s", e)
                     body = None
             if body is None:
                 body = getattr(response, "body", None)
@@ -1145,8 +1203,8 @@ class QwenCodeWrapper(LLMWrapper):
                         code = error_obj.get("code")
                         if isinstance(code, str) and code.strip():
                             error_code = code.strip()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.debug("error_response_body_parse_failed error=%s", e)
         raw_excerpt = raw_body[:500]
         return {
             "status_code": status_code,
@@ -1210,6 +1268,7 @@ class QwenCodeWrapper(LLMWrapper):
                 if text:
                     return text
         except Exception as exc:  # noqa: BLE001
+            logger.debug("qwen_non_stream_fallback error=%s", exc)
             non_stream_error = exc
 
         try:
@@ -1312,7 +1371,7 @@ class QwenCodeWrapper(LLMWrapper):
                     attempt,
                     sleep_seconds,
                 )
-                time.sleep(sleep_seconds)
+                time.sleep(sleep_seconds)  # Blocking: sync LLM retry backoff
 
         raise RuntimeError(f"Qwen Code API call failed: {last_exc}") from last_exc
 
@@ -1435,7 +1494,7 @@ class QwenCodeWrapper(LLMWrapper):
                     attempt,
                     sleep_seconds,
                 )
-                time.sleep(sleep_seconds)
+                time.sleep(sleep_seconds)  # Blocking: sync LLM retry backoff
 
         raise RuntimeError(f"Qwen Code API call failed: {last_exc}") from last_exc
 
@@ -1461,6 +1520,65 @@ class QwenCodeWrapper(LLMWrapper):
 
     def close(self) -> None:
         return None
+
+
+class MimoAutoWrapper(LLMWrapper):
+    """Wrapper for MiMo Code CLI (subprocess-based)."""
+
+    def __init__(
+        self,
+        model: str = "mimo-auto",
+        timeout: int = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        **kwargs,
+    ):
+        super().__init__(api_key="mimo-cli", model=model, timeout=timeout, max_retries=max_retries)
+        self._mimo_cmd = self._find_mimo_command()
+
+    @staticmethod
+    def _find_mimo_command() -> str | None:
+        import shutil
+
+        mimo_path = shutil.which("mimo")
+        if mimo_path:
+            return mimo_path
+        npm_path = os.path.expanduser("~/AppData/Roaming/npm/mimo.cmd")
+        if os.path.exists(npm_path):
+            return npm_path
+        return None
+
+    def _get_api_key_from_env(self) -> str:
+        return ""
+
+    def complete(self, prompt: str, **kwargs) -> str:
+        if not self._mimo_cmd:
+            raise RuntimeError("'mimo' command not found. Install MiMo Code first.")
+
+        system_prompt = kwargs.get("system_prompt", "")
+        full_prompt = prompt
+        if system_prompt:
+            full_prompt = f"System: {system_prompt}\n\nUser: {prompt}"
+
+        try:
+            result = subprocess.run(
+                [self._mimo_cmd, "run", full_prompt],
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+            raise RuntimeError(f"mimo run failed: {result.stderr}")
+        except FileNotFoundError as err:
+            raise RuntimeError("'mimo' command not found. Install MiMo Code first.") from err
+        except subprocess.TimeoutExpired as err:
+            raise RuntimeError(f"mimo run timed out after {self._timeout}s") from err
+
+    def complete_stream(self, prompt: str, **kwargs) -> Generator[str, None, None]:
+        yield self.complete(prompt, **kwargs)
+
+    def close(self) -> None:
+        pass
 
 
 class ProfileFallbackLLMWrapper(LLMWrapper):
@@ -1552,8 +1670,10 @@ class ProfileFallbackLLMWrapper(LLMWrapper):
                 if wrapper is not None:
                     try:
                         wrapper.close()
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug(
+                            "llm_profile_close_failed profile=%s error=%s", profile_name, e
+                        )
         raise RuntimeError(
             "All configured LLM profiles failed. "
             + (" | ".join(errors) if errors else "No profile candidates available.")
@@ -1580,8 +1700,10 @@ class ProfileFallbackLLMWrapper(LLMWrapper):
                 if wrapper is not None:
                     try:
                         wrapper.close()
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug(
+                            "llm_profile_close_failed profile=%s error=%s", profile_name, e
+                        )
         raise RuntimeError(
             "All configured LLM profiles failed in stream mode. "
             + (" | ".join(errors) if errors else "No profile candidates available.")
@@ -1600,7 +1722,8 @@ def _load_profile_defaults(profile_name: str | None = None) -> dict[str, Any] | 
             from cli.repo_store import get_llm_profile as _local_get
 
             profile = _local_get(profile_name)
-        except Exception:
+        except Exception as e:  # noqa: BLE001
+            logger.debug("local_profile_load_failed profile=%s error=%s", profile_name, e)
             profile = None
 
     if not isinstance(profile, dict):
@@ -1652,18 +1775,19 @@ def _load_secret_with_gateway_fallback(key: str) -> str | None:
                         from cli.repo_store import set_secret_value
 
                         set_secret_value(key, value)
-                    except Exception:
-                        pass
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug("secret_sync_to_local_failed key=%s error=%s", key, e)
                     return value
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.debug("gateway_secret_fetch_failed key=%s error=%s", key, e)
 
     # Fall back to local secrets.json
     try:
         from cli.repo_store import get_secret_value
 
         return get_secret_value(key)
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        logger.debug("local_secret_fallback_failed key=%s error=%s", key, e)
         return None
 
 
@@ -1678,10 +1802,8 @@ def _load_profile_from_gateway(profile_name: str | None = None) -> dict[str, Any
         api_key = os.getenv("HORDEFORGE_OPERATOR_API_KEY")
         if not gateway_url:
             return None
-        params = {"profile_name": profile_name} if profile_name else None
         resp = _requests.get(
             f"{gateway_url}/llm/profiles",
-            params=params,
             headers={"Authorization": f"Bearer {api_key}"} if api_key else None,
             timeout=5,
         )
@@ -1693,16 +1815,23 @@ def _load_profile_from_gateway(profile_name: str | None = None) -> dict[str, Any
             return direct_profile
         profiles = data.get("profiles")
         if isinstance(profiles, list):
-            selected: dict[str, Any] | None = None
+            if profile_name:
+                for item in profiles:
+                    if isinstance(item, dict) and item.get("profile_name") == profile_name:
+                        return item
+            default_profile = None
             for item in profiles:
                 if not isinstance(item, dict):
                     continue
                 if bool(item.get("is_default")):
-                    return item
-                if selected is None:
-                    selected = item
-            return selected
-    except Exception:
+                    default_profile = item
+                    break
+            if default_profile is not None:
+                return default_profile
+            if profiles:
+                return profiles[0]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("gateway_profile_load_failed profile=%s error=%s", profile_name, e)
         return None
     return None
 
@@ -1729,7 +1858,8 @@ def _load_profiles_from_gateway() -> list[dict[str, Any]]:
         profiles = data.get("profiles")
         if isinstance(profiles, list):
             return [item for item in profiles if isinstance(item, dict)]
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        logger.debug("gateway_profiles_load_failed error=%s", e)
         return []
     return []
 
@@ -1744,7 +1874,8 @@ def _load_profile_candidates(profile_name: str | None = None) -> list[dict[str, 
 
             listed = list_llm_profiles()
             get_profile = get_llm_profile
-        except Exception:
+        except Exception as e:  # noqa: BLE001
+            logger.debug("local_profiles_load_failed error=%s", e)
             return []
     if not isinstance(listed, list) or not listed:
         return []
@@ -1861,6 +1992,8 @@ def get_llm_wrapper(
             env_var_name="QWEN_API_KEY",
             **kwargs,
         )
+    elif resolved_provider == "mimo":
+        wrapper = MimoAutoWrapper(**kwargs)
     elif resolved_provider == "qwen-code":
         oauth_json = kwargs.get("api_key")
         if not isinstance(oauth_json, str) or not oauth_json.strip():
@@ -1878,13 +2011,18 @@ def get_llm_wrapper(
     if wrapper is None:
         return None
 
-    if isinstance(wrapper, SessionLoggingLLMWrapper):
+    if isinstance(wrapper, CircuitBreakerLLMWrapper):
         return wrapper
 
-    if _llm_session_logging_mode() == "off":
-        return wrapper
+    # Wrap with session logging
+    if not isinstance(wrapper, SessionLoggingLLMWrapper):
+        if _llm_session_logging_mode() != "off":
+            wrapper = SessionLoggingLLMWrapper(wrapper, provider_name=resolved_provider)
 
-    return SessionLoggingLLMWrapper(wrapper, provider_name=resolved_provider)
+    # Wrap with circuit breaker (outermost layer)
+    wrapper = CircuitBreakerLLMWrapper(wrapper, provider_name=resolved_provider)
+
+    return wrapper
 
 
 # Backward compatibility imports and utilities
@@ -1941,8 +2079,8 @@ def _ensure_backward_compatibility():
     if init_logging is not None and callable(init_logging):
         try:
             init_logging()
-        except Exception:
-            pass  # Ignore initialization errors
+        except Exception as e:  # noqa: BLE001
+            logger.debug("backward_compatibility_init_failed error=%s", e)
 
 
 # Initialize backward compatibility on module load
@@ -2642,8 +2780,8 @@ def _get_code_prompt_template() -> str:
     if template_path.exists():
         try:
             return template_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            logger.debug("prompt_template_read_failed path=%s error=%s", template_path, e)
     return (
         "You are a senior __LANGUAGE_TITLE__ engineer. Generate a minimal repository patch "
         "that satisfies the specification.\n\n"
@@ -2769,7 +2907,7 @@ def _extract_relevant_code(repo_context: dict[str, Any], spec: dict[str, Any]) -
         content = file_contents.get(f, "")
         if content:
             relevant.append(f"=== {f} ===\n{content}")
-        if len(relevant) >= 3:
+        if len(relevant) >= 6:
             break
 
     if not relevant:

@@ -1,4 +1,4 @@
-﻿# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7
 # Stage 1: Builder with only install dependencies
 FROM python:3.11-slim AS builder
 
@@ -32,6 +32,13 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js and MiMo Code CLI
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g @mimo-ai/cli \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder
