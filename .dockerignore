@@ -1,4 +1,4 @@
-﻿.git
+.git
 .gitignore
 __pycache__/
 *.pyc
@@ -34,3 +34,21 @@ examples/
 coverage.xml
 KODA.md
 AGENTS.md
+.generated/
+.hordeforge_data/
+.mimocode/
+.qwen/
+.research/
+.temp/
+.tmp/
+.clinerules/
+.github/
+HordeForge.egg-info/
+kubernetes/
+legacy/
+Makefile
+scripts/
+workspace/
+pytest_report.json
+test_output.txt
+bandit-report.json

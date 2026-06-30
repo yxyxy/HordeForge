@@ -33,7 +33,7 @@ services:
     depends_on: []
     command: uvicorn scheduler.gateway:app --host 0.0.0.0 --port 8000
     ports:
-      - "8000:8000"
+      - "8010:8000"
     volumes:
       - hordeforge_data:/app/.hordeforge_data
       - hordeforge_logs:/app/logs
@@ -82,7 +82,7 @@ services:
       POSTGRES_PASSWORD: hordeforge
       POSTGRES_DB: hordeforge
     ports:
-      - "5432:5432"
+      - "15432:5432"
     volumes:
       - hordeforge_db:/var/lib/postgresql/data
     healthcheck:
@@ -96,7 +96,7 @@ services:
     container_name: hordeforge-redis
     profiles: ["team"]
     ports:
-      - "6379:6379"
+      - "16379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -108,8 +108,8 @@ services:
     container_name: hordeforge-qdrant
     profiles: ["team"]
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "16333:6333"
+      - "16334:6334"
     volumes:
       - hordeforge_qdrant_data:/qdrant/storage
     environment:
@@ -142,7 +142,7 @@ services:
       qdrant:
         condition: service_healthy
     ports:
-      - "8001:8001"
+      - "18001:8001"
 
 volumes:
   hordeforge_data:
