@@ -13,7 +13,29 @@ from pydantic import BaseModel
 from agents.base import BaseAgent
 from agents.context_utils import build_agent_result
 
+logger = logging.getLogger(__name__)
+
 WORKSPACE_REPO_PATH = Path("./workspace/repo")
+
+# Directories to skip when building file tree
+SKIP_DIRS = {
+    ".git",
+    ".svn",
+    ".hg",
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    "venv",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".hordeforge_data",
+    "dist",
+    "build",
+    ".tox",
+    ".eggs",
+    "*.egg-info",
+}
 
 
 class RepoConnector(BaseAgent):
@@ -45,7 +67,7 @@ class RepoConnector(BaseAgent):
     def _extract_repo_name(self, repo_url: str) -> str:
         """
         Extract repository name from URL in format 'owner/repo'.
-        Handles both HTTPS and SSH formats.
+        Handles both HTTPS and SSH formats, including /tree/branch suffixes.
         """
         if repo_url.startswith("git@"):
             # SSH format: git@github.com:owner/repo.git
@@ -55,9 +77,14 @@ class RepoConnector(BaseAgent):
             owner = parts[-2]
             return f"{owner}/{repo_name}"
         else:
-            # HTTPS format: https://github.com/owner/repo.git
+            # HTTPS format: https://github.com/owner/repo or /tree/branch
             parsed = urlparse(repo_url)
             path_parts = [part for part in parsed.path.strip("/").split("/") if part]
+
+            # Handle /tree/branch suffix: https://github.com/owner/repo/tree/branch
+            if len(path_parts) >= 4 and path_parts[2] == "tree":
+                path_parts = path_parts[:2]
+
             if len(path_parts) >= 2:
                 repo_name = path_parts[-1].rstrip(".git")
                 owner = path_parts[-2]
@@ -81,11 +108,20 @@ class RepoConnector(BaseAgent):
             shutil.rmtree(WORKSPACE_REPO_PATH)
 
         logger = logging.getLogger(__name__)
-        logger.info(f"Cloning repository {repo_url} -> {WORKSPACE_REPO_PATH}")
+
+        # Strip /tree/branch suffix from URL for cloning
+        clone_url = repo_url
+        if "/tree/" in clone_url:
+            parsed = urlparse(clone_url)
+            path_parts = [part for part in parsed.path.strip("/").split("/") if part]
+            if len(path_parts) >= 4 and path_parts[2] == "tree":
+                clone_url = f"{parsed.scheme}://{parsed.netloc}/{'/'.join(path_parts[:2])}"
+
+        logger.info(f"Cloning repository {clone_url} -> {WORKSPACE_REPO_PATH}")
 
         try:
             subprocess.run(
-                ["git", "clone", "--depth", "1", repo_url, str(WORKSPACE_REPO_PATH)],
+                ["git", "clone", "--depth", "1", clone_url, str(WORKSPACE_REPO_PATH)],
                 check=True,
                 capture_output=True,
             )
@@ -93,6 +129,55 @@ class RepoConnector(BaseAgent):
         except Exception as e:
             logger.error(f"Failed to clone repository: {e}")
             raise
+
+    def _build_file_tree(self, repo_path: Path, max_depth: int = 4) -> dict[str, Any]:
+        """Build a file tree of the repository.
+
+        Returns a nested dict representing the directory structure.
+        Directories are keys with dict values, files are keys with None values.
+        Limited to max_depth to avoid huge repos.
+        """
+        tree: dict[str, Any] = {}
+
+        def _should_skip(name: str) -> bool:
+            if name in SKIP_DIRS:
+                return True
+            for pattern in SKIP_DIRS:
+                if pattern.startswith("*") and name.endswith(pattern[1:]):
+                    return True
+            return False
+
+        def _walk(current: Path, depth: int) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            if depth >= max_depth:
+                return result
+            try:
+                entries = sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name))
+            except PermissionError:
+                return result
+            for entry in entries:
+                if _should_skip(entry.name):
+                    continue
+                if entry.is_dir():
+                    result[entry.name + "/"] = _walk(entry, depth + 1)
+                else:
+                    result[entry.name] = None
+            return result
+
+        if repo_path.exists():
+            tree = _walk(repo_path, 0)
+        return tree
+
+    def _file_tree_to_list(self, tree: dict[str, Any], prefix: str = "") -> list[str]:
+        """Flatten file tree dict into a list of paths."""
+        paths: list[str] = []
+        for name, value in tree.items():
+            full_path = prefix + name
+            if isinstance(value, dict):
+                paths.extend(self._file_tree_to_list(value, full_path))
+            else:
+                paths.append(full_path.rstrip("/"))
+        return paths
 
     async def connect_api(self, config: Config) -> dict[str, Any]:
         """
@@ -123,6 +208,8 @@ class RepoConnector(BaseAgent):
                     "files_structure": ["src/", "tests/", "README.md"],
                     "languages": ["python"],
                     "dependencies": ["requirements.txt"],
+                    "file_tree": {},
+                    "file_list": [],
                 },
             }
 
@@ -142,7 +229,7 @@ class RepoConnector(BaseAgent):
                 url = f"https://api.github.com/repos/{repo_name}"
                 headers = {"User-Agent": "HordeForge-RepoConnector/1.0"}
                 if config.token:
-                    headers["Authorization"] = f"Bearer {config.token}"
+                    headers["Authorization"] = f"token {config.token}"
 
                 async with self.session.get(url, headers=headers) as response:
                     if response.status == 200:
@@ -180,6 +267,7 @@ class RepoConnector(BaseAgent):
                             "details": await response.text(),
                         }
         except Exception as e:
+            logger.warning("GitHub API connection failed: %s", e, exc_info=True)
             return {"status": "failed", "error": str(e), "exception_type": type(e).__name__}
 
         # If API connection was successful, clone the repository
@@ -190,6 +278,7 @@ class RepoConnector(BaseAgent):
                 # Update the result with local path
                 api_result["local_path"] = str(local_path)
             except Exception as e:
+                logger.warning("Repository clone failed: %s", e, exc_info=True)
                 # If cloning fails, we still return the API connection result
                 # but with an added warning about the cloning failure
                 api_result["warning"] = f"Repository cloned failed: {e}"
@@ -232,7 +321,7 @@ class RepoConnector(BaseAgent):
 
                 headers = {"User-Agent": "HordeForge-RepoConnector/1.0"}
                 if config.token:
-                    headers["Authorization"] = f"Bearer {config.token}"
+                    headers["Authorization"] = f"token {config.token}"
 
                 async with self.session.get(url, params=params, headers=headers) as response:
                     if response.status == 200:
@@ -273,6 +362,7 @@ class RepoConnector(BaseAgent):
                     "supported_providers": ["github"],
                 }
         except Exception as e:
+            logger.warning("Failed to fetch issues: %s", e, exc_info=True)
             return {"status": "failed", "error": str(e), "exception_type": type(e).__name__}
 
     async def fetch_prs(self, config: Config, state: str = "open") -> dict[str, Any]:
@@ -305,7 +395,7 @@ class RepoConnector(BaseAgent):
 
                 headers = {"User-Agent": "HordeForge-RepoConnector/1.0"}
                 if config.token:
-                    headers["Authorization"] = f"Bearer {config.token}"
+                    headers["Authorization"] = f"token {config.token}"
 
                 async with self.session.get(url, params=params, headers=headers) as response:
                     if response.status == 200:
@@ -325,6 +415,7 @@ class RepoConnector(BaseAgent):
                     "supported_providers": ["github"],
                 }
         except Exception as e:
+            logger.warning("Failed to fetch PRs: %s", e, exc_info=True)
             return {"status": "failed", "error": str(e), "exception_type": type(e).__name__}
 
     def run(self, context: dict) -> dict:
@@ -476,6 +567,15 @@ class RepoConnector(BaseAgent):
                     "mock_mode": mock_mode,
                     **result.get("metadata", {}),
                 }
+
+                # Build file tree if local path exists
+                local_path = result.get("local_path")
+                if local_path:
+                    repo_path = Path(local_path)
+                    if repo_path.exists():
+                        file_tree = self._build_file_tree(repo_path)
+                        metadata["file_tree"] = file_tree
+                        metadata["file_list"] = self._file_tree_to_list(file_tree)
 
                 agent_result = build_agent_result(
                     status="SUCCESS",

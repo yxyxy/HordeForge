@@ -34,6 +34,7 @@ from cli.repo_store import (
     add_or_update_repo,
     build_repo_token_ref,
     get_repo_profile,
+    get_secret_value,
     list_repo_profiles,
     remove_repo,
     set_default_repo,
@@ -190,12 +191,7 @@ def _get_llm_profile(profile_name: str | None) -> dict[str, object] | None:
 
 
 def _get_secret_value(key: str) -> str | None:
-    try:
-        payload = _gateway_get("/secrets", params={"name": key})
-    except requests.RequestException:
-        return None
-    value = payload.get("value")
-    return value if isinstance(value, str) else None
+    return get_secret_value(key)
 
 
 def build_main_parser() -> argparse.ArgumentParser:
@@ -494,6 +490,7 @@ Examples:
             "moonshot",
             "groq",
             "claude_code",
+            "mimo",
         ],
         help="LLM provider to use",
     )
@@ -546,6 +543,7 @@ Examples:
             "moonshot",
             "groq",
             "claude_code",
+            "mimo",
         ],
         help="LLM provider",
     )
