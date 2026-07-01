@@ -79,9 +79,11 @@ class HybridRetriever:
         Returns:
             Merged and ranked results
         """
-        # Create a mapping of doc_id to its position in each result list
+        # Build dictionaries for O(1) lookup instead of O(N) linear scans
         vector_rank_map = {res["id"]: idx + 1 for idx, res in enumerate(vector_results)}
         keyword_rank_map = {res["id"]: idx + 1 for idx, res in enumerate(keyword_results)}
+        vector_dict = {res["id"]: res for res in vector_results}
+        keyword_dict = {res["id"]: res for res in keyword_results}
 
         # Get all unique document IDs
         all_doc_ids = set(vector_rank_map.keys()) | set(keyword_rank_map.keys())
@@ -93,7 +95,7 @@ class HybridRetriever:
             vector_score = 0
             if doc_id in vector_rank_map:
                 # Use the original vector similarity score weighted by alpha
-                original_score = next((r["score"] for r in vector_results if r["id"] == doc_id), 0)
+                original_score = vector_dict[doc_id].get("score", 0)
                 vector_score = alpha * original_score
 
             keyword_score = 0
@@ -111,8 +113,8 @@ class HybridRetriever:
             doc_content = None
             doc_metadata = {}
 
-            vector_result = next((r for r in vector_results if r["id"] == doc_id), None)
-            keyword_result = next((r for r in keyword_results if r["id"] == doc_id), None)
+            vector_result = vector_dict.get(doc_id)
+            keyword_result = keyword_dict.get(doc_id)
 
             if vector_result:
                 doc_content = vector_result.get("payload", {}).get("content", "")

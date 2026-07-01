@@ -93,7 +93,9 @@ class IndexingOrchestrator:
             # Stage 3: Chunking
             logger.info("Starting chunking stage...")
             chunking_start = time.time()
-            chunks = await self.chunking_stage.run(symbols)
+            # Pass file contents to avoid re-reading files
+            file_contents = {str(pf.file_path): pf.content for pf in parsed_files}
+            chunks = await self.chunking_stage.run(symbols, file_contents=file_contents)
             stage_results["chunking"] = {
                 "input_count": len(symbols),
                 "output_count": len(chunks),

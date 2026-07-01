@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any
 
+from hordeforge_utils import snapshot_mapping_items
 from orchestrator.pipeline_state import PipelineState
 from orchestrator.status import StepStatus
 
@@ -25,16 +26,6 @@ class ExecutionContext:
 
     _lock: RLock = field(default_factory=RLock, init=False, repr=False, compare=False)
 
-    @staticmethod
-    def _snapshot_mapping_items(value: dict[Any, Any]) -> list[tuple[Any, Any]]:
-        for _ in range(3):
-            try:
-                return list(value.items())
-            except RuntimeError as exc:
-                if "dictionary changed size during iteration" not in str(exc):
-                    raise
-        return []
-
     @classmethod
     def _safe_deepcopy(cls, value: Any) -> Any:
         for _ in range(3):
@@ -44,7 +35,7 @@ class ExecutionContext:
                 if "dictionary changed size during iteration" not in str(exc):
                     raise
         if isinstance(value, dict):
-            return {k: cls._safe_deepcopy(v) for k, v in cls._snapshot_mapping_items(value)}
+            return {k: cls._safe_deepcopy(v) for k, v in snapshot_mapping_items(value)}
         if isinstance(value, list):
             return [cls._safe_deepcopy(item) for item in value]
         if isinstance(value, tuple):

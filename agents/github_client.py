@@ -8,6 +8,12 @@ from urllib.parse import urlparse
 
 import requests
 
+from observability.circuit_breaker import (
+    CircuitBreakerConfig,
+    CircuitBreakerOpenError,
+    get_circuit_breaker_registry,
+)
+
 
 class GitHubClientError(RuntimeError):
     def __init__(
@@ -81,6 +87,16 @@ class GitHubClient:
         self.backoff_seconds = max(0.0, float(backoff_seconds))
         self.timeout_seconds = max(0.1, float(timeout_seconds))
         self.logger = logging.getLogger("hordeforge.github_client")
+        self._circuit_breaker = get_circuit_breaker_registry().get_or_create(
+            name=f"github.{repo}",
+            config=CircuitBreakerConfig(
+                failure_threshold=5,
+                success_threshold=2,
+                timeout_seconds=120.0,
+                half_open_max_calls=1,
+                ignore_exceptions=(GitHubAuthError, GitHubNotFoundError, GitHubValidationError),
+            ),
+        )
 
     # =========================================================================
     # Pagination Helpers (HF-P6-001)
@@ -399,69 +415,79 @@ class GitHubClient:
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         url = f"{self.api_url}{path}"
-        retries_done = 0
 
-        while True:
-            try:
-                response = self.session.request(
-                    method=method.upper(),
-                    url=url,
-                    headers=self.headers,
-                    json=payload,
-                    params=params,
-                    timeout=self.timeout_seconds,
-                )
-            except requests.RequestException as exc:
-                if retries_done < self.max_retries:
+        def _execute_request() -> dict[str, Any]:
+            retries_done = 0
+            while True:
+                try:
+                    response = self.session.request(
+                        method=method.upper(),
+                        url=url,
+                        headers=self.headers,
+                        json=payload,
+                        params=params,
+                        timeout=self.timeout_seconds,
+                    )
+                except requests.RequestException as exc:
+                    if retries_done < self.max_retries:
+                        retries_done += 1
+                        backoff = self._resolve_backoff(retries_done)
+                        self._log_retry(
+                            method=method,
+                            url=url,
+                            attempt=retries_done,
+                            backoff_seconds=backoff,
+                            reason=exc.__class__.__name__,
+                        )
+                        if backoff > 0:
+                            time.sleep(backoff)  # Blocking: sync GitHub API retry backoff
+                        continue
+                    raise GitHubTransportError(
+                        f"GitHub transport error for {method.upper()} {url}: {exc}",
+                        method=method.upper(),
+                        url=url,
+                    ) from exc
+
+                status_code = int(getattr(response, "status_code", 0))
+                if self._is_success_status(status_code):
+                    if status_code == 204:
+                        return {}
+                    payload_data = self._safe_json(response)
+                    if isinstance(payload_data, (dict, list)):
+                        return payload_data
+                    raise GitHubApiError(
+                        f"GitHub API {status_code} for {method.upper()} {url}: expected JSON object or array response.",
+                        status_code=status_code,
+                        method=method.upper(),
+                        url=url,
+                        response_body=getattr(response, "text", ""),
+                    )
+
+                error = self._build_api_error(method, url, response)
+                if error.retryable and retries_done < self.max_retries:
                     retries_done += 1
-                    backoff = self._resolve_backoff(retries_done)
+                    backoff = self._resolve_backoff(retries_done, response)
                     self._log_retry(
                         method=method,
                         url=url,
                         attempt=retries_done,
                         backoff_seconds=backoff,
-                        reason=exc.__class__.__name__,
+                        reason=error.__class__.__name__,
+                        status_code=error.status_code,
                     )
                     if backoff > 0:
-                        time.sleep(backoff)
+                        time.sleep(backoff)  # Blocking: sync GitHub API retry backoff
                     continue
-                raise GitHubTransportError(
-                    f"GitHub transport error for {method.upper()} {url}: {exc}",
-                    method=method.upper(),
-                    url=url,
-                ) from exc
+                raise error
 
-            status_code = int(getattr(response, "status_code", 0))
-            if self._is_success_status(status_code):
-                if status_code == 204:
-                    return {}
-                payload_data = self._safe_json(response)
-                if isinstance(payload_data, (dict, list)):
-                    return payload_data
-                raise GitHubApiError(
-                    f"GitHub API {status_code} for {method.upper()} {url}: expected JSON object or array response.",
-                    status_code=status_code,
-                    method=method.upper(),
-                    url=url,
-                    response_body=getattr(response, "text", ""),
-                )
-
-            error = self._build_api_error(method, url, response)
-            if error.retryable and retries_done < self.max_retries:
-                retries_done += 1
-                backoff = self._resolve_backoff(retries_done, response)
-                self._log_retry(
-                    method=method,
-                    url=url,
-                    attempt=retries_done,
-                    backoff_seconds=backoff,
-                    reason=error.__class__.__name__,
-                    status_code=error.status_code,
-                )
-                if backoff > 0:
-                    time.sleep(backoff)
-                continue
-            raise error
+        try:
+            return self._circuit_breaker.call(_execute_request)
+        except CircuitBreakerOpenError as exc:
+            raise GitHubServerError(
+                f"GitHub API temporarily unavailable (circuit breaker open): {exc}",
+                method=method.upper(),
+                url=url,
+            ) from exc
 
     # =========================================================================
     # Issue Operations with Pagination (HF-P6-001-ST01)

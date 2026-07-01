@@ -21,7 +21,7 @@ def test_build_agent_context_includes_memory():
         }
     ]
 
-    mock_rag_retriever.retrieve.return_value = [
+    mock_rag_retriever.search.return_value = [
         {"content": "def validate_user():\n    pass", "file_path": "auth.py", "score": 0.95}
     ]
 
@@ -44,7 +44,7 @@ def test_build_agent_context_handles_empty_memory():
     mock_rag_retriever = Mock()
 
     mock_memory_retriever.search_memory.return_value = []
-    mock_rag_retriever.retrieve.return_value = [
+    mock_rag_retriever.search.return_value = [
         {"content": "def validate_user():\n    pass", "file_path": "auth.py", "score": 0.95}
     ]
 
@@ -77,7 +77,7 @@ def test_build_agent_context_handles_empty_rag():
         }
     ]
 
-    mock_rag_retriever.retrieve.return_value = []
+    mock_rag_retriever.search.return_value = []
 
     context_builder = ContextBuilder(mock_memory_retriever, mock_rag_retriever)
 
@@ -109,7 +109,7 @@ def test_build_agent_context_formats_patch_entries():
         }
     ]
 
-    mock_rag_retriever.retrieve.return_value = []
+    mock_rag_retriever.search.return_value = []
 
     context_builder = ContextBuilder(mock_memory_retriever, mock_rag_retriever)
 
@@ -142,7 +142,7 @@ def test_build_agent_context_formats_decision_entries():
         }
     ]
 
-    mock_rag_retriever.retrieve.return_value = []
+    mock_rag_retriever.search.return_value = []
 
     context_builder = ContextBuilder(mock_memory_retriever, mock_rag_retriever)
 
@@ -225,3 +225,17 @@ def test_format_rag_section():
     assert "test.py" in result
     assert "test content" in result
     assert "0.85" in result
+
+
+def test_context_builder_uses_search_method():
+    # Test that ContextBuilder uses search() method on rag_retriever
+    mock_memory_retriever = Mock()
+    mock_rag_retriever = Mock()
+    mock_rag_retriever.search.return_value = []
+
+    context_builder = ContextBuilder(mock_memory_retriever, mock_rag_retriever)
+    context_builder.build_agent_context("test query")
+
+    # Verify that search() was called, not retrieve()
+    mock_rag_retriever.search.assert_called_once()
+    mock_rag_retriever.retrieve.assert_not_called()

@@ -23,6 +23,7 @@ class CircuitBreakerConfig:
     success_threshold: int = 2
     timeout_seconds: float = 60.0
     half_open_max_calls: int = 3
+    ignore_exceptions: tuple[type[Exception], ...] = ()
 
 
 @dataclass
@@ -125,6 +126,12 @@ class CircuitBreaker:
             self._stats.state = CircuitState.OPEN
             self._last_state_change = now
 
+    def _should_trip_on(self, exc: Exception) -> bool:
+        """Determine if this exception should count toward the failure threshold."""
+        if self._config.ignore_exceptions and isinstance(exc, self._config.ignore_exceptions):
+            return False
+        return True
+
     def call(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Execute function with circuit breaker protection."""
         with self._lock:
@@ -149,7 +156,8 @@ class CircuitBreaker:
             self._record_success()
             return result
         except Exception as exc:
-            self._record_failure()
+            if self._should_trip_on(exc):
+                self._record_failure()
             raise exc
 
     def reset(self) -> None:

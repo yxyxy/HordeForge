@@ -72,9 +72,13 @@ class LiveMerger:
 
                 if status.get("state") != "success":
                     return False, "CI checks not passed"
-            except Exception:
+            except Exception as e:
                 # If we can't get status, allow merge anyway
-                logger.warning("Could not verify CI status, allowing merge attempt")
+                logger.warning(
+                    "Could not verify CI status for PR #%d: %s, allowing merge attempt",
+                    pull_number,
+                    e,
+                )
 
             return True, "Ready to merge"
 
@@ -181,7 +185,8 @@ class LiveMerger:
             try:
                 status = self.client.get_combined_status(head_sha)
                 ci_state = status.get("state", "unknown")
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed to get CI status for PR #%d: %s", pull_number, e)
                 ci_state = "unknown"
 
             # Get reviews
@@ -189,7 +194,8 @@ class LiveMerger:
                 reviews = self.client.get_pull_request_reviews(pull_number)
                 approved = any(r.get("state") == "APPROVED" for r in reviews)
                 changes_requested = any(r.get("state") == "CHANGES_REQUESTED" for r in reviews)
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed to get reviews for PR #%d: %s", pull_number, e)
                 approved = False
                 changes_requested = False
 

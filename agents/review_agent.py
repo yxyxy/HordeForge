@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 from typing import Any
@@ -11,6 +12,8 @@ from agents.llm_wrapper_backward_compatibility import (
     get_legacy_llm_wrapper,
     legacy_build_code_review_prompt,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def run_lint(project: str) -> dict[str, Any]:
@@ -334,8 +337,8 @@ class ReviewAgent(BaseAgent):
                 if llm is not None:
                     try:
                         llm.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Failed to close LLM: %s", e)
 
         if use_llm and require_llm and files and not isinstance(llm_review_result, dict):
             return build_agent_result(

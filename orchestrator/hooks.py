@@ -1,9 +1,15 @@
+from __future__ import annotations
+
+import logging
+import threading
 from typing import Any
 
 from orchestrator.memory_policy import MemoryPromotionPolicy
 from orchestrator.status import StepStatus
 from rag.memory_collections import MemoryType, create_memory_entry
 from rag.memory_store import MemoryStore
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryHook:
@@ -47,7 +53,7 @@ class MemoryHook:
                 memory_entry.task_description, payload=memory_entry.to_dict()
             )
         except Exception as e:  # noqa: BLE001
-            print(f"Error saving memory entry: {e}")
+            logger.error("Error saving memory entry: %s", e)
 
     def promote_short_term(self, *, context: dict[str, Any], run_status: str) -> int:
         entries = context.get(self.SHORT_TERM_KEY)
@@ -75,7 +81,8 @@ class MemoryHook:
             try:
                 self.memory_store.add_memory(task_description, payload=payload)
                 promoted += 1
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed to promote memory entry for '%s': %s", task_description, e)
                 continue
 
         context[self.SHORT_TERM_KEY] = []
@@ -204,15 +211,18 @@ class BasicExecutionGuardrailHook(ExecutionGuardrailHook):
 
 
 _active_memory_hook: MemoryHook | None = None
+_memory_hook_lock = threading.Lock()
 
 
 def register_memory_hook(hook: MemoryHook) -> None:
     global _active_memory_hook
-    _active_memory_hook = hook
+    with _memory_hook_lock:
+        _active_memory_hook = hook
 
 
 def get_memory_hook() -> MemoryHook | None:
-    return _active_memory_hook
+    with _memory_hook_lock:
+        return _active_memory_hook
 
 
 def trigger_memory_hook(

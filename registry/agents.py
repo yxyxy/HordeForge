@@ -108,6 +108,7 @@ def register_agents(agent_registry: AgentRegistry) -> None:
     from agents.issue_scanner import IssueScanner
     from agents.memory_agent import MemoryAgent
     from agents.patch_apply_agent import PatchApplyAgent
+    from agents.patch_validator import PatchValidatorAgent
     from agents.pipeline_initializer import PipelineInitializer
     from agents.pr_merge_agent import PrMergeAgent
     from agents.rag_initializer import RagInitializer
@@ -203,6 +204,12 @@ def register_agents(agent_registry: AgentRegistry) -> None:
             description="Запускает тесты",
             input_contract="context.spec.v1",
             output_contract="context.spec.v1",
+        ),
+        AgentMetadata(
+            name="patch_validator",
+            agent_class=PatchValidatorAgent,
+            description="Validates patches before application",
+            category="quality",
         ),
         AgentMetadata(
             name="patch_apply_agent",

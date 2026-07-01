@@ -27,7 +27,7 @@ class JsonStore:
                 return
             except PermissionError as exc:
                 last_error = exc
-                time.sleep(0.01 * (attempt + 1))
+                time.sleep(0.01 * (attempt + 1))  # Blocking: sync file persistence retry backoff
         if temp_path.exists():
             temp_path.unlink(missing_ok=True)
         if last_error is not None:

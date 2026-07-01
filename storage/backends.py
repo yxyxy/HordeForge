@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import gzip
+import logging
 import os
 import re
 import shutil
+import threading
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 LOG_FILENAMES = ("runs.json", "step_logs.json", "artifacts.json")
 LOG_MAX_FILE_BYTES = 1_048_576
@@ -166,12 +170,21 @@ class JsonStorageBackend(StorageBackend):
                 last_error = exc
                 if temp_path.exists():
                     temp_path.unlink(missing_ok=True)
-                self._time.sleep(0.01 * (attempt + 1))
+                self._time.sleep(0.01 * (attempt + 1))  # Blocking: sync file I/O retry backoff
         if last_error is not None:
             raise last_error
 
     def _payload_size_bytes(self, payload: list[dict[str, Any]]) -> int:
-        return len(self._json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
+        """Estimate payload size incrementally to avoid O(N^2) behavior."""
+        if not payload:
+            return 2  # Empty array "[]"
+        # Calculate size incrementally: [] + items + commas
+        total = 2  # [] brackets
+        for i, item in enumerate(payload):
+            if i > 0:
+                total += 2  # ", " separator
+            total += len(self._json.dumps(item, ensure_ascii=False).encode("utf-8"))
+        return total
 
     def _split_payload(self, payload: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         if not payload:
@@ -208,13 +221,15 @@ class JsonStorageBackend(StorageBackend):
     def _read_path_payload(self, path: Path) -> list[dict[str, Any]]:
         try:
             raw = path.read_text(encoding="utf-8").strip()
-        except OSError:
+        except OSError as e:
+            logger.warning("Failed to read storage file %s: %s", path, e)
             return []
         if not raw:
             return []
         try:
             payload = self._json.loads(raw)
-        except self._json.JSONDecodeError:
+        except self._json.JSONDecodeError as e:
+            logger.warning("Failed to parse JSON in %s: %s", path, e)
             return []
         if not isinstance(payload, list):
             return []
@@ -264,6 +279,7 @@ class JsonStorageBackend(StorageBackend):
                 "checked_at": datetime.now(timezone.utc).isoformat(),
             }
         except Exception as exc:  # noqa: BLE001
+            logger.warning("Health check failed for %s: %s", self._file_path, exc)
             return {
                 "healthy": False,
                 "backend": "json",
@@ -290,6 +306,7 @@ class PostgresStorageBackend(StorageBackend):
         )
         self._table_name = self._validate_table_name(table_name)
         self._conn = None
+        self._lock = threading.Lock()
         self._ensure_connection()
 
     @staticmethod
@@ -299,20 +316,21 @@ class PostgresStorageBackend(StorageBackend):
         return table_name
 
     def _ensure_connection(self) -> None:
-        if self._conn is not None:
-            return
-        try:
-            import psycopg2
+        with self._lock:
+            if self._conn is not None:
+                return
+            try:
+                import psycopg2
 
-            self._conn = psycopg2.connect(self._connection_string)
-            self._create_table_if_not_exists()
-        except ImportError as e:
-            raise ImportError(
-                "psycopg2 is required for PostgreSQL storage. "
-                "Install with: pip install psycopg2-binary"
-            ) from e
-        except Exception as exc:
-            raise RuntimeError(f"Failed to connect to PostgreSQL: {exc}") from exc
+                self._conn = psycopg2.connect(self._connection_string)
+                self._create_table_if_not_exists()
+            except ImportError as e:
+                raise ImportError(
+                    "psycopg2 is required for PostgreSQL storage. "
+                    "Install with: pip install psycopg2-binary"
+                ) from e
+            except Exception as exc:
+                raise RuntimeError(f"Failed to connect to PostgreSQL: {exc}") from exc
 
     def _create_table_if_not_exists(self) -> None:
         if self._conn is None:
@@ -352,12 +370,16 @@ class PostgresStorageBackend(StorageBackend):
         try:
             from psycopg2 import sql
 
-            with self._conn.cursor() as cur:
-                cur.execute(
-                    sql.SQL("SELECT key, value FROM {}").format(sql.Identifier(self._table_name))
-                )
-                return [value for _, value in cur.fetchall()]
-        except Exception:
+            with self._lock:
+                with self._conn.cursor() as cur:
+                    cur.execute(
+                        sql.SQL("SELECT key, value FROM {}").format(
+                            sql.Identifier(self._table_name)
+                        )
+                    )
+                    return [value for _, value in cur.fetchall()]
+        except Exception as e:
+            logger.warning("Failed to read from PostgreSQL table %s: %s", self._table_name, e)
             return []
 
     def write_all(self, items: list[dict[str, Any]]) -> None:
@@ -367,19 +389,21 @@ class PostgresStorageBackend(StorageBackend):
         try:
             from psycopg2 import sql
 
-            with self._conn.cursor() as cur:
-                # Clear existing data and insert new
-                cur.execute(sql.SQL("DELETE FROM {}").format(sql.Identifier(self._table_name)))
-                for item in items:
-                    if isinstance(item, dict):
-                        cur.execute(
-                            sql.SQL("INSERT INTO {} (key, value) VALUES (%s, %s)").format(
-                                sql.Identifier(self._table_name)
-                            ),
-                            (item.get("run_id", str(self._uuid4())), self._json.dumps(item)),
-                        )
-                self._conn.commit()
-        except Exception:
+            with self._lock:
+                with self._conn.cursor() as cur:
+                    # Clear existing data and insert new
+                    cur.execute(sql.SQL("DELETE FROM {}").format(sql.Identifier(self._table_name)))
+                    for item in items:
+                        if isinstance(item, dict):
+                            cur.execute(
+                                sql.SQL("INSERT INTO {} (key, value) VALUES (%s, %s)").format(
+                                    sql.Identifier(self._table_name)
+                                ),
+                                (item.get("run_id", str(self._uuid4())), self._json.dumps(item)),
+                            )
+                    self._conn.commit()
+        except Exception as e:
+            logger.warning("Failed to write to PostgreSQL table %s: %s", self._table_name, e)
             self._conn.rollback()
 
     def health_check(self) -> dict[str, Any]:
@@ -399,6 +423,7 @@ class PostgresStorageBackend(StorageBackend):
                 "checked_at": datetime.now(timezone.utc).isoformat(),
             }
         except Exception as exc:  # noqa: BLE001
+            logger.warning("Health check failed for postgres: %s", exc)
             return {
                 "healthy": False,
                 "backend": "postgres",

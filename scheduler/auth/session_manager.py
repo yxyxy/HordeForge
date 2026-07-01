@@ -49,7 +49,9 @@ class SessionManager:
                 self._redis = None
 
         self.session_ttl = session_ttl
-        self.jwt_secret = jwt_secret or "dev-secret-change-in-production"
+        if not jwt_secret:
+            raise ValueError("jwt_secret must be provided")
+        self.jwt_secret = jwt_secret
         self.jwt_algorithm = jwt_algorithm
         self.jwt_validator = JWTValidator(
             secret_key=self.jwt_secret,

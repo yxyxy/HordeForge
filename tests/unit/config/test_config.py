@@ -35,11 +35,11 @@ def test_run_config_uses_defaults_when_env_is_missing(monkeypatch):
     assert config.max_parallel_workers == 4
     assert config.strict_schema_validation is True
     assert config.enable_dynamic_fallback is True
-    assert config.webhook_secret == "local-dev-secret"
+    assert config.webhook_secret == ""
     assert config.storage_dir == ".hordeforge_data"
     assert config.queue_backend == "memory"
     assert config.idempotency_ttl_seconds == 3600
-    assert config.operator_api_key == "local-operator-key"
+    assert config.operator_api_key == ""
     assert config.operator_allowed_roles == ("operator",)
     assert config.manual_command_allowed_sources == ("api",)
     assert config.default_tenant_id == "default"

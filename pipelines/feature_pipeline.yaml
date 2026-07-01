@@ -93,16 +93,30 @@ steps:
       issue: "{{issue}}"
       repository: "{{repository}}"
       memory_context: "{{memory_context}}"
+      file_tree: "{{ file_tree | default([]) }}"
       require_llm: true
       publish_pr_in_code_generator: false
     output: "{{code_patch}}"
     on_failure: retry_step
+
+  - name: patch_validator
+    agent: patch_validator
+    description: Validate patch before test execution
+    depends_on:
+      - code_generator
+    depends_on_explicit: true
+    input:
+      code_patch: "{{ code_patch }}"
+      repository: "{{ repository }}"
+    output: "{{ validation_result }}"
+    on_failure: create_issue_for_human
 
   - name: test_runner
     agent: test_runner
     description: Run tests on code patch
     depends_on:
       - code_generator
+      - patch_validator
     depends_on_explicit: true
     input:
       code_patch: "{{code_patch}}"

@@ -147,7 +147,8 @@ class QwenOAuthTokenManager:
                 self._credentials = file_creds
                 state["credentials"] = dict(file_creds)
                 state["file_mtime"] = mtime
-        except Exception:
+        except Exception as e:
+            logger.warning("qwen_oauth_reload_credentials_failed key=%s error=%s", self._key, e)
             return
 
     def _refresh_with_file_lock(self) -> None:
@@ -165,9 +166,14 @@ class QwenOAuthTokenManager:
                 break
             except FileExistsError:
                 self._maybe_break_stale_file_lock()
-                time.sleep(0.05 + random.random() * 0.05)
-            except Exception:
-                time.sleep(0.05 + random.random() * 0.05)
+                time.sleep(
+                    0.05 + random.random() * 0.05
+                )  # Blocking: sync file lock acquisition backoff
+            except Exception as e:
+                logger.warning("qwen_oauth_lock_acquire_error error=%s", e)
+                time.sleep(
+                    0.05 + random.random() * 0.05
+                )  # Blocking: sync file lock acquisition backoff
 
         if not lock_acquired:
             self._maybe_break_stale_file_lock(force=True)
@@ -192,11 +198,13 @@ class QwenOAuthTokenManager:
             try:
                 if lock_fd is not None:
                     os.close(lock_fd)
-            except Exception:
+            except Exception as e:
+                logger.warning("qwen_oauth_lock_close_error error=%s", e)
                 pass
             try:
                 self._lock_path.unlink(missing_ok=True)
-            except Exception:
+            except Exception as e:
+                logger.warning("qwen_oauth_lock_unlink_error error=%s", e)
                 pass
 
     def _refresh_without_file_lock(self) -> None:
@@ -229,7 +237,8 @@ class QwenOAuthTokenManager:
             stat = self._lock_path.stat()
         except FileNotFoundError:
             return
-        except Exception:
+        except Exception as e:
+            logger.debug("qwen_oauth_lock_stat_error error=%s", e)
             return
 
         age_ms = (time.time() - stat.st_mtime) * 1000
@@ -244,7 +253,10 @@ class QwenOAuthTokenManager:
                 age_ms,
                 force,
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "qwen_oauth_stale_lock_removal_failed path=%s error=%s", self._lock_path, e
+            )
             return
 
     def _refresh_access_token(self) -> dict[str, Any]:
@@ -369,12 +381,16 @@ class QwenOAuthTokenManager:
             repo_store.set_secret_value(
                 self._secret_ref, json.dumps(credentials, ensure_ascii=False)
             )
-        except Exception:
+        except Exception as e:
+            logger.warning("qwen_oauth_persist_secret_failed ref=%s error=%s", self._secret_ref, e)
             return
 
     def _clear_persisted_credentials(self) -> None:
         try:
             self._credentials_path.unlink(missing_ok=True)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "qwen_oauth_clear_credentials_failed path=%s error=%s", self._credentials_path, e
+            )
             pass
         self._memory_cache.pop(self._key, None)

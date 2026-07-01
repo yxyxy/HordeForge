@@ -11,13 +11,15 @@ from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
 from storage.backends import StorageBackend, get_storage_backend
 
+logger = logging.getLogger(__name__)
+
 try:
     from rag.vector_store import QdrantStore
-except Exception:
+except Exception as e:
+    logger.warning("Failed to import QdrantStore: %s", e)
     QdrantStore = None
 
 _QDRANT_STORE_CACHE: dict[str, Any] = {}
-logger = logging.getLogger(__name__)
 
 
 class MemoryType(Enum):
@@ -513,7 +515,8 @@ class MemoryAgent(BaseAgent):
             count = int(
                 (rag_index.get("documents_count") if isinstance(rag_index, dict) else 0) or 0
             )
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to resolve documents count from rag_index: %s", e)
             count = 0
         if count > 0:
             return count
@@ -543,7 +546,8 @@ class MemoryAgent(BaseAgent):
             store = QdrantStore(check_compatibility=False, mode=mode)
             _QDRANT_STORE_CACHE[mode] = store
             return store
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to initialize QdrantStore in mode=%s: %s", mode, e)
             return None
 
     @staticmethod

@@ -16,6 +16,8 @@ import pytest
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+os.environ["HORDEFORGE_TESTING"] = "true"
+
 _workspace_tmp_root = project_root / ".pytest_tmp_runtime"
 _workspace_tmp_root.mkdir(parents=True, exist_ok=True)
 _tmp_root = str(_workspace_tmp_root.resolve())

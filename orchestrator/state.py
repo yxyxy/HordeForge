@@ -4,6 +4,10 @@ from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any
 
+from orchestrator.pipeline_status import (
+    PipelineStatus,
+    ensure_valid_pipeline_transition,
+)
 from orchestrator.status import StepStatus, ensure_valid_transition
 
 
@@ -68,6 +72,7 @@ class PipelineRunState:
     steps: list[StepRunState] = field(default_factory=list)
     current_step_index: int = 0
     run_status: str = StepStatus.PENDING.value
+    pipeline_status: PipelineStatus = PipelineStatus.CREATED
     _lock: RLock = field(default_factory=RLock, init=False, repr=False, compare=False)
 
     @classmethod
@@ -151,6 +156,12 @@ class PipelineRunState:
         with self._lock:
             self.run_status = next_status.value
 
+    def transition_pipeline(self, next_status: PipelineStatus) -> None:
+        """Perform a validated pipeline lifecycle transition."""
+        with self._lock:
+            ensure_valid_pipeline_transition(self.pipeline_status, next_status)
+            self.pipeline_status = next_status
+
     def advance_index(self) -> int:
         with self._lock:
             if self.current_step_index < len(self.steps):
@@ -167,10 +178,15 @@ class PipelineRunState:
                 "steps": [step.to_dict() for step in self.steps],
                 "current_step_index": self.current_step_index,
                 "run_status": self.run_status,
+                "pipeline_status": self.pipeline_status.value,
             }
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> PipelineRunState:
+        raw_pipeline_status = payload.get("pipeline_status")
+        pipeline_status = (
+            PipelineStatus(raw_pipeline_status) if raw_pipeline_status else PipelineStatus.RUNNING
+        )
         return cls(
             run_id=payload["run_id"],
             pipeline_name=payload["pipeline_name"],
@@ -179,4 +195,5 @@ class PipelineRunState:
             steps=[StepRunState.from_dict(item) for item in payload.get("steps", [])],
             current_step_index=payload.get("current_step_index", 0),
             run_status=payload.get("run_status", StepStatus.PENDING.value),
+            pipeline_status=pipeline_status,
         )

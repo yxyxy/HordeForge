@@ -81,7 +81,8 @@ def _discover_git_tracked_files(repo_path: Path) -> list[Path] | None:
             capture_output=True,
             text=True,
         )
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to list git files: %s", e)
         return None
 
     if result.returncode != 0:
@@ -100,7 +101,8 @@ def _discover_git_tracked_files(repo_path: Path) -> list[Path] | None:
 def _is_path_ignored(repo_path: Path, file_path: Path) -> bool:
     try:
         rel_parts = file_path.relative_to(repo_path).parts
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to check path relative to repo: %s", e)
         return False
     return any(part in IGNORED_SCAN_DIRS for part in rel_parts)
 
@@ -131,11 +133,21 @@ def ensure_repo_local(repo_path: str) -> Path:
     if repo_path.startswith("http"):
         local_path = Path("./workspace/repo")
         if not local_path.exists():
-            logger.info(f"Cloning repository {repo_path} -> {local_path}")
+            # Strip /tree/branch suffix from URL for cloning
+            clone_url = repo_path
+            if "/tree/" in clone_url:
+                from urllib.parse import urlparse
+
+                parsed = urlparse(clone_url)
+                path_parts = [part for part in parsed.path.strip("/").split("/") if part]
+                if len(path_parts) >= 4 and path_parts[2] == "tree":
+                    clone_url = f"{parsed.scheme}://{parsed.netloc}/{'/'.join(path_parts[:2])}"
+
+            logger.info(f"Cloning repository {clone_url} -> {local_path}")
             subprocess.run(
-                ["git", "clone", repo_path, str(local_path)],
+                ["git", "clone", clone_url, str(local_path)],
                 check=True,
-                capture_output=True,  # 🔥 Тихий клон
+                capture_output=True,
             )
         return local_path
 
@@ -433,7 +445,8 @@ def _get_existing_collection_points(collection_name: str) -> int | None:
         if points_count is None:
             return None
         return int(points_count)
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to get collection count: %s", e)
         return None
 
 

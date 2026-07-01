@@ -6,6 +6,7 @@ Implements atomic patch application, revert safety, and partial patch detection.
 
 import logging
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -14,6 +15,115 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+class PatchApplicationError(Exception):
+    """Raised when all patch operations fail to apply."""
+
+
+def _fuzzy_find_match(content: str, old_string: str) -> tuple[str | None, int]:
+    """Try to find old_string in content with fuzzy matching.
+
+    Returns (matched_region, occurrence_count) or (None, 0) if no match found.
+    """
+    if not old_string:
+        return None, 0
+
+    # 1. Exact match
+    count = content.count(old_string)
+    if count > 0:
+        return old_string, count
+
+    # 2. Whitespace-normalized match (collapse multiple spaces/newlines)
+    def _normalize_ws(s: str) -> str:
+        return re.sub(r"[ \t]+", " ", re.sub(r"\n\s*\n", "\n", s))
+
+    norm_content = _normalize_ws(content)
+    norm_old = _normalize_ws(old_string)
+    count = norm_content.count(norm_old)
+    if count > 0:
+        # Reconstruct the actual region from the normalized match
+        return old_string, count
+
+    # 3. Leading/trailing whitespace stripped match
+    def _strip_lines(s: str) -> str:
+        return "\n".join(line.strip() for line in s.split("\n"))
+
+    stripped_content = _strip_lines(content)
+    stripped_old = _strip_lines(old_string)
+    count = stripped_content.count(stripped_old)
+    if count > 0:
+        return old_string, count
+
+    # 4. Multi-line: try matching first and last line with context tolerance
+    old_lines = old_string.split("\n")
+    if len(old_lines) >= 2:
+        first_line = old_lines[0].strip()
+        last_line = old_lines[-1].strip()
+        if first_line and last_line:
+            content_lines = content.split("\n")
+            for i, line in enumerate(content_lines):
+                if line.strip() == first_line:
+                    for j in range(len(content_lines) - 1, i, -1):
+                        if content_lines[j].strip() == last_line:
+                            candidate = "\n".join(content_lines[i : j + 1])
+                            if candidate.strip() == stripped_old:
+                                return candidate, 1
+
+    return None, 0
+
+
+def validate_patch_operations(
+    operations: Any,
+    *,
+    base_dir: str | Path | None = None,
+) -> list[str]:
+    """Validate patch operations before application.
+
+    Returns a list of validation error strings. Empty list means valid.
+    """
+    errors: list[str] = []
+
+    if not isinstance(operations, list) or not operations:
+        return errors
+
+    root = Path(base_dir) if base_dir is not None else Path.cwd()
+
+    for index, operation in enumerate(operations):
+        if not isinstance(operation, dict):
+            errors.append(f"invalid_operation_schema:index={index}")
+            continue
+
+        operation_type = str(operation.get("type", "")).strip().lower()
+        if operation_type not in {"edit", "write"}:
+            errors.append(f"invalid_operation_type:index={index}")
+            continue
+
+        normalized_path = _normalize_patch_path(str(operation.get("path", "")))
+        if not normalized_path or ".." in normalized_path.split("/"):
+            errors.append(f"invalid_operation_path:index={index}")
+            continue
+
+        if operation_type == "edit":
+            target = root / normalized_path
+            if not target.exists() or not target.is_file():
+                errors.append(f"target_file_missing:index={index}:path={normalized_path}")
+                continue
+
+            old_string = str(operation.get("old_string", ""))
+            if old_string:
+                try:
+                    content = target.read_text(encoding="utf-8")
+                except Exception as e:
+                    logger.debug("Could not read target file %s: %s", normalized_path, e)
+                    errors.append(f"target_file_unreadable:index={index}:path={normalized_path}")
+                    continue
+
+                matched, _ = _fuzzy_find_match(content, old_string)
+                if matched is None:
+                    errors.append(f"old_string_not_found:index={index}:path={normalized_path}")
+
+    return errors
 
 
 class PatchStatus(Enum):
@@ -47,14 +157,14 @@ class PatchWorkflowOrchestrator:
             shutil.rmtree(path, ignore_errors=True)
             if not Path(path).exists():
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("First rmtree attempt failed for %s: %s", path, e)
 
         def _onerror(_func, target, _exc) -> None:
             try:
                 os.chmod(target, 0o700)
-            except Exception:
-                return
+            except Exception as e:
+                logger.debug("Could not chmod %s: %s", target, e)
 
         target_path = Path(path)
         rmtree_target: str | Path = target_path
@@ -62,8 +172,8 @@ class PatchWorkflowOrchestrator:
             rmtree_target = Path("\\\\?\\" + str(target_path.resolve()))
         try:
             shutil.rmtree(rmtree_target, ignore_errors=False, onerror=_onerror)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Second rmtree attempt failed for %s: %s", path, e)
 
     def apply_patch_atomically(self, patch_data: str) -> bool:
         """
@@ -282,7 +392,8 @@ class PatchWorkflowOrchestrator:
             # In a real implementation, we would apply the patch using a library like 'patch'
             # For now, we'll just return True to simulate successful application
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to apply single patch to %s: %s", file_path, e)
             return False
 
 
@@ -296,7 +407,8 @@ def _read_patch_target(base_dir: Path, relative_path: str) -> str | None:
         return None
     try:
         return target.read_text(encoding="utf-8")
-    except Exception:
+    except Exception as e:
+        logger.debug("Could not read patch target %s: %s", target, e)
         return None
 
 
@@ -347,8 +459,13 @@ def _apply_update_block(current: str, block_lines: list[str]) -> str:
             continue
 
         if old_block not in updated:
-            raise ValueError("context mismatch while applying update hunk")
-        updated = updated.replace(old_block, new_block, 1)
+            matched, _ = _fuzzy_find_match(updated, old_block)
+            if matched is not None:
+                updated = updated.replace(matched, new_block, 1)
+            else:
+                raise ValueError("context mismatch while applying update hunk")
+        else:
+            updated = updated.replace(old_block, new_block, 1)
     return updated
 
 
@@ -514,8 +631,13 @@ def materialize_patch_operations(
             continue
         occurrences = current_content.count(old_string)
         if occurrences == 0:
-            notes.append(f"operation_old_string_not_found:{normalized_path}")
-            continue
+            matched, fuzzy_count = _fuzzy_find_match(current_content, old_string)
+            if matched is None:
+                notes.append(f"operation_old_string_not_found:{normalized_path}")
+                continue
+            notes.append(f"fuzzy_match_used:{normalized_path}")
+            occurrences = fuzzy_count
+            old_string = matched
         if occurrences > 1 and not replace_all:
             notes.append(f"operation_ambiguous_match:{normalized_path}")
             continue
@@ -546,7 +668,27 @@ def materialize_patch_operations(
             }
         )
 
-    return _merge_materialized_files([], materialized), notes
+    result = _merge_materialized_files([], materialized)
+
+    if operations and not result:
+        failure_indicators = {
+            "operation_old_string_not_found",
+            "operation_target_missing",
+            "operation_read_failed",
+            "operation_ambiguous_match",
+            "invalid_operation_schema",
+            "invalid_operation_type",
+            "invalid_operation_path",
+        }
+        all_failed = all(
+            any(note.startswith(indicator) for indicator in failure_indicators) for note in notes
+        )
+        if all_failed and notes:
+            raise PatchApplicationError(
+                f"All {len(operations)} operation(s) failed to apply: " + "; ".join(notes[:5])
+            )
+
+    return result, notes
 
 
 def resolve_code_patch_files(

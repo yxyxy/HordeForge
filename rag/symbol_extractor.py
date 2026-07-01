@@ -1,32 +1,10 @@
 import ast
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 
+from rag.models import Symbol
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class Symbol:
-    """
-    Represents a code symbol (class, function, method) extracted from Python code.
-    """
-
-    name: str
-    type: str  # 'class', 'function', 'method'
-    line_number: int
-    docstring: str | None = None
-    parameters: list[str] = None
-    decorators: list[str] = None
-    class_name: str | None = None  # For methods, indicates the parent class
-    return_annotation: str | None = None
-    is_async: bool = False
-
-    def __post_init__(self):
-        if self.parameters is None:
-            self.parameters = []
-        if self.decorators is None:
-            self.decorators = []
 
 
 class SymbolExtractor:

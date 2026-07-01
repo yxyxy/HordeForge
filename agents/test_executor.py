@@ -8,12 +8,15 @@ This module handles:
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from agents.github_client import GitHubApiError, GitHubClient
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -114,8 +117,8 @@ class TestExecutor:
             workflow_runs = runs.get("workflow_runs", [])
             if workflow_runs:
                 return workflow_runs[0].get("id")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to poll for workflow run on branch %s: %s", branch, e)
         return None
 
     def _wait_for_completion(self, run_id: int) -> bool:
@@ -131,10 +134,11 @@ class TestExecutor:
                 if status == "completed":
                     return conclusion is not None
 
-                time.sleep(self.poll_interval)
+                time.sleep(self.poll_interval)  # Blocking: sync workflow polling backoff
 
-            except Exception:
-                time.sleep(self.poll_interval)
+            except Exception as e:
+                logger.warning("Error polling workflow run %d status: %s", run_id, e)
+                time.sleep(self.poll_interval)  # Blocking: sync workflow polling backoff
 
         return False
 
@@ -259,7 +263,8 @@ class TestResultParser:
                 result.raw_output = output
                 return result
 
-            except Exception:
+            except Exception as e:
+                logger.debug("Failed to parse Jest JSON output: %s", e)
                 pass
 
         passed_match = re.search(r"Tests:\s+(\d+)\s+passed", output)

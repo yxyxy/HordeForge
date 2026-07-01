@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import tempfile
@@ -9,6 +10,8 @@ from typing import Any
 from agents.base import BaseAgent
 from agents.context_utils import build_agent_result, get_artifact_from_context
 from agents.patch_workflow_orchestrator import resolve_code_patch_files
+
+logger = logging.getLogger(__name__)
 
 
 class PatchApplyAgent(BaseAgent):
@@ -84,8 +87,8 @@ class PatchApplyAgent(BaseAgent):
                 try:
                     target.unlink(missing_ok=True)
                     applied += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to delete file %s: %s", target, e)
                 continue
 
             content = item.get("content")

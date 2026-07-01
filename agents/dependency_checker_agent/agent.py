@@ -399,7 +399,8 @@ class DependencyCheckerAgent(BaseAgent):
             if response.status_code != 200:
                 return []
             data = response.json()
-        except Exception:
+        except Exception as e:
+            logger.debug("Vulnerability DB query failed: %s", e)
             return []
 
         vulnerabilities = []
@@ -557,7 +558,10 @@ class DependencyCheckerAgent(BaseAgent):
             curr_ver = packaging.version.parse(current_version)
             latest_ver = packaging.version.parse(latest_version)
             return curr_ver < latest_ver
-        except Exception:
+        except Exception as e:
+            logger.debug(
+                "Version comparison failed for %s vs %s: %s", current_version, latest_version, e
+            )
             return False
 
 

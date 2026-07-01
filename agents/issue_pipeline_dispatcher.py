@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import time
 from typing import Any
@@ -13,6 +14,8 @@ from agents.context_utils import (
     get_artifact_from_result,
 )
 from agents.github_client import GitHubClient
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_repository_full_name(context: dict[str, Any]) -> str | None:
@@ -42,7 +45,8 @@ def _resolve_github_token(context: dict[str, Any], repository_full_name: str) ->
 
     try:
         from cli.repo_store import build_repo_token_ref, get_secret_value, list_secret_keys
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to import cli.repo_store for token resolution: %s", e)
         return None
 
     exact_ref = build_repo_token_ref(repository_full_name)
@@ -591,7 +595,8 @@ class IssuePipelineDispatcher(BaseAgent):
         try:
             client = GitHubClient(token=token, repo=repository_full_name)
             comments_raw = client.get_issue_comments(issue_number, per_page=50)
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to fetch comments for issue #%d: %s", issue_number, e)
             return issue_payload
 
         if not isinstance(comments_raw, list):
@@ -864,7 +869,8 @@ class IssuePipelineDispatcher(BaseAgent):
 
         try:
             parsed = json.loads(raw_json)
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to parse plan JSON from comment: %s", e)
             return None
 
         return parsed if isinstance(parsed, dict) else None
@@ -1061,7 +1067,8 @@ class IssuePipelineDispatcher(BaseAgent):
             else:
                 client.comment_issue(issue_number, comment_body)
             return True
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to post planning comment for issue #%d: %s", issue_number, e)
             return False
 
     @staticmethod
@@ -1186,7 +1193,8 @@ class IssuePipelineDispatcher(BaseAgent):
             client = GitHubClient(token=token, repo=repository_full_name)
             client.update_issue_labels(issue_number, labels=sorted(labels_set))
             return True
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to update stage label for issue #%d: %s", issue_number, e)
             return False
 
     @staticmethod
@@ -1214,7 +1222,8 @@ class IssuePipelineDispatcher(BaseAgent):
         if isinstance(response, JSONResponse):
             try:
                 payload = json.loads(response.body.decode("utf-8"))
-            except Exception:
+            except Exception as e:
+                logger.debug("Failed to parse pipeline response body: %s", e)
                 payload = {}
             return {
                 "status": "error",
@@ -1238,7 +1247,8 @@ class IssuePipelineDispatcher(BaseAgent):
                 from scheduler.gateway import TASK_QUEUE
 
                 task = TASK_QUEUE.get(task_id)
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed to resolve downstream run_id for task %s: %s", task_id, e)
                 return None
             if task is None:
                 return None
@@ -1248,5 +1258,5 @@ class IssuePipelineDispatcher(BaseAgent):
                 return run_id.strip()
             if str(task.status).upper() in {"FAILED", "SUCCEEDED"}:
                 return None
-            time.sleep(0.2)
+            time.sleep(0.2)  # Blocking: sync task polling backoff
         return None

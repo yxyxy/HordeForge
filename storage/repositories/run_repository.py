@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterable
 from datetime import datetime, timezone
@@ -7,6 +8,8 @@ from datetime import datetime, timezone
 from logging_utils import redact_sensitive_data
 from storage.backends import StorageBackend, get_current_log_path, get_storage_backend
 from storage.models import RunRecord
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_TABLE_NAME = "hordeforge_runs"
 
@@ -170,7 +173,8 @@ class RunRepository:
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
             return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to parse started_at timestamp %r: %s", value, e)
             return datetime.min.replace(tzinfo=timezone.utc)
 
     @staticmethod

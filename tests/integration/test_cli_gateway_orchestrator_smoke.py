@@ -7,7 +7,7 @@ import requests
 from fastapi.testclient import TestClient
 
 import cli
-from scheduler.gateway import RUNS, app
+from scheduler.gateway import STATE, app
 
 
 class ResponseAdapter:
@@ -41,7 +41,7 @@ def _install_cli_http_adapter(monkeypatch, client: TestClient) -> None:
 
 
 def test_cli_run_command_e2e_returns_api_payload_with_run_id_and_summary(monkeypatch, capsys):
-    RUNS.clear()
+    STATE.runs.clear()
     client = TestClient(app)
     _install_cli_http_adapter(monkeypatch, client)
     monkeypatch.setattr(
@@ -69,7 +69,7 @@ def test_cli_run_command_e2e_returns_api_payload_with_run_id_and_summary(monkeyp
 
 
 def test_cli_status_command_e2e_returns_run_record_with_summary(monkeypatch, capsys):
-    RUNS.clear()
+    STATE.runs.clear()
     client = TestClient(app)
     _install_cli_http_adapter(monkeypatch, client)
 

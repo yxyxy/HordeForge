@@ -36,7 +36,7 @@ class ContextBuilder:
         memory_results = self.memory_retriever.search_memory(query, limit=max_memory_entries)
 
         # Получаем релевантные чанки из репозитория
-        rag_results = self.rag_retriever.retrieve(query, limit=max_rag_chunks)
+        rag_results = self.rag_retriever.search(query, limit=max_rag_chunks)
 
         # Формируем контекст
         context_parts = []

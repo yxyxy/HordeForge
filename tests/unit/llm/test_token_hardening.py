@@ -7,25 +7,17 @@ from fastapi.testclient import TestClient
 
 import scheduler.gateway as gateway
 from agents.github_client import GitHubClient
-from scheduler.gateway import (
-    ARTIFACT_REPOSITORY,
-    IDEMPOTENCY_STORE,
-    RUN_REPOSITORY,
-    RUN_RUNTIME_INPUTS,
-    RUNS,
-    STEP_LOG_REPOSITORY,
-    app,
-)
+from scheduler.gateway import STATE, app
 
 
 @pytest.fixture(autouse=True)
 def _clean_gateway_storage():
-    RUNS.clear()
-    RUN_RUNTIME_INPUTS.clear()
-    RUN_REPOSITORY.store.write_all([])
-    STEP_LOG_REPOSITORY.store.write_all([])
-    ARTIFACT_REPOSITORY.store.write_all([])
-    IDEMPOTENCY_STORE.clear()
+    STATE.runs.clear()
+    STATE.run_runtime_inputs.clear()
+    STATE.run_repository.store.write_all([])
+    STATE.step_log_repository.store.write_all([])
+    STATE.artifact_repository.store.write_all([])
+    STATE.idempotency_store.clear()
     gateway.CRON_DISPATCHER = None
     yield
 
@@ -93,14 +85,14 @@ def test_run_pipeline_sanitizes_sensitive_data_in_result_and_artifacts(monkeypat
     assert response.status_code == 200
     run_id = response.json()["run_id"]
 
-    persisted = RUN_REPOSITORY.get(run_id)
+    persisted = STATE.run_repository.get(run_id)
     assert persisted is not None
     persisted_json = json.dumps(persisted.to_dict())
     assert "ghp_secret_token" not in persisted_json
     assert "Bearer abc.def.ghi" not in persisted_json
     assert "[REDACTED]" in persisted_json
 
-    artifacts = ARTIFACT_REPOSITORY.list_by_run(run_id)
+    artifacts = STATE.artifact_repository.list_by_run(run_id)
     assert artifacts
     artifact_json = json.dumps([item.to_dict() for item in artifacts])
     assert "ghp_secret_token" not in artifact_json

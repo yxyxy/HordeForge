@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from hordeforge_utils import snapshot_mapping_items
+
 REDACTED = "[REDACTED]"
 SENSITIVE_MARKERS = (
     "token",
@@ -18,17 +20,6 @@ SENSITIVE_VALUE_PATTERNS = (
     re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._+/=-]{8,}"),
 )
-
-
-def _snapshot_dict_items(value: dict[Any, Any]) -> list[tuple[Any, Any]]:
-    """Take a best-effort snapshot of dict items even under concurrent mutation."""
-    for _ in range(3):
-        try:
-            return list(value.items())
-        except RuntimeError as exc:
-            if "dictionary changed size during iteration" not in str(exc):
-                raise
-    return []
 
 
 def _is_sensitive_key(key: str | None) -> bool:
@@ -50,7 +41,7 @@ def redact_sensitive_data(value: Any, key: str | None = None) -> Any:
         return REDACTED
 
     if isinstance(value, dict):
-        return {k: redact_sensitive_data(v, k) for k, v in _snapshot_dict_items(value)}
+        return {k: redact_sensitive_data(v, k) for k, v in snapshot_mapping_items(value)}
     if isinstance(value, list):
         return [redact_sensitive_data(item, key) for item in value]
     if isinstance(value, tuple):

@@ -27,6 +27,10 @@ logger = logging.getLogger("hordeforge.code_generator")
 class EnhancedCodeGenerator(BaseAgent):
     name: str = "code_generator"
     description: str = "Generates code patch from specification, tests and subtasks."
+
+    def __init__(self) -> None:
+        self._snippet_cache: dict[str, dict[str, str]] = {}
+
     OPENED_LABEL = "agent:opened"
     PLANNING_LABEL = "agent:planning"
     READY_LABEL = "agent:ready"
@@ -41,7 +45,7 @@ class EnhancedCodeGenerator(BaseAgent):
         "analyze the failing test",
         "cannot implement fix without",
     )
-    MAX_UNJUSTIFIED_REWRITE_LINES = 1400
+    MAX_UNJUSTIFIED_REWRITE_LINES = 400
     MAX_CONTEXT_REPAIR_ATTEMPTS = 1
     MAX_REQUIRED_FILE_REQUEST_ROUNDTRIPS = 2
     MAX_REQUESTED_FILES_PER_ROUND = 4
@@ -242,7 +246,10 @@ class EnhancedCodeGenerator(BaseAgent):
         )
         strict_target_files = bool(context.get("strict_target_files", not open_mode))
         allow_new_files = self._allow_new_files(candidate_files, ci_failure_context, spec)
-        candidate_file_snippets = self._load_candidate_file_snippets(candidate_files)
+        candidate_file_snippets = self._load_candidate_file_snippets(
+            candidate_files,
+            context=context,
+        )
         signature_discovery_packet = self._build_signature_discovery_packet(
             candidate_files=candidate_files,
             candidate_file_snippets=candidate_file_snippets,
@@ -461,8 +468,8 @@ class EnhancedCodeGenerator(BaseAgent):
                 if llm is not None:
                     try:
                         llm.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Failed to close LLM: %s", e)
 
         if use_llm and require_llm and not llm_patch:
             failure_reason = (
@@ -1081,19 +1088,19 @@ class EnhancedCodeGenerator(BaseAgent):
                 str(path).strip() for path in files_to_modify[:8] if str(path).strip()
             ],
             "candidate_files": candidate_files[:10] if candidate_files else [],
-            "candidate_file_snippets": candidate_file_snippets[:4]
+            "candidate_file_snippets": candidate_file_snippets[:8]
             if candidate_file_snippets
             else [],
             "existing_files": [
                 str(item.get("path", "")).strip()
-                for item in (candidate_file_snippets or [])[:4]
+                for item in (candidate_file_snippets or [])[:8]
                 if isinstance(item, dict) and str(item.get("path", "")).strip()
             ],
             "file_contents": {
                 str(item.get("path", "")).strip(): str(
                     item.get("content") or item.get("snippet") or ""
                 )
-                for item in (candidate_file_snippets or [])[:4]
+                for item in (candidate_file_snippets or [])[:8]
                 if isinstance(item, dict) and str(item.get("path", "")).strip()
             },
             "allow_new_files": allow_new_files,
@@ -1190,7 +1197,7 @@ class EnhancedCodeGenerator(BaseAgent):
             )
         if candidate_file_snippets:
             snippet_lines: list[str] = []
-            for item in candidate_file_snippets[:2]:
+            for item in candidate_file_snippets[:4]:
                 path = str(item.get("path", "")).strip()
                 full_content = str(item.get("content") or "").strip()
                 snippet = full_content or str(item.get("snippet") or "").strip()
@@ -1325,7 +1332,8 @@ class EnhancedCodeGenerator(BaseAgent):
             repaired = self._complete_llm_with_optional_temperature(
                 llm=llm, prompt=repair_prompt, temperature=0.0
             )
-        except Exception:
+        except Exception as e:
+            logger.debug("LLM repair call failed: %s", e)
             return None
         return repaired if isinstance(repaired, str) and repaired.strip() else None
 
@@ -1524,7 +1532,8 @@ class EnhancedCodeGenerator(BaseAgent):
                     prompt=prompt,
                     temperature=0.0,
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning("LLM call failed in retry loop: %s", e)
                 break
 
             if isinstance(raw_response, str):
@@ -1606,7 +1615,8 @@ class EnhancedCodeGenerator(BaseAgent):
                 repaired_response = self._complete_llm_with_optional_temperature(
                     llm=llm, prompt=repair_prompt, temperature=0.0
                 )
-            except Exception:
+            except Exception as e:
+                logger.debug("LLM repair retry failed: %s", e)
                 return current_patch
 
             repaired_patch = self._parse_llm_patch_response(str(repaired_response or ""))
@@ -1784,8 +1794,8 @@ class EnhancedCodeGenerator(BaseAgent):
                 context.set_state_value(self.SEMANTIC_RETRY_STATE_KEY, value)
                 return
             context[self.SEMANTIC_RETRY_STATE_KEY] = value
-        except Exception:
-            logger.debug("code_generator_semantic_retry_state_write_failed")
+        except Exception as e:
+            logger.debug("code_generator_semantic_retry_state_write_failed: %s", e)
 
     @staticmethod
     def _build_semantic_feedback_packet_from_state(
@@ -2535,7 +2545,8 @@ class EnhancedCodeGenerator(BaseAgent):
             return None
         try:
             return selected_path.read_text(encoding="utf-8")
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to read file %s: %s", selected_path, e)
             return None
 
     @staticmethod
@@ -2590,7 +2601,8 @@ class EnhancedCodeGenerator(BaseAgent):
     def _try_shared_code_parser(text: str) -> dict[str, Any] | None:
         try:
             parsed = parse_code_output(text)
-        except Exception:
+        except Exception as e:
+            logger.debug("Shared code parser failed: %s", e)
             return None
         return parsed if isinstance(parsed, dict) else None
 
@@ -2752,7 +2764,8 @@ class EnhancedCodeGenerator(BaseAgent):
                 continue
             try:
                 content = bytes(content, "utf-8").decode("unicode_escape")
-            except Exception:
+            except Exception as e:
+                logger.debug("unicode_escape decode failed for content, using fallback: %s", e)
                 content = content.replace("\\n", "\n")
             files.append(
                 {
@@ -3006,16 +3019,26 @@ class EnhancedCodeGenerator(BaseAgent):
         self,
         candidate_files: list[str],
         *,
-        max_files: int = 3,
-        max_chars_per_file: int = 3000,
+        max_files: int = 8,
+        max_chars_per_file: int = 8000,
+        context: dict[str, Any] | None = None,
     ) -> list[dict[str, str]]:
         snippets: list[dict[str, str]] = []
         seen: set[str] = set()
+        force_refresh = bool((context or {}).get("force_refresh_files", False))
         for raw_path in candidate_files[:20]:
             normalized = self._normalize_path(raw_path)
             if not normalized or normalized in seen:
                 continue
             seen.add(normalized)
+
+            cache_key = f"{normalized}:{max_chars_per_file}"
+            if not force_refresh and cache_key in self._snippet_cache:
+                cached = self._snippet_cache[cache_key]
+                snippets.append(cached)
+                if len(snippets) >= max_files:
+                    break
+                continue
 
             repo_path = Path("workspace/repo") / normalized
             local_path = Path(normalized)
@@ -3029,19 +3052,20 @@ class EnhancedCodeGenerator(BaseAgent):
 
             try:
                 content = selected_path.read_text(encoding="utf-8")
-            except Exception:
+            except Exception as e:
+                logger.debug("Failed to read file %s: %s", selected_path, e)
                 continue
             snippet = content[:max_chars_per_file].strip()
             if not snippet:
                 continue
-            snippets.append(
-                {
-                    "path": normalized,
-                    "snippet": snippet,
-                    "content": content.strip(),
-                    "truncated": len(content) > max_chars_per_file,
-                }
-            )
+            entry = {
+                "path": normalized,
+                "snippet": snippet,
+                "content": content.strip(),
+                "truncated": len(content) > max_chars_per_file,
+            }
+            self._snippet_cache[cache_key] = entry
+            snippets.append(entry)
             if len(snippets) >= max_files:
                 break
         return snippets
@@ -3831,7 +3855,8 @@ class EnhancedCodeGenerator(BaseAgent):
             return None
         try:
             parsed = json.loads(raw_json)
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to parse JSON: %s", e)
             return None
         return parsed if isinstance(parsed, dict) else None
 

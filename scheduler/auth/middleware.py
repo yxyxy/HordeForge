@@ -47,10 +47,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     def _is_public_path(self, path: str) -> bool:
         """Check if path is public (doesn't require auth)."""
-        for public in self.public_paths:
-            if path.startswith(public):
-                return True
-        return False
+        # Normalize path (remove trailing slash except root)
+        normalized = path.rstrip("/") or "/"
+        return normalized in self.public_paths
 
     def _extract_token(self, request: Request) -> str | None:
         """Extract authentication token from request."""

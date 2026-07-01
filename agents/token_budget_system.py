@@ -363,10 +363,15 @@ class TokenBudgetSystem:
 
         today = datetime.now().strftime("%Y-%m-%d")
         if self.budget_limits.daily_limit:
-            # Convert tokens to approximate cost for comparison
+            # Use the current model for cost calculation if available
+            model = (
+                self._current_model
+                if hasattr(self, "_current_model") and self._current_model
+                else ModelInfo()
+            )
             daily_cost = sum(
                 sum(
-                    self.calculate_cost(ModelInfo(), provider_usage).total_cost
+                    self.calculate_cost(model, provider_usage).total_cost
                     for provider_usage in day_usage.values()
                 )
                 for date, day_usage in self.daily_usage.items()

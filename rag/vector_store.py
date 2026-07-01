@@ -269,13 +269,13 @@ class QdrantStore:
                     logger.warning(
                         f"Collection '{collection_name}' does not exist, attempt {retry_count + 1}/{max_retries}"
                     )
-                    time.sleep(0.1)  # Небольшая задержка перед повторной проверкой
+                    time.sleep(0.1)  # Blocking: sync vector store retry backoff
                     retry_count += 1
             except Exception as e:
                 logger.warning(
                     f"Error checking collection existence: {e}, attempt {retry_count + 1}/{max_retries}"
                 )
-                time.sleep(0.1)
+                time.sleep(0.1)  # Blocking: sync vector store retry backoff
                 retry_count += 1
 
         if not collection_ready:

@@ -208,7 +208,9 @@ class ChunkingStage:
         if use_smart_chunking:
             self.chunk_generator = ChunkGenerator(max_chunk_size=chunk_size, overlap_size=overlap)
 
-    async def run(self, symbols: list[Symbol]) -> list[Chunk]:
+    async def run(
+        self, symbols: list[Symbol], file_contents: dict[str, str] | None = None
+    ) -> list[Chunk]:
         """Create chunks from the extracted symbols."""
         logger.info(
             f"ChunkingStage: Starting to create chunks from {len(symbols)} symbols (smart_chunking: {self.use_smart_chunking})"
@@ -233,9 +235,12 @@ class ChunkingStage:
                 file_path = Path(file_path_str)
                 total_files_processed += 1
                 try:
-                    # Read the file content to pass to the chunk generator
-                    with open(file_path, encoding="utf-8") as f:
-                        file_content = f.read()
+                    # Use pre-loaded content if available, otherwise read from disk
+                    if file_contents and file_path_str in file_contents:
+                        file_content = file_contents[file_path_str]
+                    else:
+                        with open(file_path, encoding="utf-8") as f:
+                            file_content = f.read()
 
                     # Generate chunks using the smart chunking approach
                     file_chunks = self.chunk_generator.generate_chunks(

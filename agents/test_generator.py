@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -11,6 +12,8 @@ from agents.llm_wrapper_backward_compatibility import (
     get_legacy_llm_wrapper,
 )
 from agents.test_templates import get_test_template
+
+logger = logging.getLogger(__name__)
 
 
 def generate_unit_tests(function: str) -> str:
@@ -669,10 +672,9 @@ class TestGenerator(BaseAgent):
         if spec and language:
             try:
                 test_template = get_test_template(language, framework)
-            except Exception:
-                pass
-
-        test_patterns = {}
+            except Exception as e:
+                logger.debug("Failed to get test template for %s: %s", language, e)
+        test_patterns: dict[str, Any] = {}
         existing_test_files = context.get("existing_test_files", [])
         if existing_test_files:
             test_patterns = extract_test_patterns(existing_test_files, language, framework)

@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-import time
-from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -12,7 +9,9 @@ from threading import RLock
 from typing import Any
 from uuid import uuid4
 
+from hordeforge_utils import resolve_path
 from logging_utils import redact_mapping
+from orchestrator import checkpointing
 from orchestrator.context import ExecutionContext
 from orchestrator.executor import StepExecutor
 from orchestrator.hooks import (
@@ -22,10 +21,14 @@ from orchestrator.hooks import (
     trigger_memory_hook,
     trigger_memory_promotion,
 )
-from orchestrator.loader import LoopDefinition, PipelineDefinition, PipelineLoader, StepDefinition
-from orchestrator.override import RUN_OVERRIDE_REGISTRY
-from orchestrator.parallel import build_step_dependency_graph, select_lock_aware_batch
+from orchestrator.loader import PipelineDefinition, PipelineLoader, StepDefinition
+from orchestrator.loop_eval import evaluate_loop_condition
+from orchestrator.pipeline_runner import (
+    POLICY_ACTIONS,  # noqa: F401
+    PipelineRunner,
+)
 from orchestrator.pipeline_state import PipelineState
+from orchestrator.pipeline_status import PipelineStatus
 from orchestrator.pipeline_validator import PipelineValidationError, PipelineValidator
 from orchestrator.retry import RetryPolicy
 from orchestrator.state import PipelineRunState
@@ -35,17 +38,6 @@ from orchestrator.validation import RuntimeSchemaValidator, SchemaValidationErro
 from registry.bootstrap import init_registries
 from registry.runtime_adapter import RuntimeRegistryAdapter
 from rules.loader import DEFAULT_RULE_SET_VERSION, RulePackLoader
-
-POLICY_ACTIONS: dict[str, str] = {
-    "stop_pipeline": "stop",
-    "log_warning": "continue",
-    "continue": "continue",
-    "retry_step": "retry",
-    "create_issue_for_human": "block",
-    "escalate_to_human": "block",
-    "skip_step": "continue",
-    "trigger_fix_loop": "continue",
-}
 
 
 class OrchestratorEngine:
@@ -70,62 +62,104 @@ class OrchestratorEngine:
         use_registry_bootstrap: bool = True,
         allow_pipeline_fallback: bool = True,
         execution_guardrail_hook: ExecutionGuardrailHook | None = None,
+        deps: Any = None,
     ):
-        registry_bundle: dict[str, Any] | None = None
-        runtime_registry: RuntimeRegistryAdapter | None = None
-        if use_registry_bootstrap:
-            registry_bundle = init_registries(
-                contracts_dir=contracts_dir,
-                pipelines_dir=pipelines_dir,
+        if deps is not None:
+            from orchestrator.container import OrchestratorDependencies
+
+            if not isinstance(deps, OrchestratorDependencies):
+                raise TypeError(f"deps must be OrchestratorDependencies, got {type(deps).__name__}")
+            self.pipeline_loader = deps.pipeline_loader or PipelineLoader(
+                pipelines_dir=pipelines_dir
             )
-            runtime_registry = RuntimeRegistryAdapter(registry_bundle["agent_registry"])
-
-        if pipeline_loader is None:
-            if registry_bundle is not None:
-                self.pipeline_loader = PipelineLoader(
+            self.step_executor = deps.step_executor or StepExecutor()
+            self.retry_policy = deps.retry_policy or RetryPolicy(retry_limit=0, backoff_seconds=0.0)
+            self.execution_guardrail_hook = (
+                deps.execution_guardrail_hook or BasicExecutionGuardrailHook()
+            )
+            self.summary_builder = deps.summary_builder or RunSummaryBuilder()
+            self.rule_pack_loader = deps.rule_pack_loader
+            self.validate_pipeline_schema = deps.pipeline_validator is not None
+            self._pipeline_validator = deps.pipeline_validator
+            self._state_validator = deps.state_validator or RuntimeSchemaValidator()
+            self.logger = deps.logger or logging.getLogger("hordeforge.orchestrator.engine")
+            self._checkpoint_lock = deps.checkpoint_lock
+            self.max_loop_iterations = max_loop_iterations
+            self.max_parallel_workers = max(1, int(max_parallel_workers))
+        else:
+            registry_bundle: dict[str, Any] | None = None
+            runtime_registry: RuntimeRegistryAdapter | None = None
+            if use_registry_bootstrap:
+                registry_bundle = init_registries(
+                    contracts_dir=contracts_dir,
                     pipelines_dir=pipelines_dir,
-                    pipeline_registry=registry_bundle["pipeline_registry"],
-                    allow_fallback=allow_pipeline_fallback,
                 )
-            else:
-                self.pipeline_loader = PipelineLoader(pipelines_dir=pipelines_dir)
-        else:
-            self.pipeline_loader = pipeline_loader
+                runtime_registry = RuntimeRegistryAdapter(registry_bundle["agent_registry"])
 
-        if step_executor is None:
-            if runtime_registry is not None:
-                self.step_executor = StepExecutor(
-                    agent_registry=runtime_registry,
-                    strict_schema_validation=strict_schema_validation,
-                )
+            if pipeline_loader is None:
+                if registry_bundle is not None:
+                    self.pipeline_loader = PipelineLoader(
+                        pipelines_dir=pipelines_dir,
+                        pipeline_registry=registry_bundle["pipeline_registry"],
+                        allow_fallback=allow_pipeline_fallback,
+                    )
+                else:
+                    self.pipeline_loader = PipelineLoader(pipelines_dir=pipelines_dir)
             else:
-                self.step_executor = StepExecutor(
-                    strict_schema_validation=strict_schema_validation,
-                )
-        else:
-            self.step_executor = step_executor
-        self.retry_policy = retry_policy or RetryPolicy(retry_limit=0, backoff_seconds=0.0)
-        self.execution_guardrail_hook = execution_guardrail_hook or BasicExecutionGuardrailHook()
-        self.summary_builder = summary_builder or RunSummaryBuilder()
-        self.max_loop_iterations = max_loop_iterations
-        self.max_parallel_workers = max(1, int(max_parallel_workers))
-        self.rule_pack_loader = rule_pack_loader or RulePackLoader(
-            rules_dir=rules_dir,
-            rule_set_version=rule_set_version,
-        )
-        self.validate_pipeline_schema = validate_pipeline_schema
-        if validate_pipeline_schema:
-            if runtime_registry is not None:
-                self._pipeline_validator = PipelineValidator(agent_registry=runtime_registry)
+                self.pipeline_loader = pipeline_loader
+
+            if step_executor is None:
+                if runtime_registry is not None:
+                    self.step_executor = StepExecutor(
+                        agent_registry=runtime_registry,
+                        strict_schema_validation=strict_schema_validation,
+                    )
+                else:
+                    self.step_executor = StepExecutor(
+                        strict_schema_validation=strict_schema_validation,
+                    )
             else:
-                self._pipeline_validator = PipelineValidator()
-        else:
-            self._pipeline_validator = None
-        self._state_validator = RuntimeSchemaValidator(
-            strict_mode=strict_schema_validation,
+                self.step_executor = step_executor
+            self.retry_policy = retry_policy or RetryPolicy(retry_limit=0, backoff_seconds=0.0)
+            self.execution_guardrail_hook = (
+                execution_guardrail_hook or BasicExecutionGuardrailHook()
+            )
+            self.summary_builder = summary_builder or RunSummaryBuilder()
+            self.max_loop_iterations = max_loop_iterations
+            self.max_parallel_workers = max(1, int(max_parallel_workers))
+            self.rule_pack_loader = rule_pack_loader or RulePackLoader(
+                rules_dir=rules_dir,
+                rule_set_version=rule_set_version,
+            )
+            self.validate_pipeline_schema = validate_pipeline_schema
+            if validate_pipeline_schema:
+                if runtime_registry is not None:
+                    self._pipeline_validator = PipelineValidator(agent_registry=runtime_registry)
+                else:
+                    self._pipeline_validator = PipelineValidator()
+            else:
+                self._pipeline_validator = None
+            self._state_validator = RuntimeSchemaValidator(
+                strict_mode=strict_schema_validation,
+            )
+            self.logger = logging.getLogger("hordeforge.orchestrator.engine")
+            self._checkpoint_lock = RLock()
+
+        self._runner = PipelineRunner(
+            step_executor=self.step_executor,
+            retry_policy=self.retry_policy,
+            execution_guardrail_hook=self.execution_guardrail_hook,
+            max_loop_iterations=self.max_loop_iterations,
+            max_parallel_workers=self.max_parallel_workers,
+            checkpoint_lock=self._checkpoint_lock,
+            state_validator=self._state_validator,
+            logger=self.logger,
         )
-        self.logger = logging.getLogger("hordeforge.orchestrator.engine")
-        self._checkpoint_lock = RLock()
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name == "step_executor" and hasattr(self, "_runner"):
+            self._runner.step_executor = value
 
     @staticmethod
     def _now_iso() -> str:
@@ -152,17 +186,12 @@ class OrchestratorEngine:
         return output.get("status") in {"SUCCESS", "PARTIAL_SUCCESS"}
 
     @staticmethod
-    def _resolve_policy_action(on_failure: str) -> str:
-        return POLICY_ACTIONS.get(on_failure, "stop")
+    def _resolve_path(source: dict[str, Any], dotted_path: str) -> Any:
+        return resolve_path(source, dotted_path)
 
     @staticmethod
-    def _resolve_path(source: dict[str, Any], dotted_path: str) -> Any:
-        current: Any = source
-        for part in dotted_path.split("."):
-            if not isinstance(current, dict) or part not in current:
-                return None
-            current = current[part]
-        return current
+    def _evaluate_loop_condition(condition: str, state: dict[str, Any]) -> bool:
+        return evaluate_loop_condition(condition, state)
 
     @staticmethod
     def _derive_trace_id(correlation_id: str, run_id: str) -> str:
@@ -171,509 +200,6 @@ class OrchestratorEngine:
 
     def _load_rules_payload(self) -> dict[str, Any]:
         return deepcopy(self.rule_pack_loader.load())
-
-    def _evaluate_loop_condition(self, condition: str, state: dict[str, Any]) -> bool:
-        """Evaluate loop condition with Jinja2 support.
-
-        Supports:
-        - {{path.to.value}} > 0
-        - {{path.to.value}} >= 1
-        - {{path.to.value}} == 0
-        - {{path.to.value}} != 0
-        - Boolean expressions like {{value}}
-        """
-        try:
-            from jinja2 import Template
-        except ImportError:
-            # Fallback to simple regex parsing
-            return self._evaluate_loop_condition_simple(condition, state)
-
-        condition = condition.strip()
-
-        # Try to render Jinja2 template
-        try:
-            template = Template(condition)
-            rendered = template.render(**state)
-            rendered = rendered.strip()
-        except Exception:
-            # If Jinja2 fails, try simple regex
-            return self._evaluate_loop_condition_simple(condition, state)
-
-        # Evaluate the rendered expression
-        # Check for simple boolean
-        if rendered.lower() in ("true", "false"):
-            return rendered.lower() == "true"
-
-        # Check for comparison operators
-        pattern = r"^(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)$"
-        match = re.match(pattern, rendered)
-        if match:
-            left_str, operator, right_str = match.groups()
-
-            # Try to resolve left side as path
-            left_value = self._resolve_path(state, left_str.strip())
-            if left_value is None:
-                try:
-                    left_value = float(left_str.strip())
-                except (ValueError, TypeError):
-                    # If left side is not a number, treat as boolean
-                    left_value = bool(left_str.strip())
-
-            # Parse right side
-            right_value: Any
-            try:
-                right_value = float(right_str.strip())
-            except ValueError:
-                right_str_lower = right_str.strip().lower()
-                if right_str_lower == "true":
-                    right_value = True
-                elif right_str_lower == "false":
-                    right_value = False
-                else:
-                    right_value = right_str.strip()
-
-            # Compare values
-            if operator == "==":
-                return left_value == right_value
-            if operator == "!=":
-                return left_value != right_value
-            if operator == ">":
-                try:
-                    return float(left_value) > float(right_value)
-                except (TypeError, ValueError):
-                    return False
-            if operator == "<":
-                try:
-                    return float(left_value) < float(right_value)
-                except (TypeError, ValueError):
-                    return False
-            if operator == ">=":
-                try:
-                    return float(left_value) >= float(right_value)
-                except (TypeError, ValueError):
-                    return False
-            if operator == "<=":
-                try:
-                    return float(left_value) <= float(right_value)
-                except (TypeError, ValueError):
-                    return False
-
-        # If no pattern matched, try to treat as boolean
-        return bool(rendered)
-
-    def _evaluate_loop_condition_simple(self, condition: str, state: dict[str, Any]) -> bool:
-        """Fallback simple loop condition evaluation without Jinja2."""
-        pattern = r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}\s*(==|!=|>=|<=|>|<)\s*(-?\d+)"
-        match = re.fullmatch(pattern, condition.strip())
-        if not match:
-            return False
-
-        path, operator, right_value_raw = match.groups()
-        left = self._resolve_path(state, path)
-        if left is None:
-            return False
-        try:
-            left_value = float(left)
-            right_value = float(right_value_raw)
-        except (TypeError, ValueError):
-            return False
-
-        if operator == "==":
-            return left_value == right_value
-        if operator == "!=":
-            return left_value != right_value
-        if operator == ">":
-            return left_value > right_value
-        if operator == "<":
-            return left_value < right_value
-        if operator == ">=":
-            return left_value >= right_value
-        return left_value <= right_value
-
-    def _execute_step_with_policy(
-        self,
-        step: StepDefinition,
-        context: ExecutionContext,
-        run_state: PipelineRunState,
-        has_next_step: bool = True,
-    ) -> tuple[dict[str, Any], bool]:
-        if isinstance(step.condition, str) and step.condition.strip():
-            condition_matched = self._evaluate_loop_condition(step.condition, context.state)
-            if not condition_matched:
-                skipped_output = {
-                    "status": "SKIPPED",
-                    "artifacts": [],
-                    "decisions": [
-                        {
-                            "reason": f"Condition not met: {step.condition}",
-                            "confidence": 1.0,
-                        }
-                    ],
-                    "logs": [f"Step skipped: condition not met ({step.condition})."],
-                    "next_actions": [],
-                }
-                finished_at = self._now_iso()
-                run_state.mark_step_status(
-                    step.name,
-                    StepStatus.SKIPPED,
-                    finished_at=finished_at,
-                    error=f"Step condition not met: {step.condition}",
-                    output=skipped_output,
-                )
-                context.record_step_result(step.name, skipped_output)
-                run_state.advance_index()
-                self._emit_checkpoint(context=context, run_state=run_state)
-                self._log_event(
-                    logging.INFO,
-                    context.run_id,
-                    "step_skipped_by_condition",
-                    step_name=step.name,
-                    condition=step.condition,
-                    correlation_id=context.metadata.get("correlation_id"),
-                )
-                return skipped_output, False
-
-        override_request = RUN_OVERRIDE_REGISTRY.get(context.run_id)
-        if override_request is not None and override_request.action == "stop":
-            blocked_output = {
-                "status": "BLOCKED",
-                "artifacts": [],
-                "decisions": [],
-                "logs": ["Run stopped by operator override."],
-                "next_actions": [],
-            }
-            run_state.set_run_status(StepStatus.BLOCKED)
-            run_state.mark_step_status(
-                step.name,
-                StepStatus.SKIPPED,
-                finished_at=self._now_iso(),
-                error=f"Run stopped by override: {override_request.reason or 'no reason provided'}",
-                output=blocked_output,
-            )
-            context.record_step_result(step.name, blocked_output)
-            self._emit_checkpoint(context=context, run_state=run_state)
-            self._log_event(
-                logging.WARNING,
-                context.run_id,
-                "step_skipped_by_override",
-                step_name=step.name,
-                action=override_request.action,
-                reason=override_request.reason,
-                correlation_id=context.metadata.get("correlation_id"),
-            )
-            return blocked_output, True
-
-        try:
-            existing_step_state = run_state.get_step(step.name)
-            retry_attempt = max(0, int(existing_step_state.attempts) - 1)
-        except Exception:
-            retry_attempt = 0
-        while True:
-            try:
-                self.execution_guardrail_hook.before_step(
-                    step_name=step.name,
-                    context=context.state,
-                )
-            except Exception as exc:  # noqa: BLE001
-                blocked_output = {
-                    "status": "BLOCKED",
-                    "artifacts": [],
-                    "decisions": [
-                        {
-                            "reason": f"pre_execution_guardrail_failed:{exc}",
-                            "confidence": 1.0,
-                        }
-                    ],
-                    "logs": [f"Step blocked by pre-execution guardrail: {exc}"],
-                    "next_actions": [],
-                }
-                run_state.set_run_status(StepStatus.BLOCKED)
-                run_state.mark_step_status(
-                    step.name,
-                    StepStatus.BLOCKED,
-                    finished_at=self._now_iso(),
-                    error=str(exc),
-                    output=blocked_output,
-                )
-                context.record_step_result(step.name, blocked_output)
-                self._emit_checkpoint(context=context, run_state=run_state)
-                self._log_event(
-                    logging.WARNING,
-                    context.run_id,
-                    "step_blocked_by_pre_execution_guardrail",
-                    step_name=step.name,
-                    error=str(exc),
-                    correlation_id=context.metadata.get("correlation_id"),
-                )
-                return blocked_output, True
-
-            output = self.step_executor.execute_step(step, context, run_state)
-            try:
-                self.execution_guardrail_hook.after_step(
-                    step_name=step.name,
-                    output=output,
-                    context=context.state,
-                )
-            except Exception as exc:  # noqa: BLE001
-                output = {
-                    "status": "FAILED",
-                    "artifacts": [],
-                    "decisions": [
-                        {
-                            "reason": f"post_execution_guardrail_failed:{exc}",
-                            "confidence": 1.0,
-                        }
-                    ],
-                    "logs": [f"Step failed post-execution guardrail: {exc}"],
-                    "next_actions": [],
-                }
-
-            context.record_step_result(step.name, output)
-            if self._is_step_success(output):
-                run_state.advance_index()
-                self._emit_checkpoint(context=context, run_state=run_state)
-                return output, False
-
-            action = self._resolve_policy_action(step.on_failure)
-            if action == "retry":
-                retry_attempt += 1
-                if self.retry_policy.should_retry(retry_attempt, step.retry_limit):
-                    backoff = self.retry_policy.backoff_duration(retry_attempt)
-                    self._log_event(
-                        logging.WARNING,
-                        context.run_id,
-                        "step_retry",
-                        step_name=step.name,
-                        attempt=retry_attempt,
-                        backoff_seconds=backoff,
-                        correlation_id=context.metadata.get("correlation_id"),
-                    )
-                    if backoff > 0:
-                        time.sleep(backoff)
-                    continue
-                # Retry limit exhausted - block the pipeline
-                action = "block"
-
-            if action == "continue":
-                if run_state.run_status in {StepStatus.FAILED.value, StepStatus.BLOCKED.value}:
-                    run_state.set_run_status(StepStatus.RUNNING)
-                run_state.mark_step_status(
-                    step.name,
-                    StepStatus.SKIPPED,
-                    finished_at=self._now_iso(),
-                    error=f"Step failed but continued by policy: {step.on_failure}",
-                )
-                run_state.advance_index()
-                self._emit_checkpoint(context=context, run_state=run_state)
-                return output, False
-
-            if action == "block":
-                run_state.set_run_status(StepStatus.BLOCKED)
-                self._emit_checkpoint(context=context, run_state=run_state)
-                return output, True
-
-            run_state.set_run_status(StepStatus.FAILED)
-            self._emit_checkpoint(context=context, run_state=run_state)
-            return output, True
-
-    def _execute_loop(
-        self,
-        loop: LoopDefinition,
-        step_by_name: dict[str, StepDefinition],
-        context: ExecutionContext,
-        run_state: PipelineRunState,
-        step_results: dict[str, dict[str, Any]],
-    ) -> bool:
-        iterations = 0
-        stagnant_iterations = 0
-        previous_signature = None
-        no_progress_threshold = (
-            int(loop.no_progress_threshold) if loop.no_progress_threshold is not None else None
-        )
-        signature_path = loop.progress_signature_path or "test_results.failure_signature"
-
-        while self._evaluate_loop_condition(loop.condition, context.state):
-            iterations += 1
-            if iterations > self.max_loop_iterations:
-                loop_actions = {
-                    step_by_name[step_name].on_failure
-                    for step_name in loop.steps
-                    if step_name in step_by_name
-                }
-                allow_graceful_break = any(action != "stop_pipeline" for action in loop_actions)
-                if allow_graceful_break:
-                    self._log_event(
-                        logging.WARNING,
-                        context.run_id,
-                        "loop_iteration_limit_reached",
-                        condition=loop.condition,
-                        iterations=iterations - 1,
-                        max_iterations=self.max_loop_iterations,
-                        correlation_id=context.metadata.get("correlation_id"),
-                    )
-                    break
-
-                raise RuntimeError(
-                    f"Loop exceeded max iterations ({self.max_loop_iterations}): {loop.condition}"
-                )
-            retry_iteration = False
-            for idx, step_name in enumerate(loop.steps):
-                step = step_by_name.get(step_name)
-                if not step:
-                    raise ValueError(f"Loop references unknown step: {step_name}")
-                has_next = idx < len(loop.steps) - 1
-                output, should_stop = self._execute_step_with_policy(
-                    step, context, run_state, has_next_step=has_next
-                )
-                step_results[step_name] = output
-                if should_stop:
-                    action = self._resolve_policy_action(step.on_failure)
-                    is_last_loop_step = idx == len(loop.steps) - 1
-                    can_retry_current_iteration = (
-                        action == "stop"
-                        and len(loop.steps) > 1
-                        and is_last_loop_step
-                        and self._evaluate_loop_condition(loop.condition, context.state)
-                    )
-                    if can_retry_current_iteration:
-                        self._log_event(
-                            logging.WARNING,
-                            context.run_id,
-                            "loop_iteration_retry",
-                            step_name=step.name,
-                            condition=loop.condition,
-                            reason="terminal_loop_step_failed_while_condition_is_true",
-                            correlation_id=context.metadata.get("correlation_id"),
-                        )
-                        retry_iteration = True
-                        break
-                    return True
-            if retry_iteration:
-                continue
-
-            if no_progress_threshold is not None and no_progress_threshold > 0:
-                signature_value = self._resolve_path(context.state, signature_path)
-                signature = str(signature_value or "").strip()
-                if signature:
-                    if signature == previous_signature:
-                        stagnant_iterations += 1
-                    else:
-                        stagnant_iterations = 0
-                    previous_signature = signature
-
-                if stagnant_iterations >= no_progress_threshold:
-                    self._log_event(
-                        logging.WARNING,
-                        context.run_id,
-                        "loop_no_progress_detected",
-                        condition=loop.condition,
-                        stagnant_iterations=stagnant_iterations,
-                        signature_path=signature_path,
-                        threshold=no_progress_threshold,
-                        correlation_id=context.metadata.get("correlation_id"),
-                    )
-                    context.state.setdefault("loop_guard", {})
-                    if isinstance(context.state["loop_guard"], dict):
-                        context.state["loop_guard"].update(
-                            {
-                                "no_progress_detected": True,
-                                "stagnant_iterations": stagnant_iterations,
-                                "signature_path": signature_path,
-                                "last_signature": previous_signature,
-                            }
-                        )
-                    break
-        return False
-
-    def _execute_step_batch(
-        self,
-        steps: list[StepDefinition],
-        context: ExecutionContext,
-        run_state: PipelineRunState,
-        is_last_batch: bool = False,
-    ) -> tuple[dict[str, dict[str, Any]], bool]:
-        if not steps:
-            return {}, False
-        if len(steps) == 1 or self.max_parallel_workers <= 1:
-            has_next = not is_last_batch or len(steps) > 1
-            output, should_stop = self._execute_step_with_policy(
-                steps[0], context, run_state, has_next_step=has_next
-            )
-            return {steps[0].name: output}, should_stop
-
-        outputs: dict[str, dict[str, Any]] = {}
-        should_stop = False
-        # For parallel execution, determine if each step is last in the batch
-        last_step_index = len(steps) - 1
-        with ThreadPoolExecutor(max_workers=min(self.max_parallel_workers, len(steps))) as pool:
-            futures = {
-                pool.submit(
-                    self._execute_step_with_policy,
-                    step,
-                    context,
-                    run_state,
-                    has_next_step=(idx < last_step_index or not is_last_batch),
-                ): step.name
-                for idx, step in enumerate(steps)
-            }
-            for future, step_name in futures.items():
-                output, step_should_stop = future.result()
-                outputs[step_name] = output
-                should_stop = should_stop or step_should_stop
-        return outputs, should_stop
-
-    def _execute_with_parallelism(
-        self,
-        steps_to_execute: list[StepDefinition],
-        context: ExecutionContext,
-        run_state: PipelineRunState,
-        step_results: dict[str, dict[str, Any]],
-        externally_satisfied_dependencies: set[str] | None = None,
-    ) -> bool:
-        dependencies = build_step_dependency_graph(
-            steps_to_execute,
-            externally_satisfied_dependencies=externally_satisfied_dependencies,
-        )
-        step_by_name = {step.name: step for step in steps_to_execute}
-        ordered_names = [step.name for step in steps_to_execute]
-        executed: set[str] = set()
-
-        should_stop = False
-        while len(executed) < len(steps_to_execute):
-            ready_steps = [
-                step_by_name[name]
-                for name in ordered_names
-                if name not in executed and dependencies[name].issubset(executed)
-            ]
-            if not ready_steps:
-                unresolved = sorted(name for name in ordered_names if name not in executed)
-                raise ValueError(
-                    "Pipeline contains cyclic or unresolved dependencies: " + ", ".join(unresolved)
-                )
-
-            ready_queue = list(ready_steps)
-            while ready_queue:
-                batch = select_lock_aware_batch(ready_queue)
-                # Determine if this is the last batch (no more steps will remain after this)
-                remaining_after_batch = [
-                    name
-                    for name in ordered_names
-                    if name not in executed and name not in {s.name for s in batch}
-                ]
-                is_last_batch = len(remaining_after_batch) == 0
-                outputs, batch_should_stop = self._execute_step_batch(
-                    batch, context, run_state, is_last_batch=is_last_batch
-                )
-                for step in batch:
-                    step_results[step.name] = outputs[step.name]
-                    executed.add(step.name)
-                ready_queue = [item for item in ready_queue if item.name not in outputs]
-                if batch_should_stop:
-                    should_stop = True
-                    break
-            if should_stop:
-                break
-        return should_stop
 
     @staticmethod
     def _derive_final_status(
@@ -696,102 +222,15 @@ class OrchestratorEngine:
             return "PARTIAL_SUCCESS"
         return StepStatus.SUCCESS.value
 
-    def _sync_and_validate_pipeline_state(
+    def _setup_run_context(
         self,
-        *,
-        context: ExecutionContext,
-        run_state: PipelineRunState,
-    ) -> None:
-        context.sync_pipeline_state_from_run_state(run_state)
-        payload = context.pipeline_state.model_dump(mode="json")
-        try:
-            errors = self._state_validator.validate_pipeline_state(payload)
-        except SchemaValidationError as exc:
-            raise ValueError(f"Invalid pipeline_state payload: {exc}") from exc
-
-        if errors:
-            raise ValueError("Invalid pipeline_state payload: " + "; ".join(errors))
-
-    def _build_checkpoint_payload(
-        self,
-        *,
-        context: ExecutionContext,
-        run_state: PipelineRunState,
-        status: str,
-    ) -> dict[str, Any]:
-        retry_metadata: dict[str, dict[str, Any]] = {}
-        for step in run_state.steps:
-            retry_metadata[step.name] = {
-                "attempts": step.attempts,
-                "status": step.status.value,
-                "input_hash": step.input_hash,
-                "error": step.error,
-            }
-
-        step_results_snapshot = context.snapshot_step_results()
-        context_snapshot = context.snapshot_state()
-
-        return {
-            "run_id": context.run_id,
-            "pipeline_name": context.pipeline_name,
-            "status": status,
-            "steps": step_results_snapshot,
-            "run_state": run_state.to_dict(),
-            "checkpoint": {
-                "step_cursor": run_state.current_step_index,
-                "run_status": run_state.run_status,
-                "context_snapshot": context_snapshot,
-                "step_results_snapshot": step_results_snapshot,
-                "run_state_snapshot": run_state.to_dict(),
-                "retry_metadata": retry_metadata,
-            },
-        }
-
-    def _emit_checkpoint(
-        self,
-        *,
-        context: ExecutionContext,
-        run_state: PipelineRunState,
-        status: str | None = None,
-    ) -> None:
-        self._sync_and_validate_pipeline_state(context=context, run_state=run_state)
-        callback = context.metadata.get("__checkpoint_callback")
-        if not callable(callback):
-            return
-
-        checkpoint_status = status or run_state.run_status or StepStatus.RUNNING.value
-        payload = self._build_checkpoint_payload(
-            context=context,
-            run_state=run_state,
-            status=checkpoint_status,
-        )
-        with self._checkpoint_lock:
-            callback(payload)
-
-    def run(
-        self,
-        pipeline_name: str,
-        inputs: dict[str, Any] | None = None,
-        *,
         run_id: str,
-        metadata: dict[str, Any] | None = None,
-        resume_run_state: dict[str, Any] | None = None,
-        resume_step_results: dict[str, dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
-        pipeline: PipelineDefinition = self.pipeline_loader.load(pipeline_name)
-
-        # Validate pipeline schema before execution
-        if self._pipeline_validator is not None:
-            try:
-                self._pipeline_validator.validate(pipeline)
-            except PipelineValidationError as e:
-                self.logger.error(f"Pipeline validation failed for '{pipeline_name}': {e}")
-                raise
+        pipeline: PipelineDefinition,
+        inputs: dict[str, Any] | None,
+        metadata: dict[str, Any] | None,
+        resumed_state_payload: dict[str, Any] | None,
+    ) -> tuple[ExecutionContext, str, str, str]:
         raw_metadata = dict(metadata or {})
-        resumed_state_payload = resume_run_state if isinstance(resume_run_state, dict) else None
-        resumed_step_results_payload = (
-            resume_step_results if isinstance(resume_step_results, dict) else {}
-        )
         resumed_correlation_id = (
             str(resumed_state_payload.get("correlation_id", "")).strip()
             if resumed_state_payload is not None
@@ -811,10 +250,7 @@ class OrchestratorEngine:
         trace_id = (
             str(raw_metadata.get("trace_id", "")).strip()
             or resumed_trace_id
-            or self._derive_trace_id(
-                correlation_id,
-                run_id,
-            )
+            or self._derive_trace_id(correlation_id, run_id)
         )
         root_span_id = str(raw_metadata.get("root_span_id", "")).strip() or uuid4().hex[:16]
         raw_metadata["correlation_id"] = correlation_id
@@ -829,7 +265,18 @@ class OrchestratorEngine:
             metadata=raw_metadata,
         )
         context.set_state_value(MemoryHook.PROMOTION_MODE_KEY, "deferred")
+        return context, correlation_id, trace_id, root_span_id
 
+    def _setup_resume_state(
+        self,
+        run_id: str,
+        pipeline: PipelineDefinition,
+        context: ExecutionContext,
+        resumed_state_payload: dict[str, Any] | None,
+        resumed_step_results_payload: dict[str, dict[str, Any]],
+        correlation_id: str,
+        trace_id: str,
+    ) -> tuple[PipelineRunState, dict[str, dict[str, Any]], int]:
         resume_pipeline_state_payload = (
             resumed_state_payload.get("pipeline_state")
             if isinstance(resumed_state_payload, dict)
@@ -847,6 +294,7 @@ class OrchestratorEngine:
             if errors:
                 raise ValueError("Invalid resume pipeline_state payload: " + "; ".join(errors))
             context.pipeline_state = PipelineState.model_validate(resume_pipeline_state_payload)
+
         if resumed_state_payload is None:
             run_state = PipelineRunState.from_steps(
                 run_id=run_id,
@@ -855,174 +303,195 @@ class OrchestratorEngine:
                 correlation_id=correlation_id,
                 trace_id=trace_id,
             )
-            step_results: dict[str, dict[str, Any]] = {}
-            start_step_index = 0
-        else:
-            run_state = PipelineRunState.from_dict(resumed_state_payload)
-            if run_state.run_id != run_id:
-                raise ValueError(
-                    f"Resume state run_id mismatch: expected '{run_id}', got '{run_state.run_id}'"
-                )
-            if run_state.pipeline_name != pipeline.pipeline_name:
-                raise ValueError(
-                    "Resume state pipeline mismatch: "
-                    f"expected '{pipeline.pipeline_name}', got '{run_state.pipeline_name}'"
-                )
-            run_state.correlation_id = correlation_id
-            run_state.trace_id = trace_id
-            step_results = {
-                step_name: step_output
-                for step_name, step_output in resumed_step_results_payload.items()
-                if isinstance(step_name, str) and isinstance(step_output, dict)
-            }
-            for step_name, step_output in step_results.items():
-                context.record_step_result(step_name, step_output)
-            try:
-                raw_step_index = int(run_state.current_step_index)
-            except (TypeError, ValueError):
-                raw_step_index = 0
-            start_step_index = max(0, min(len(pipeline.steps), raw_step_index))
-            run_state.current_step_index = start_step_index
+            run_state.transition_pipeline(PipelineStatus.VALIDATING)
+            return run_state, {}, 0
 
-        self._sync_and_validate_pipeline_state(context=context, run_state=run_state)
-        steps_to_execute = pipeline.steps[start_step_index:]
-        self._log_event(
-            logging.INFO,
-            run_id,
-            "orchestrator_run_start",
-            pipeline_name=pipeline.pipeline_name,
-            step_count=len(pipeline.steps),
-            resume_mode=resumed_state_payload is not None,
-            start_step_index=start_step_index,
-            correlation_id=correlation_id,
-            trace_id=trace_id,
-            root_span_id=root_span_id,
-        )
+        run_state = PipelineRunState.from_dict(resumed_state_payload)
+        if run_state.run_id != run_id:
+            raise ValueError(
+                f"Resume state run_id mismatch: expected '{run_id}', got '{run_state.run_id}'"
+            )
+        if run_state.pipeline_name != pipeline.pipeline_name:
+            raise ValueError(
+                "Resume state pipeline mismatch: "
+                f"expected '{pipeline.pipeline_name}', got '{run_state.pipeline_name}'"
+            )
+        run_state.correlation_id = correlation_id
+        run_state.trace_id = trace_id
+        step_results = {
+            step_name: step_output
+            for step_name, step_output in resumed_step_results_payload.items()
+            if isinstance(step_name, str) and isinstance(step_output, dict)
+        }
+        for step_name, step_output in step_results.items():
+            context.record_step_result(step_name, step_output)
+        try:
+            raw_step_index = int(run_state.current_step_index)
+        except (TypeError, ValueError):
+            raw_step_index = 0
+        start_step_index = max(0, min(len(pipeline.steps), raw_step_index))
+        run_state.current_step_index = start_step_index
+        return run_state, step_results, start_step_index
 
+    def _execute_resumed_steps(
+        self,
+        run_id: str,
+        pipeline: PipelineDefinition,
+        steps_to_execute: list[StepDefinition],
+        start_step_index: int,
+        context: ExecutionContext,
+        run_state: PipelineRunState,
+        step_results: dict[str, dict[str, Any]],
+        correlation_id: str,
+    ) -> bool:
         should_stop = False
-        if resumed_state_payload is not None:
-            for idx, step in enumerate(steps_to_execute):
-                has_next = idx < len(steps_to_execute) - 1
-                absolute_step_index = start_step_index + idx
-                try:
-                    step_state = run_state.get_step(step.name)
-                except KeyError:
-                    step_state = None
+        for idx, step in enumerate(steps_to_execute):
+            has_next = idx < len(steps_to_execute) - 1
+            absolute_step_index = start_step_index + idx
+            try:
+                step_state = run_state.get_step(step.name)
+            except KeyError:
+                step_state = None
 
-                replay_state = dict(context.state)
-                for future_step in pipeline.steps[absolute_step_index:]:
-                    replay_state.pop(future_step.name, None)
-                step_input_hash = self.step_executor.calculate_step_input_hash(step, replay_state)
-                if (
-                    step_state is not None
-                    and step_state.status
-                    in {
-                        StepStatus.SUCCESS,
-                        StepStatus.PARTIAL_SUCCESS,
-                        StepStatus.SKIPPED,
-                    }
-                    and isinstance(step_state.input_hash, str)
-                    and step_state.input_hash == step_input_hash
-                    and step.name in context.step_results
-                ):
-                    run_state.current_step_index = max(
-                        run_state.current_step_index,
-                        absolute_step_index + 1,
-                    )
-                    self._emit_checkpoint(context=context, run_state=run_state)
-                    self._log_event(
-                        logging.INFO,
-                        run_id,
-                        "step_replay_skipped",
-                        step_name=step.name,
-                        input_hash=step_input_hash,
-                        correlation_id=correlation_id,
-                    )
-                    continue
-
-                output, should_stop = self._execute_step_with_policy(
-                    step, context, run_state, has_next_step=has_next
-                )
-                step_results[step.name] = output
-                if should_stop:
-                    break
-                trigger_memory_hook(step.name, output, context.state)
-        else:
-            executed_step_names: set[str] = set()
-
-            def _trigger_hooks_for_new_steps(step_scope: list[StepDefinition]) -> None:
-                nonlocal executed_step_names
-                for step in step_scope:
-                    if step.name in step_results and step.name not in executed_step_names:
-                        trigger_memory_hook(step.name, step_results[step.name], context.state)
-                        executed_step_names.add(step.name)
-
-            if pipeline.loops:
-                loop_step_names = {step_name for loop in pipeline.loops for step_name in loop.steps}
-                loop_anchor_names = {
-                    loop.steps[0]
-                    for loop in pipeline.loops
-                    if isinstance(loop.steps, list) and loop.steps
+            replay_state = dict(context.state)
+            for future_step in pipeline.steps[absolute_step_index:]:
+                replay_state.pop(future_step.name, None)
+            step_input_hash = self.step_executor.calculate_step_input_hash(step, replay_state)
+            if (
+                step_state is not None
+                and step_state.status
+                in {
+                    StepStatus.SUCCESS,
+                    StepStatus.PARTIAL_SUCCESS,
+                    StepStatus.SKIPPED,
                 }
-                indexed_steps = list(enumerate(steps_to_execute))
-                indexed_loop_anchors = [
-                    index for index, step in indexed_steps if step.name in loop_anchor_names
+                and isinstance(step_state.input_hash, str)
+                and step_state.input_hash == step_input_hash
+                and step.name in context.step_results
+            ):
+                run_state.current_step_index = max(
+                    run_state.current_step_index,
+                    absolute_step_index + 1,
+                )
+                checkpointing.emit_checkpoint(
+                    context=context,
+                    run_state=run_state,
+                    checkpoint_lock=self._checkpoint_lock,
+                    state_validator=self._state_validator,
+                )
+                self._log_event(
+                    logging.INFO,
+                    run_id,
+                    "step_replay_skipped",
+                    step_name=step.name,
+                    input_hash=step_input_hash,
+                    correlation_id=correlation_id,
+                )
+                continue
+
+            output, should_stop = self._runner.execute_step_with_policy(
+                step, context, run_state, has_next_step=has_next
+            )
+            step_results[step.name] = output
+            if should_stop:
+                break
+            trigger_memory_hook(step.name, output, context.state)
+        return should_stop
+
+    def _execute_fresh_steps(
+        self,
+        pipeline: PipelineDefinition,
+        steps_to_execute: list[StepDefinition],
+        context: ExecutionContext,
+        run_state: PipelineRunState,
+        step_results: dict[str, dict[str, Any]],
+    ) -> bool:
+        executed_step_names: set[str] = set()
+
+        def _trigger_hooks_for_new_steps(step_scope: list[StepDefinition]) -> None:
+            nonlocal executed_step_names
+            for step in step_scope:
+                if step.name in step_results and step.name not in executed_step_names:
+                    trigger_memory_hook(step.name, step_results[step.name], context.state)
+                    executed_step_names.add(step.name)
+
+        if pipeline.loops:
+            loop_step_names = {step_name for loop in pipeline.loops for step_name in loop.steps}
+            loop_anchor_names = {
+                loop.steps[0]
+                for loop in pipeline.loops
+                if isinstance(loop.steps, list) and loop.steps
+            }
+            indexed_steps = list(enumerate(steps_to_execute))
+            indexed_loop_anchors = [
+                index for index, step in indexed_steps if step.name in loop_anchor_names
+            ]
+
+            if indexed_loop_anchors:
+                first_loop_index = min(indexed_loop_anchors)
+                pre_loop_steps = [step for index, step in indexed_steps if index < first_loop_index]
+                post_loop_steps = [
+                    step
+                    for index, step in indexed_steps
+                    if index >= first_loop_index and step.name not in loop_step_names
                 ]
-
-                if indexed_loop_anchors:
-                    first_loop_index = min(indexed_loop_anchors)
-                    pre_loop_steps = [
-                        step for index, step in indexed_steps if index < first_loop_index
-                    ]
-                    post_loop_steps = [
-                        step
-                        for index, step in indexed_steps
-                        if index >= first_loop_index and step.name not in loop_step_names
-                    ]
-                else:
-                    pre_loop_steps = steps_to_execute
-                    post_loop_steps = []
-
-                should_stop = self._execute_with_parallelism(
-                    pre_loop_steps, context, run_state, step_results
-                )
-                _trigger_hooks_for_new_steps(pre_loop_steps)
-
-                if not should_stop:
-                    step_by_name = {step.name: step for step in pipeline.steps}
-                    for loop in pipeline.loops:
-                        should_stop = self._execute_loop(
-                            loop, step_by_name, context, run_state, step_results
-                        )
-                        if should_stop:
-                            break
-
-                if not should_stop and post_loop_steps:
-                    should_stop = self._execute_with_parallelism(
-                        post_loop_steps,
-                        context,
-                        run_state,
-                        step_results,
-                        externally_satisfied_dependencies=set(step_results.keys()),
-                    )
-                    _trigger_hooks_for_new_steps(post_loop_steps)
             else:
-                should_stop = self._execute_with_parallelism(
-                    steps_to_execute, context, run_state, step_results
-                )
-                _trigger_hooks_for_new_steps(steps_to_execute)
+                pre_loop_steps = steps_to_execute
+                post_loop_steps = []
 
-        if resumed_state_payload is not None and not should_stop and pipeline.loops:
-            step_by_name = {step.name: step for step in pipeline.steps}
-            for loop in pipeline.loops:
-                should_stop = self._execute_loop(
-                    loop, step_by_name, context, run_state, step_results
-                )
-                if should_stop:
-                    break
+            should_stop = self._runner.execute_with_parallelism(
+                pre_loop_steps, context, run_state, step_results
+            )
+            _trigger_hooks_for_new_steps(pre_loop_steps)
 
+            if not should_stop:
+                step_by_name = {step.name: step for step in pipeline.steps}
+                for loop in pipeline.loops:
+                    should_stop = self._runner.execute_loop(
+                        loop, step_by_name, context, run_state, step_results
+                    )
+                    if should_stop:
+                        break
+
+            if not should_stop and post_loop_steps:
+                should_stop = self._runner.execute_with_parallelism(
+                    post_loop_steps,
+                    context,
+                    run_state,
+                    step_results,
+                    externally_satisfied_dependencies=set(step_results.keys()),
+                )
+                _trigger_hooks_for_new_steps(post_loop_steps)
+            return should_stop
+
+        should_stop = self._runner.execute_with_parallelism(
+            steps_to_execute, context, run_state, step_results
+        )
+        _trigger_hooks_for_new_steps(steps_to_execute)
+        return should_stop
+
+    def _finalize_run(
+        self,
+        run_id: str,
+        pipeline: PipelineDefinition,
+        context: ExecutionContext,
+        run_state: PipelineRunState,
+        step_results: dict[str, dict[str, Any]],
+        correlation_id: str,
+        trace_id: str,
+        root_span_id: str,
+    ) -> dict[str, Any]:
         final_status = self._derive_final_status(run_state, step_results)
-        run_state.run_status = final_status
+        run_state.set_run_status(StepStatus(final_status))
+        if final_status == StepStatus.SUCCESS.value:
+            run_state.transition_pipeline(PipelineStatus.COMPLETED)
+        elif final_status == StepStatus.FAILED.value:
+            run_state.transition_pipeline(PipelineStatus.FAILED)
+        elif final_status == StepStatus.BLOCKED.value:
+            run_state.transition_pipeline(PipelineStatus.BLOCKED)
+        elif final_status == StepStatus.PARTIAL_SUCCESS.value:
+            run_state.transition_pipeline(PipelineStatus.COMPLETED)
+
         promoted_entries = trigger_memory_promotion(context.state, run_status=final_status)
         if promoted_entries:
             self._log_event(
@@ -1033,9 +502,11 @@ class OrchestratorEngine:
                 correlation_id=correlation_id,
             )
 
-        self._emit_checkpoint(
+        checkpointing.emit_checkpoint(
             context=context,
             run_state=run_state,
+            checkpoint_lock=self._checkpoint_lock,
+            state_validator=self._state_validator,
             status=final_status,
         )
         summary = self.summary_builder.build(run_state, step_results)
@@ -1076,3 +547,101 @@ class OrchestratorEngine:
                 "steps": trace_steps,
             },
         }
+
+    def run(
+        self,
+        pipeline_name: str,
+        inputs: dict[str, Any] | None = None,
+        *,
+        run_id: str,
+        metadata: dict[str, Any] | None = None,
+        resume_run_state: dict[str, Any] | None = None,
+        resume_step_results: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        pipeline: PipelineDefinition = self.pipeline_loader.load(pipeline_name)
+
+        if self._pipeline_validator is not None:
+            try:
+                self._pipeline_validator.validate(pipeline)
+            except PipelineValidationError as e:
+                self.logger.error(f"Pipeline validation failed for '{pipeline_name}': {e}")
+                raise
+
+        resumed_state_payload = resume_run_state if isinstance(resume_run_state, dict) else None
+        resumed_step_results_payload = (
+            resume_step_results if isinstance(resume_step_results, dict) else {}
+        )
+
+        context, correlation_id, trace_id, root_span_id = self._setup_run_context(
+            run_id, pipeline, inputs, metadata, resumed_state_payload
+        )
+
+        run_state, step_results, start_step_index = self._setup_resume_state(
+            run_id,
+            pipeline,
+            context,
+            resumed_state_payload,
+            resumed_step_results_payload,
+            correlation_id,
+            trace_id,
+        )
+
+        run_state.transition_pipeline(PipelineStatus.RUNNING)
+        checkpointing.sync_and_validate_pipeline_state(
+            context=context,
+            run_state=run_state,
+            state_validator=self._state_validator,
+        )
+        steps_to_execute = pipeline.steps[start_step_index:]
+        self._log_event(
+            logging.INFO,
+            run_id,
+            "orchestrator_run_start",
+            pipeline_name=pipeline.pipeline_name,
+            step_count=len(pipeline.steps),
+            resume_mode=resumed_state_payload is not None,
+            start_step_index=start_step_index,
+            correlation_id=correlation_id,
+            trace_id=trace_id,
+            root_span_id=root_span_id,
+        )
+
+        if resumed_state_payload is not None:
+            should_stop = self._execute_resumed_steps(
+                run_id,
+                pipeline,
+                steps_to_execute,
+                start_step_index,
+                context,
+                run_state,
+                step_results,
+                correlation_id,
+            )
+        else:
+            should_stop = self._execute_fresh_steps(
+                pipeline,
+                steps_to_execute,
+                context,
+                run_state,
+                step_results,
+            )
+
+        if resumed_state_payload is not None and not should_stop and pipeline.loops:
+            step_by_name = {step.name: step for step in pipeline.steps}
+            for loop in pipeline.loops:
+                should_stop = self._runner.execute_loop(
+                    loop, step_by_name, context, run_state, step_results
+                )
+                if should_stop:
+                    break
+
+        return self._finalize_run(
+            run_id,
+            pipeline,
+            context,
+            run_state,
+            step_results,
+            correlation_id,
+            trace_id,
+            root_span_id,
+        )

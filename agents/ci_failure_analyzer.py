@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from collections import Counter
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Any
 
 from agents.base import BaseAgent
 from agents.context_utils import build_agent_result
+
+logger = logging.getLogger(__name__)
 
 PYTHON_ERRORS = {
     "syntax_error": r"(syntaxerror.*invalid syntax|invalid syntax)",
@@ -776,7 +779,8 @@ def _build_grounded_snippets(
 
         try:
             all_lines = selected.read_text(encoding="utf-8").splitlines()
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to read file %s for CI analysis: %s", selected, e)
             continue
         if not all_lines:
             continue

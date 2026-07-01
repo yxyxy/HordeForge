@@ -55,18 +55,14 @@ def test_fix_agent_first_iteration():
     }
     result = agent.run(context)
 
-    assert result["status"] == "SUCCESS"
+    assert result["status"] == "FAILED"
     content = _get_content(result, "code_patch")
-    assert content["fix_iteration"] == 1
-    assert content["remaining_failures"] == 1  # 2 - 1 = 1
-    assert content["strategy_class"] == "status_transition_guard"
-    assert content["fix_plan"]["plan_valid"] is True
-    assert content["fix_plan"]["target_files"]
-    assert "plan_before_act" in content["instruction_stack"]
+    assert content["blocked"] is True
+    assert content["diagnosis"] == "deterministic_fallback_not_safe"
 
 
 def test_fix_agent_subsequent_iteration():
-    """Test fix agent increments iteration correctly."""
+    """Test fix agent on subsequent iteration returns FAILED without LLM."""
     agent = FixAgent()
     context = {
         "use_llm": False,
@@ -83,10 +79,10 @@ def test_fix_agent_subsequent_iteration():
     }
     result = agent.run(context)
 
-    assert result["status"] == "SUCCESS"
+    assert result["status"] == "FAILED"
     content = _get_content(result, "code_patch")
-    assert content["fix_iteration"] == 3  # Previous 2 + 1
-    assert content["strategy_class"] == "minimal_source_correction"
+    assert content["blocked"] is True
+    assert content["diagnosis"] == "deterministic_fallback_not_safe"
 
 
 def test_fix_agent_iteration_from_string():
@@ -113,7 +109,7 @@ def test_fix_agent_iteration_from_string():
 
 
 def test_fix_agent_produces_patch_files():
-    """Test fix agent always emits at least one file change for failures."""
+    """Test fix agent returns FAILED when deterministic fallback has no LLM."""
     agent = FixAgent()
     context = {
         "use_llm": False,
@@ -125,10 +121,10 @@ def test_fix_agent_produces_patch_files():
     }
     result = agent.run(context)
 
-    assert result["status"] == "SUCCESS"
+    assert result["status"] == "FAILED"
     content = _get_content(result, "code_patch")
-    paths = [f["path"] for f in content.get("files", [])]
-    assert "src/feature_impl.py" in paths
+    assert content["blocked"] is True
+    assert content["diagnosis"] == "deterministic_fallback_not_safe"
 
 
 def test_fix_agent_blocks_when_plan_has_no_target_files():

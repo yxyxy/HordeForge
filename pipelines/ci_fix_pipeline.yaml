@@ -104,6 +104,7 @@ steps:
       repository: "{{repository}}"
       memory_context: "{{memory_context}}"
       ci_failure_context: "{{ci_failure_context}}"
+      file_tree: "{{ file_tree | default([]) }}"
       open_mode: true
       strict_target_files: false
       enforce_patch_quality_gate: true
@@ -121,11 +122,24 @@ steps:
     on_failure: retry_step
     retry_limit: 4
 
+  - name: patch_validator
+    agent: patch_validator
+    description: Validate patch before application
+    depends_on:
+      - code_generator
+    depends_on_explicit: true
+    input:
+      code_patch: "{{ fixed_code_patch }}"
+      repository: "{{ repository }}"
+    output: "{{ validation_result }}"
+    on_failure: continue
+
   - name: patch_apply_agent
     agent: patch_apply_agent
     description: Materialize candidate patch into isolated workspace before tests
     depends_on:
       - code_generator
+      - patch_validator
     depends_on_explicit: true
     input:
       code_patch: "{{ fixed_code_patch | default(final_code_patch) }}"
@@ -230,6 +244,7 @@ loops:
     progress_signature_path: "test_results.failure_signature"
     steps:
       - fix_agent
+      - patch_validator
       - patch_apply_agent
       - test_runner
 

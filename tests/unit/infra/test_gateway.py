@@ -8,31 +8,22 @@ os.environ["HORDEFORGE_STORAGE_BACKEND"] = "json"
 os.environ["HORDEFORGE_QUEUE_BACKEND"] = "memory"
 
 import scheduler.gateway as gateway
-from scheduler.gateway import (
-    ARTIFACT_REPOSITORY,
-    IDEMPOTENCY_STORE,
-    RUN_REPOSITORY,
-    RUN_RUNTIME_INPUTS,
-    RUNS,
-    STEP_LOG_REPOSITORY,
-    TASK_QUEUE,
-    app,
-)
+from scheduler.gateway import STATE, app
 from scheduler.tenant_registry import TenantRepositoryRegistry
 from storage.models import RunRecord
 
 
 @pytest.fixture(autouse=True)
 def _clean_gateway_storage():
-    RUNS.clear()
-    RUN_REPOSITORY.store.write_all([])
-    STEP_LOG_REPOSITORY.store.write_all([])
-    ARTIFACT_REPOSITORY.store.write_all([])
-    IDEMPOTENCY_STORE.clear()
-    RUN_RUNTIME_INPUTS.clear()
-    TASK_QUEUE.clear()
+    STATE.runs.clear()
+    STATE.run_repository.store.write_all([])
+    STATE.step_log_repository.store.write_all([])
+    STATE.artifact_repository.store.write_all([])
+    STATE.idempotency_store.clear()
+    STATE.run_runtime_inputs.clear()
+    STATE.task_queue.clear()
     gateway.CRON_DISPATCHER = None
-    gateway.TENANT_REGISTRY = TenantRepositoryRegistry(
+    STATE.tenant_registry = TenantRepositoryRegistry(
         mapping={
             "default": ("*",),
             "acme": ("acme/hordeforge",),
@@ -361,7 +352,7 @@ def test_persist_step_and_artifact_logs_tolerates_mutating_steps_dict():
 
     gateway._persist_step_and_artifact_logs(run)
 
-    step_logs = STEP_LOG_REPOSITORY.list_by_run(run.run_id, tenant_id=run.tenant_id)
+    step_logs = STATE.step_log_repository.list_by_run(run.run_id, tenant_id=run.tenant_id)
     assert len(step_logs) >= 1
 
 
@@ -679,10 +670,10 @@ def test_override_retry_rejects_success_run():
 
     # Force the run status to SUCCESS to test the override logic
     # (actual run may have failed due to git clone issues in test environment)
-    record = RUN_REPOSITORY.get(run_id)
+    record = STATE.run_repository.get(run_id)
     if record:
         record.status = "SUCCESS"
-        RUN_REPOSITORY.upsert(record)
+        STATE.run_repository.upsert(record)
 
     response = client.post(
         f"/runs/{run_id}/override",
@@ -738,7 +729,7 @@ def test_override_resume_replays_same_run_id_without_creating_new_run():
     )
     run_id = run_response.json()["run_id"]
 
-    record = RUN_REPOSITORY.get(run_id)
+    record = STATE.run_repository.get(run_id)
     assert record is not None
     assert isinstance(record.result, dict)
     run_state = record.result.get("run_state")
@@ -747,8 +738,8 @@ def test_override_resume_replays_same_run_id_without_creating_new_run():
     run_state["run_status"] = "BLOCKED"
     record.status = "BLOCKED"
     record.override_state = "STOPPED"
-    RUN_REPOSITORY.upsert(record)
-    RUN_RUNTIME_INPUTS[run_id] = {
+    STATE.run_repository.upsert(record)
+    STATE.run_runtime_inputs[run_id] = {
         "repo_url": "https://github.com/yxyxy/hordeforge.git",
         "github_token": "token",
     }
@@ -764,7 +755,7 @@ def test_override_resume_replays_same_run_id_without_creating_new_run():
     assert body["run_id"] == run_id
     assert body["action"] == "resume"
     assert "trigger" not in body
-    records = RUN_REPOSITORY.list(run_id=run_id, limit=10)
+    records = STATE.run_repository.list(run_id=run_id, limit=10)
     assert len(records) == 1
 
 

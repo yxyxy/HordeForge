@@ -8,7 +8,7 @@ from pathlib import Path
 import tree_sitter
 from tree_sitter import Node
 
-from rag.symbol_extractor import Symbol
+from rag.models import Symbol
 from rag.tree_sitter_parser import get_language_for_file, parse_file
 
 logger = logging.getLogger(__name__)
@@ -248,7 +248,12 @@ class TreeSitterSymbolExtractor:
         """Extract docstring/comment associated with a node."""
         # Look for comments before the node
         start_line = node.start_point[0]
-        source_lines = source_bytes.decode("utf8").split("\n")
+
+        # Cache decoded lines to avoid repeated decoding
+        if not hasattr(self, "_cached_source_bytes") or self._cached_source_bytes != source_bytes:
+            self._cached_source_bytes = source_bytes
+            self._cached_source_lines = source_bytes.decode("utf8").split("\n")
+        source_lines = self._cached_source_lines
 
         # Check for docstring/comment in the lines before the node
         for i in range(start_line - 1, max(-1, start_line - 5), -1):  # Look up to 5 lines back
@@ -315,9 +320,11 @@ class TreeSitterSymbolExtractor:
 
         # Walk through all nodes in the tree to find function and class definitions
         for node in self._walk_nodes(root_node):
-            if node.type == "function_definition":
+            if node.type in ("function_definition", "async_function_definition"):
                 # Extract function information
                 func_name_node = None
+                is_async = node.type == "async_function_definition"
+
                 # Find the identifier node for the function name
                 for child in node.children:
                     if child.type == "identifier":
@@ -329,13 +336,6 @@ class TreeSitterSymbolExtractor:
                     line_number = func_name_node.start_point[0] + 1  # Convert to 1-indexed
                     docstring = self._get_docstring(func_name_node, source_bytes)
                     parameters = self._get_parameters(node, source_bytes)
-
-                    # Check if it's an async function
-                    is_async = False
-                    if len(node.children) > 0 and node.children[0].type == "identifier":
-                        first_child_text = self._get_node_text(node.children[0], source_bytes)
-                        if first_child_text == "async":
-                            is_async = True
 
                     symbol = Symbol(
                         name=func_name,

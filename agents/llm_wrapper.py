@@ -47,7 +47,7 @@ from observability.circuit_breaker import (
 logger = logging.getLogger(__name__)
 
 # Default timeout for API calls (seconds)
-DEFAULT_TIMEOUT = 60
+DEFAULT_TIMEOUT = 180
 DEFAULT_MAX_RETRIES = 3
 _LLM_SESSION_LOGGING_ENV = "HORDEFORGE_LLM_SESSION_LOGGING"
 
@@ -1561,7 +1561,8 @@ class MimoAutoWrapper(LLMWrapper):
 
         try:
             result = subprocess.run(
-                [self._mimo_cmd, "run", full_prompt],
+                [self._mimo_cmd, "run", "-"],
+                input=full_prompt,
                 capture_output=True,
                 text=True,
                 timeout=self._timeout,

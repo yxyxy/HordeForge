@@ -11,16 +11,7 @@ os.environ["HORDEFORGE_QUEUE_BACKEND"] = "memory"
 import scheduler.gateway as gateway
 from orchestrator.engine import OrchestratorEngine
 from orchestrator.executor import StepExecutor
-from scheduler.gateway import (
-    ARTIFACT_REPOSITORY,
-    IDEMPOTENCY_STORE,
-    RUN_REPOSITORY,
-    RUN_RUNTIME_INPUTS,
-    RUNS,
-    STEP_LOG_REPOSITORY,
-    TASK_QUEUE,
-    app,
-)
+from scheduler.gateway import STATE, app
 from scheduler.tenant_registry import TenantRepositoryRegistry
 
 
@@ -73,13 +64,13 @@ class _FlakyBlockAgent:
 
 
 def _clean_gateway_state() -> None:
-    RUNS.clear()
-    RUN_REPOSITORY.store.write_all([])
-    STEP_LOG_REPOSITORY.store.write_all([])
-    ARTIFACT_REPOSITORY.store.write_all([])
-    IDEMPOTENCY_STORE.clear()
-    RUN_RUNTIME_INPUTS.clear()
-    TASK_QUEUE.clear()
+    STATE.runs.clear()
+    STATE.run_repository.store.write_all([])
+    STATE.step_log_repository.store.write_all([])
+    STATE.artifact_repository.store.write_all([])
+    STATE.idempotency_store.clear()
+    STATE.run_runtime_inputs.clear()
+    STATE.task_queue.clear()
     gateway.CRON_DISPATCHER = None
     gateway.TENANT_REGISTRY = TenantRepositoryRegistry(
         mapping={"default": ("*",)},
@@ -137,7 +128,7 @@ steps:
         assert first.status_code == 200
         run_id = first.json()["run_id"]
 
-        record = RUN_REPOSITORY.get(run_id)
+        record = STATE.run_repository.get(run_id)
         assert record is not None
         assert record.status == "BLOCKED"
         assert counters == {"a": 1, "b": 1}
@@ -149,7 +140,7 @@ steps:
         )
         assert resumed.status_code == 200
 
-        final_record = RUN_REPOSITORY.get(run_id)
+        final_record = STATE.run_repository.get(run_id)
         assert final_record is not None
         assert final_record.status == "SUCCESS"
     finally:

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 import api.main as webhook_api
 from api.security import compute_github_signature
 from hordeforge_config import RunConfig
-from scheduler.gateway import RUNS
+from scheduler.gateway import STATE
 
 
 @pytest.fixture(autouse=True)
@@ -85,7 +85,7 @@ def test_webhook_rejects_invalid_signature(monkeypatch):
 
 
 def test_webhook_routes_issue_event_to_feature_pipeline(monkeypatch):
-    RUNS.clear()
+    STATE.runs.clear()
     secret = _set_test_secret(monkeypatch)
     client = TestClient(webhook_api.app)
     payload = {
@@ -111,7 +111,7 @@ def test_webhook_routes_issue_event_to_feature_pipeline(monkeypatch):
 
 
 def test_webhook_routes_failed_workflow_run_to_ci_scanner_pipeline(monkeypatch):
-    RUNS.clear()
+    STATE.runs.clear()
     secret = _set_test_secret(monkeypatch)
     client = TestClient(webhook_api.app)
     payload = {
@@ -135,7 +135,7 @@ def test_webhook_routes_failed_workflow_run_to_ci_scanner_pipeline(monkeypatch):
 
 
 def test_webhook_duplicate_delivery_is_suppressed_by_idempotency(monkeypatch):
-    RUNS.clear()
+    STATE.runs.clear()
     secret = _set_test_secret(monkeypatch)
     client = TestClient(webhook_api.app)
     payload = {
@@ -167,7 +167,7 @@ def test_webhook_duplicate_delivery_is_suppressed_by_idempotency(monkeypatch):
 
 
 def test_webhook_ignores_unsupported_events(monkeypatch, caplog):
-    RUNS.clear()
+    STATE.runs.clear()
     secret = _set_test_secret(monkeypatch)
     client = TestClient(webhook_api.app)
     payload = {"zen": "keep it logically awesome"}

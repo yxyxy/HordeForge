@@ -103,7 +103,8 @@ class LiveReviewer:
         try:
             pr = self.client.get_pull_request(pull_number)
             return pr.get("head", {}).get("sha", "")
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to get head commit for PR #%d: %s", pull_number, e)
             return ""
 
     def generate_review_summary(

@@ -7,6 +7,7 @@ from abuse and DDoS attacks.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -81,6 +82,7 @@ class InMemoryRateLimiter(RateLimitBackend):
         self._counters: dict[str, tuple[int, float]] = {}  # key -> (count, window_start)
         self._window_size = 60.0  # 1 minute window
         self.logger = logging.getLogger("hordeforge.rate_limiter")
+        self._lock = threading.Lock()
 
     def _get_key(self, client_id: str, endpoint: str) -> str:
         """Generate storage key for client+endpoint."""
@@ -108,57 +110,58 @@ class InMemoryRateLimiter(RateLimitBackend):
         Returns:
             CheckResult with allowed status and metadata
         """
-        key = self._get_key(client_id, endpoint)
-        now = time.time()
+        with self._lock:
+            key = self._get_key(client_id, endpoint)
+            now = time.time()
 
-        # Cleanup old windows
-        self._cleanup_old_windows(key)
+            # Cleanup old windows
+            self._cleanup_old_windows(key)
 
-        # Get current count
-        if key in self._counters:
-            count, window_start = self._counters[key]
-        else:
-            count = 0
-            window_start = now
+            # Get current count
+            if key in self._counters:
+                count, window_start = self._counters[key]
+            else:
+                count = 0
+                window_start = now
 
-        # Check if we can allow this request
-        limit = self.config.requests_per_minute
+            # Check if we can allow this request
+            limit = self.config.requests_per_minute
 
-        if count < limit:
-            # Allow request
-            self._counters[key] = (count + 1, window_start)
-            remaining = limit - count - 1
-            self.logger.debug(
-                "rate_limit_allowed client=%s endpoint=%s count=%d limit=%d remaining=%d",
-                client_id,
-                endpoint,
-                count + 1,
-                limit,
-                remaining,
-            )
-            return CheckResult(
-                allowed=True,
-                current_count=count + 1,
-                limit=limit,
-                remaining=remaining,
-            )
-        else:
-            # Rate limit exceeded
-            retry_after = int(self._window_size - (now - window_start))
-            self.logger.warning(
-                "rate_limit_exceeded client=%s endpoint=%s count=%d limit=%d",
-                client_id,
-                endpoint,
-                count,
-                limit,
-            )
-            return CheckResult(
-                allowed=False,
-                current_count=count,
-                retry_after=retry_after,
-                limit=limit,
-                remaining=0,
-            )
+            if count < limit:
+                # Allow request
+                self._counters[key] = (count + 1, window_start)
+                remaining = limit - count - 1
+                self.logger.debug(
+                    "rate_limit_allowed client=%s endpoint=%s count=%d limit=%d remaining=%d",
+                    client_id,
+                    endpoint,
+                    count + 1,
+                    limit,
+                    remaining,
+                )
+                return CheckResult(
+                    allowed=True,
+                    current_count=count + 1,
+                    limit=limit,
+                    remaining=remaining,
+                )
+            else:
+                # Rate limit exceeded
+                retry_after = int(self._window_size - (now - window_start))
+                self.logger.warning(
+                    "rate_limit_exceeded client=%s endpoint=%s count=%d limit=%d",
+                    client_id,
+                    endpoint,
+                    count,
+                    limit,
+                )
+                return CheckResult(
+                    allowed=False,
+                    current_count=count,
+                    retry_after=retry_after,
+                    limit=limit,
+                    remaining=0,
+                )
 
 
 class RedisRateLimiter(RateLimitBackend):

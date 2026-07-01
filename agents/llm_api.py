@@ -17,6 +17,7 @@ from .llm_providers import (
     HuggingFaceHandler,
     LiteLlmHandler,
     LmStudioHandler,
+    MiMoCodeHandler,
     MistralHandler,
     MoonshotHandler,
     OllamaHandler,
@@ -79,6 +80,7 @@ class ApiProvider(Enum):
     MOONSHOT = "moonshot"
     GROQ = "groq"
     CLAUDE_CODE = "claude_code"
+    MIMO = "mimo"
 
 
 @dataclass
@@ -243,6 +245,12 @@ class LlmApi:
                 claude_code_model_id=self.config.model,
                 thinking_budget_tokens=self.config.thinking_budget_tokens,
             )
+        elif self.config.provider == ApiProvider.MIMO:
+            return MiMoCodeHandler(
+                mimo_api_key=self.config.api_key,
+                mimo_model_id=self.config.model or "mimo-v2.5-pro",
+                mimo_base_url=self.config.base_url,
+            )
         else:
             raise ValueError(f"Unsupported provider: {self.config.provider}")
 
@@ -257,7 +265,8 @@ class LlmApi:
                 timeout=30,
                 max_retries=3,
             )
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to init LlmApi: %s", e)
             return None
 
     async def create_message(
@@ -340,7 +349,8 @@ class LlmRouter:
                 try:
                     config = self.providers[provider]
                     return LlmApi(config)
-                except Exception:
+                except Exception as e:
+                    logger.debug("Failed to init provider %s: %s", provider, e)
                     continue
 
         # Fallback to first available provider
@@ -349,7 +359,8 @@ class LlmRouter:
                 try:
                     config = self.providers[provider]
                     return LlmApi(config)
-                except Exception:
+                except Exception as e:
+                    logger.debug("Failed to init fallback provider %s: %s", provider, e)
                     continue
 
         raise RuntimeError("No available providers")
@@ -360,7 +371,8 @@ class LlmRouter:
             if config.model == model_name:
                 try:
                     return LlmApi(config)
-                except Exception:
+                except Exception as e:
+                    logger.debug("Failed to init provider for model %s: %s", model_name, e)
                     continue
 
         raise RuntimeError(f"No provider found for model: {model_name}")
@@ -487,3 +499,22 @@ def get_legacy_api(provider: str, **kwargs) -> LlmApi:
 def create_legacy_router(**kwargs) -> LlmRouter:
     """Create legacy router for backward compatibility."""
     return LlmRouter(**kwargs)
+
+
+def create_mimo_api(
+    api_key: str, model: str = "mimo-v2.5-pro", base_url: str | None = None
+) -> LlmApi:
+    """Create Xiaomi MiMo Platform API instance.
+
+    MiMo Platform provides OpenAI-compatible API.
+    Available models: mimo-v2.5-pro, mimo-v2.5, mimo-v2.5-pro-ultraspeed
+
+    Reference: https://platform.xiaomimimo.com
+    """
+    config = ApiConfiguration(
+        provider=ApiProvider.MIMO,
+        model=model,
+        api_key=api_key,
+        base_url=base_url or "https://api.xiaomimimo.com/v1",
+    )
+    return LlmApi(config)

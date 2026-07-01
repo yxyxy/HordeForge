@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -15,6 +16,8 @@ from agents.llm_wrapper_backward_compatibility import (
     get_legacy_llm_wrapper,
     legacy_build_code_prompt,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class FixAgent(BaseAgent):
@@ -257,23 +260,12 @@ class FixAgent(BaseAgent):
 
     @staticmethod
     def _extract_error_line(text: str) -> str:
-        if not isinstance(text, str) or not text.strip():
-            return ""
+        from hordeforge_utils import extract_error_line
 
-        for raw_line in text.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            if line.startswith("E       "):
-                return line[len("E       ") :].strip()
-            if line.startswith("E   "):
-                return line[len("E   ") :].strip()
-            if re.match(r"^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception):\s+", line):
-                return line
-        return ""
+        return extract_error_line(text)
 
     @classmethod
-    def _extract_failure_highlights(cls, test_results: dict[str, Any], limit: int = 3) -> list[str]:
+    def _extract_failure_highlights(cls, test_results: dict[str, Any], limit: int = 8) -> list[str]:
         if not isinstance(test_results, dict):
             return []
 
@@ -560,13 +552,14 @@ class FixAgent(BaseAgent):
                                     ]
                                 }
                 except Exception as e:
+                    logger.debug("LLM fix generation failed: %s", e)
                     llm_error = str(e)
                 finally:
                     if llm is not None:
                         try:
                             llm.close()
                         except Exception:
-                            pass
+                            logger.debug("Failed to close LLM wrapper", exc_info=True)
 
         if use_llm and require_llm and not (llm_fix_result and isinstance(llm_fix_result, dict)):
             return build_agent_result(
@@ -596,31 +589,55 @@ class FixAgent(BaseAgent):
             decisions = llm_fix_result.get("decisions", [])
             reason = "Fix patch generated with LLM enhancement."
             confidence = 0.92
+        elif not self._is_actionable_failure(test_results):
+            patch = {
+                "schema_version": "1.0",
+                "files": [],
+                "fix_iteration": iteration,
+                "remaining_failures": remaining_failures,
+                "strategy_class": strategy_class,
+                "fix_plan": fix_plan,
+            }
+            result = build_agent_result(
+                status="SUCCESS",
+                artifact_type="code_patch",
+                artifact_content=patch,
+                reason="No actionable test failures — fix not required.",
+                confidence=0.99,
+                logs=[f"iteration={iteration}", "no_actionable_failures"],
+                next_actions=["review_agent"],
+            )
+            result["artifact_type"] = "code_patch"
+            result["artifact_content"] = patch
+            return result
         else:
             candidate_files = self._extract_candidate_files(context)
             fallback_path = candidate_files[0] if candidate_files else "src/feature_impl.py"
-            files = [
-                {
-                    "path": fallback_path,
-                    "content": (
-                        f"# fix iteration {iteration}\n"
-                        f"# Failed before: {failed}\n"
-                        f"# Remaining after fix: {remaining_failures}\n"
-                    ),
-                    "change_type": "modify",
-                }
-            ]
-            decisions = [
-                f"failed_before={failed}",
-                f"remaining_after_fix={remaining_failures}",
-                f"target_file={fallback_path}",
-            ]
-            reason = (
-                "Deterministic fix patch generated (LLM unavailable)."
-                if llm_error
-                else "Fix patch generated from test failure analysis."
+            return build_agent_result(
+                status="FAILED",
+                artifact_type="code_patch",
+                artifact_content={
+                    "schema_version": "1.0",
+                    "files": [],
+                    "fix_iteration": iteration,
+                    "blocked": True,
+                    "diagnosis": "deterministic_fallback_not_safe",
+                },
+                reason=(
+                    f"Deterministic fallback cannot safely fix tests without LLM guidance. "
+                    f"LLM error: {llm_error[:120]}"
+                    if llm_error
+                    else "Deterministic fallback cannot safely fix tests without LLM guidance."
+                ),
+                confidence=0.95,
+                logs=[
+                    f"failed_before={failed}",
+                    f"remaining_failures={remaining_failures}",
+                    f"target_file={fallback_path}",
+                    "deterministic_fallback_skipped",
+                ],
+                next_actions=["review_agent"],
             )
-            confidence = 0.85
 
         patch = {
             "schema_version": "1.0",
@@ -672,6 +689,7 @@ class FixAgent(BaseAgent):
         try:
             from agents.code_generator import EnhancedCodeGenerator
         except Exception as exc:
+            logger.debug("Failed to import code_generator: %s", exc)
             return None, f"code_generator_import_failed: {exc}"
 
         test_results = self._resolve_test_results(context)
@@ -754,6 +772,7 @@ class FixAgent(BaseAgent):
                     continue
                 return None, last_error
             except Exception as exc:
+                logger.debug("Codegen fix attempt %d failed: %s", attempt, exc)
                 last_error = f"codegen_fix_failed: {exc}"
                 if attempt < self.CODEGEN_FIX_MAX_ATTEMPTS:
                     continue
@@ -796,7 +815,7 @@ class FixAgent(BaseAgent):
             reasons = quality_gate.get("reasons", [])
             reason_summary = ""
             if isinstance(reasons, list) and reasons:
-                reason_summary = ",".join(str(item).strip() for item in reasons[:3] if item)
+                reason_summary = ",".join(str(item).strip() for item in reasons[:8] if item)
             if reason_summary:
                 return f"codegen_fix_quality_gate_failed:{reason_summary}"
             return "codegen_fix_quality_gate_failed"

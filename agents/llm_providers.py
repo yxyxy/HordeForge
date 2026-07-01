@@ -143,6 +143,7 @@ class OllamaHandler(ApiHandler):
                             except json.JSONDecodeError:
                                 continue
         except Exception as e:
+            logger.exception("Ollama API stream failed")
             raise RuntimeError(f"Ollama API stream failed: {e}") from e
 
     def get_model(self) -> tuple[str, ModelInfo]:
@@ -272,6 +273,7 @@ class ClaudeCodeHandler(ApiHandler):
                         yield ApiStreamTextChunk(text=line)
 
         except Exception as e:
+            logger.exception("Claude Code API stream failed")
             raise RuntimeError(f"Claude Code API stream failed: {e}") from e
 
     def _filter_messages_for_claude_code(
@@ -374,6 +376,7 @@ class GeminiHandler(ApiHandler):
                     )
 
         except Exception as e:
+            logger.exception("Gemini API stream failed")
             raise RuntimeError(f"Gemini API stream failed: {e}") from e
 
     def get_model(self) -> tuple[str, ModelInfo]:
@@ -484,6 +487,7 @@ class OpenRouterHandler(ApiHandler):
                         )
 
         except Exception as e:
+            logger.exception("OpenRouter API stream failed")
             raise RuntimeError(f"OpenRouter API stream failed: {e}") from e
 
     def get_model(self) -> tuple[str, ModelInfo]:
@@ -583,6 +587,7 @@ class AwsBedrockHandler(ApiHandler):
                     )
 
         except Exception as e:
+            logger.exception("AWS Bedrock API stream failed")
             raise RuntimeError(f"AWS Bedrock API stream failed: {e}") from e
 
     def get_model(self) -> tuple[str, ModelInfo]:
@@ -777,6 +782,7 @@ class LmStudioHandler(ApiHandler):
                             except json.JSONDecodeError:
                                 continue
         except Exception as e:
+            logger.exception("LM Studio API stream failed")
             raise RuntimeError(f"LM Studio API stream failed: {e}") from e
 
     def get_model(self) -> tuple[str, ModelInfo]:
@@ -878,6 +884,7 @@ class DeepSeekHandler(ApiHandler):
                         )
 
         except Exception as e:
+            logger.exception("DeepSeek API stream failed")
             raise RuntimeError(f"DeepSeek API stream failed: {e}") from e
 
     def get_model(self) -> tuple[str, ModelInfo]:
@@ -975,6 +982,7 @@ class FireworksHandler(ApiHandler):
                         )
 
         except Exception as e:
+            logger.exception("Fireworks API stream failed")
             raise RuntimeError(f"Fireworks API stream failed: {e}") from e
 
     def get_model(self) -> tuple[str, ModelInfo]:
@@ -1070,6 +1078,7 @@ class TogetherHandler(ApiHandler):
                         )
 
         except Exception as e:
+            logger.exception("Together API stream failed")
             raise RuntimeError(f"Together API stream failed: {e}") from e
 
     def get_model(self) -> tuple[str, ModelInfo]:
@@ -1165,6 +1174,7 @@ class QwenHandler(ApiHandler):
                         )
 
         except Exception as e:
+            logger.exception("Qwen API stream failed")
             raise RuntimeError(f"Qwen API stream failed: {e}") from e
 
     def get_model(self) -> tuple[str, ModelInfo]:
@@ -1512,6 +1522,7 @@ class HuggingFaceHandler(ApiHandler):
                             except json.JSONDecodeError:
                                 continue
         except Exception as e:
+            logger.exception("Hugging Face API stream failed")
             raise RuntimeError(f"Hugging Face API stream failed: {e}") from e
 
     def get_model(self) -> tuple[str, ModelInfo]:
@@ -1606,6 +1617,7 @@ class LiteLlmHandler(ApiHandler):
                         )
 
         except Exception as e:
+            logger.exception("LiteLLM API stream failed")
             raise RuntimeError(f"LiteLLM API stream failed: {e}") from e
 
     def get_model(self) -> tuple[str, ModelInfo]:
@@ -1701,6 +1713,7 @@ class MoonshotHandler(ApiHandler):
                         )
 
         except Exception as e:
+            logger.exception("Moonshot API stream failed")
             raise RuntimeError(f"Moonshot API stream failed: {e}") from e
 
     def get_model(self) -> tuple[str, ModelInfo]:
@@ -1795,6 +1808,7 @@ class GroqHandler(ApiHandler):
                         )
 
         except Exception as e:
+            logger.exception("Groq API stream failed")
             raise RuntimeError(f"Groq API stream failed: {e}") from e
 
     def get_model(self) -> tuple[str, ModelInfo]:
@@ -1810,6 +1824,124 @@ class GroqHandler(ApiHandler):
             temperature=0.7,
         )
         return self.groq_model_id, model_info
+
+    def get_api_stream_usage(self) -> ApiStreamUsageChunk | None:
+        """Get stream usage information."""
+        return None
+
+    def abort(self) -> None:
+        """Abort current request."""
+        pass
+
+
+class MiMoCodeHandler(ApiHandler):
+    """Xiaomi MiMo Platform API handler with streaming support.
+
+    MiMo Platform provides OpenAI-compatible API for Xiaomi's MiMo models.
+
+    Available models:
+    - mimo-v2.5-pro: flagship model (1T params, 42B active, 1M context)
+    - mimo-v2.5: multimodal model with native agent capabilities
+    - mimo-v2.5-pro-ultraspeed: high-speed variant (1000 tokens/s)
+
+    Authentication: API key via MIMO_ACCESS_TOKEN env var
+    obtained from https://platform.xiaomimimo.com
+
+    Reference: https://platform.xiaomimimo.com
+    """
+
+    def __init__(
+        self,
+        mimo_api_key: str | None = None,
+        mimo_model_id: str = "mimo-v2.5-pro",
+        mimo_base_url: str | None = None,
+    ):
+        self.mimo_api_key = mimo_api_key or os.getenv("MIMO_ACCESS_TOKEN")
+        self.mimo_model_id = mimo_model_id
+        self.mimo_base_url = mimo_base_url or os.getenv(
+            "MIMO_BASE_URL", "https://api.xiaomimimo.com/v1"
+        )
+
+        if not self.mimo_api_key:
+            raise ValueError(
+                "MIMO_ACCESS_TOKEN environment variable must be set. "
+                "Get your API key from https://platform.xiaomimimo.com"
+            )
+
+    async def create_message(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> ApiStream:
+        """Create streaming message using MiMo Code API.
+
+        Uses OpenAI's API with ChatGPT account tokens.
+        """
+        client = OpenAI(
+            base_url=self.mimo_base_url,
+            api_key=self.mimo_api_key,
+        )
+
+        # Convert messages to OpenAI format
+        openai_messages = [{"role": "system", "content": system_prompt}]
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            openai_messages.append({"role": role, "content": content})
+
+        try:
+            stream = client.chat.completions.create(
+                model=self.mimo_model_id,
+                messages=openai_messages,
+                temperature=0.7,
+                max_tokens=4000,
+                stream=True,
+                tools=tools,
+            )
+
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta:
+                    delta = chunk.choices[0].delta
+
+                    if delta.content:
+                        yield ApiStreamTextChunk(text=delta.content)
+
+                    if delta.tool_calls:
+                        for tool_call in delta.tool_calls:
+                            yield ApiStreamToolCallsChunk(
+                                tool_call={
+                                    "call_id": tool_call.id,
+                                    "function": {
+                                        "id": tool_call.id,
+                                        "name": tool_call.function.name,
+                                        "arguments": tool_call.function.arguments,
+                                    },
+                                }
+                            )
+
+                    if chunk.usage:
+                        yield ApiStreamUsageChunk(
+                            input_tokens=chunk.usage.prompt_tokens or 0,
+                            output_tokens=chunk.usage.completion_tokens or 0,
+                        )
+
+        except Exception as e:
+            raise RuntimeError(f"MiMo Code API stream failed: {e}") from e
+
+    def get_model(self) -> tuple[str, ModelInfo]:
+        """Get current model info."""
+        model_info = ModelInfo(
+            name=self.mimo_model_id,
+            max_tokens=4096,
+            context_window=272000,
+            supports_images=True,
+            supports_prompt_cache=False,
+            input_price=0.0,
+            output_price=0.0,
+            temperature=0.7,
+        )
+        return self.mimo_model_id, model_info
 
     def get_api_stream_usage(self) -> ApiStreamUsageChunk | None:
         """Get stream usage information."""

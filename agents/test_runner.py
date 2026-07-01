@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -19,6 +20,8 @@ from agents.context_utils import (
     get_artifact_from_result,
 )
 from agents.patch_workflow_orchestrator import resolve_code_patch_files
+
+logger = logging.getLogger(__name__)
 
 
 class TestRunner(BaseAgent):
@@ -55,8 +58,8 @@ class TestRunner(BaseAgent):
                     package_json.get("scripts", {})
                 ):
                     return "jest", "package_json"
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to parse package.json: %s", e)
 
         if os.path.exists(os.path.join(project_path, "go.mod")):
             return "go_test", "go_mod"
@@ -72,8 +75,8 @@ class TestRunner(BaseAgent):
                         with open(req_path, encoding="utf-8") as f:
                             if "pytest" in f.read().lower():
                                 return "pytest", req_file
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Failed to read %s: %s", req_path, e)
 
         language = str(project_metadata.get("language", "")).lower()
         return {
@@ -112,14 +115,14 @@ class TestRunner(BaseAgent):
             shutil.rmtree(path, ignore_errors=True)
             if not Path(path).exists():
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to remove directory tree at %s: %s", path, e)
 
         def _onerror(_func, target, _exc) -> None:
             try:
                 os.chmod(target, 0o700)
-            except Exception:
-                return
+            except Exception as e:
+                logger.debug("Failed to chmod %s: %s", target, e)
 
         target_path = Path(path)
         rmtree_target: str | Path = target_path
@@ -127,8 +130,8 @@ class TestRunner(BaseAgent):
             rmtree_target = Path("\\\\?\\" + str(target_path.resolve()))
         try:
             shutil.rmtree(rmtree_target, ignore_errors=False, onerror=_onerror)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to remove directory tree at %s: %s", path, e)
 
     @staticmethod
     def _build_subprocess_env(project_path: str, runner_tmp_dir: str) -> dict[str, str]:
@@ -180,8 +183,8 @@ class TestRunner(BaseAgent):
         if req_path.exists():
             try:
                 payload = req_path.read_text(encoding="utf-8") + "\n" + payload
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to read requirements.txt at %s: %s", req_path, e)
         return sha256(payload.encode("utf-8")).hexdigest()
 
     def _prepare_shared_python_env(
@@ -432,7 +435,7 @@ class TestRunner(BaseAgent):
                 normalized_paths.append(path)
 
         # Deduplicate and return
-        return list(dict.fromkeys(normalized_paths))[:10]
+        return list(dict.fromkeys(normalized_paths))[:15]
 
     @staticmethod
     def _normalize_repo_relative_path(path: str) -> str:
@@ -571,7 +574,7 @@ class TestRunner(BaseAgent):
                 continue
 
             target = (workspace_root / rel.strip().replace("\\", "/")).resolve()
-            if workspace_root not in target.parents and target != workspace_root:
+            if not target.is_relative_to(workspace_root):
                 continue
 
             change_type = str(item.get("change_type", "modify")).lower()
@@ -579,8 +582,8 @@ class TestRunner(BaseAgent):
                 try:
                     target.unlink(missing_ok=True)
                     applied += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to unlink file %s: %s", target, e)
                 continue
 
             content = item.get("content")
@@ -733,6 +736,15 @@ class TestRunner(BaseAgent):
         return any(marker in combined for marker in generic_markers)
 
     @staticmethod
+    def _normalize_signature_text(text: str) -> str:
+        normalized = text.replace("\\", "/")
+        normalized = re.sub(r"/tmp/[^:\s]*", "<TEMP>", normalized)
+        normalized = re.sub(r"\\\\[^:\s]*", "<TEMP>", normalized)
+        normalized = re.sub(r"\.py:\d+", ".py", normalized)
+        normalized = re.sub(r"\bat\s+\S+:\d+:\d+", "at <位置>", normalized)
+        return normalized
+
+    @staticmethod
     def _build_failure_signature(test_results: dict[str, Any]) -> str:
         error_class = str(test_results.get("error_classification", "")).strip().lower()
         failures = test_results.get("failures")
@@ -744,7 +756,9 @@ class TestRunner(BaseAgent):
             ).strip()
             failed = int(test_results.get("failed", 0) or 0)
             exit_code = int(test_results.get("exit_code", 0) or 0)
-            signature_source = f"{error_class}|{failed}|{exit_code}|{nodeid}|{error_line[:200]}"
+            nodeid = TestRunner._normalize_signature_text(nodeid)
+            error_line = TestRunner._normalize_signature_text(error_line)[:200]
+            signature_source = f"{error_class}|{failed}|{exit_code}|{nodeid}|{error_line}"
             return sha256(signature_source.encode("utf-8")).hexdigest()[:20]
 
         stderr = str(test_results.get("stderr", ""))
@@ -761,7 +775,8 @@ class TestRunner(BaseAgent):
 
         failed = int(test_results.get("failed", 0) or 0)
         exit_code = int(test_results.get("exit_code", 0) or 0)
-        signature_source = f"{error_class}|{failed}|{exit_code}|{assertion_line[:200]}"
+        assertion_line = TestRunner._normalize_signature_text(assertion_line)[:200]
+        signature_source = f"{error_class}|{failed}|{exit_code}|{assertion_line}"
         return sha256(signature_source.encode("utf-8")).hexdigest()[:20]
 
     @staticmethod
@@ -776,23 +791,13 @@ class TestRunner(BaseAgent):
 
     @staticmethod
     def _extract_error_line(text: str) -> str:
-        if not isinstance(text, str) or not text.strip():
-            return ""
-        for raw_line in text.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            if line.startswith("E       "):
-                return line[len("E       ") :].strip()
-            if line.startswith("E   "):
-                return line[len("E   ") :].strip()
-            if re.match(r"^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception):\s+", line):
-                return line
-        return ""
+        from hordeforge_utils import extract_error_line
+
+        return extract_error_line(text)
 
     @classmethod
     def _build_structured_failures(
-        cls, test_results: dict[str, Any], limit: int = 5
+        cls, test_results: dict[str, Any], limit: int = 15
     ) -> list[dict[str, Any]]:
         if not isinstance(test_results, dict):
             return []
@@ -1013,8 +1018,8 @@ class TestRunner(BaseAgent):
                 try:
                     with open(report_path, encoding="utf-8") as f:
                         payload["json_report"] = json.load(f)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Failed to load json report from %s: %s", report_path, e)
 
             return payload
         except subprocess.TimeoutExpired:
@@ -1046,8 +1051,8 @@ class TestRunner(BaseAgent):
             try:
                 with open(cov_json_path, encoding="utf-8") as f:
                     return json.load(f)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to load coverage JSON from %s: %s", cov_json_path, e)
 
         try:
             result = subprocess.run(
@@ -1067,8 +1072,8 @@ class TestRunner(BaseAgent):
                             "coverage_percentage": float(match.group(1)),
                             "raw_output": result.stdout,
                         }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to parse coverage output: %s", e)
 
         return None
 
@@ -1129,8 +1134,8 @@ class TestRunner(BaseAgent):
             try:
                 with open(summary_path, encoding="utf-8") as f:
                     return json.load(f)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to load jest summary from %s: %s", summary_path, e)
         return None
 
     def _run_go_test(self, project_path: str, context: dict[str, Any]) -> dict[str, Any]:
@@ -1576,8 +1581,8 @@ class TestRunner(BaseAgent):
             if use_isolation:
                 try:
                     shutil.rmtree(execution_path)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Failed to remove execution path %s: %s", execution_path, e)
             return result
 
         try:
@@ -1679,5 +1684,5 @@ class TestRunner(BaseAgent):
                 try:
                     sandbox_root = str(Path(execution_path).parent)
                     self._cleanup_tree(sandbox_root)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Failed to cleanup sandbox: %s", e)

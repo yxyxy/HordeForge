@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -11,6 +12,8 @@ from agents.context_utils import (
 )
 from agents.github_client import GitHubClient
 from agents.patch_workflow import PatchWorkflowOrchestrator, create_patch_from_code_result
+
+logger = logging.getLogger(__name__)
 
 
 def validate_branch_protection(pr: dict) -> bool:
@@ -304,7 +307,8 @@ class PrMergeAgent(BaseAgent):
 
             return True
 
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to check merge conditions for PR #%d: %s", pr_number, e)
             return False
 
     @staticmethod
@@ -419,7 +423,8 @@ class PrMergeAgent(BaseAgent):
 
         try:
             return GitHubClient(token=token, repo=repository_full_name.strip())
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to create GitHub client for %s: %s", repository_full_name, e)
             return None
 
     @staticmethod
@@ -466,7 +471,8 @@ class PrMergeAgent(BaseAgent):
 
         try:
             github_client.update_issue_labels(issue_number, labels=sorted(labels_set))
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to update labels for issue #%d: %s", issue_number, e)
             return
 
         if not pr_url or not hasattr(github_client, "comment_issue"):
@@ -481,7 +487,8 @@ class PrMergeAgent(BaseAgent):
         )
         try:
             github_client.comment_issue(issue_number, comment=comment)
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to comment on issue #%d: %s", issue_number, e)
             return
 
     def _mark_issue_as_merged(
@@ -512,7 +519,8 @@ class PrMergeAgent(BaseAgent):
 
         try:
             github_client.update_issue_labels(issue_number, labels=sorted(labels_set))
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to update labels for issue #%d: %s", issue_number, e)
             return
 
         if not pr_url or not hasattr(github_client, "comment_issue"):
@@ -527,5 +535,6 @@ class PrMergeAgent(BaseAgent):
         )
         try:
             github_client.comment_issue(issue_number, comment=comment)
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to comment on issue #%d: %s", issue_number, e)
             return

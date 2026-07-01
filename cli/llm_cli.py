@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import os
+import subprocess
 import sys
 
 # =============================================================================
@@ -14,6 +15,7 @@ from agents.llm_api import (
     ApiProvider,
     LlmApi,
     LlmRouter,
+    create_mimo_api,
     create_ollama_api,
 )
 from agents.llm_wrapper import ApiStreamTextChunk, ApiStreamToolCallsChunk, ApiStreamUsageChunk
@@ -163,6 +165,26 @@ class LlmCli:
             provider = ApiProvider(args.provider)
             api_key = args.api_key or os.getenv(f"{provider.value.upper()}_API_KEY")
 
+            # Handle MiMo Auto mode (no API key required)
+            if provider == ApiProvider.MIMO:
+                mimo_token = api_key or os.getenv("MIMO_ACCESS_TOKEN", "")
+                if not mimo_token or mimo_token == "auto":
+                    # MiMo Auto mode - use subprocess via mimo run
+                    config = ApiConfiguration(
+                        provider=provider,
+                        model=args.model or "mimo-auto",
+                        api_key="auto",
+                        base_url=args.base_url or "https://api.xiaomimimo.com/v1",
+                    )
+                    return LlmApi(config)
+                else:
+                    # MiMo Platform API mode - use API key
+                    return create_mimo_api(
+                        api_key=mimo_token,
+                        model=args.model or "mimo-v2.5-pro",
+                        base_url=args.base_url,
+                    )
+
             config = ApiConfiguration(
                 provider=provider,
                 model=args.model or self._get_default_model(provider),
@@ -261,6 +283,15 @@ class LlmCli:
 
     async def process_prompt(self, api: LlmApi, system_prompt: str, user_prompt: str):
         """Process a single prompt."""
+        # Handle MiMo Auto via subprocess
+        if api.config.provider == ApiProvider.MIMO and api.config.api_key == "auto":
+            print("Using mimo-auto")
+            print("Response:")
+            print("-" * 30)
+            response = await self._run_mimo_auto(user_prompt, system_prompt)
+            print(response)
+            return
+
         messages = [{"role": "user", "content": user_prompt}]
 
         print(f"Using {api.config.provider.value} - {api.config.model}")
@@ -284,6 +315,10 @@ class LlmCli:
 
     async def test_provider(self, api: LlmApi):
         """Test provider connectivity."""
+        # Handle MiMo Auto via subprocess
+        if api.config.provider == ApiProvider.MIMO and api.config.api_key == "auto":
+            return await self._test_mimo_auto()
+
         print(f"Testing {api.config.provider.value} - {api.config.model}...")
 
         try:
@@ -305,6 +340,69 @@ class LlmCli:
 
         except Exception as e:
             print(f"[FAIL] Failed: {e}")
+
+    def _find_mimo_command(self) -> str | None:
+        """Find the mimo command path."""
+        import shutil
+
+        mimo_path = shutil.which("mimo")
+        if mimo_path:
+            return mimo_path
+        # Check common npm global install location
+        npm_path = os.path.expanduser("~/AppData/Roaming/npm/mimo.cmd")
+        if os.path.exists(npm_path):
+            return npm_path
+        return None
+
+    async def _test_mimo_auto(self):
+        """Test MiMo Auto via mimo run command."""
+        print("Testing mimo-auto...")
+        mimo_cmd = self._find_mimo_command()
+        if not mimo_cmd:
+            print("[FAIL] Failed: 'mimo' command not found. Install MiMo Code first.")
+            return
+
+        try:
+            result = subprocess.run(
+                [mimo_cmd, "run", "Hello, are you working? Reply with one sentence."],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                print(f"[OK] Success! Response: {result.stdout.strip()[:80]}...")
+            else:
+                print(f"[FAIL] Failed: {result.stderr or 'No response'}")
+        except FileNotFoundError:
+            print("[FAIL] Failed: 'mimo' command not found. Install MiMo Code first.")
+        except subprocess.TimeoutExpired:
+            print("[FAIL] Failed: Timeout after 30 seconds")
+        except Exception as e:
+            print(f"[FAIL] Failed: {e}")
+
+    async def _run_mimo_auto(self, prompt: str, system_prompt: str = ""):
+        """Run prompt via MiMo Auto."""
+        mimo_cmd = self._find_mimo_command()
+        if not mimo_cmd:
+            raise RuntimeError("'mimo' command not found. Install MiMo Code first.")
+
+        full_prompt = prompt
+        if system_prompt:
+            full_prompt = f"System: {system_prompt}\n\nUser: {prompt}"
+
+        try:
+            result = subprocess.run(
+                [mimo_cmd, "run", full_prompt],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+            else:
+                raise RuntimeError(f"mimo run failed: {result.stderr}")
+        except FileNotFoundError as err:
+            raise RuntimeError("'mimo' command not found. Install MiMo Code first.") from err
 
     async def run_command(self, args):
         """Execute the specified command."""
