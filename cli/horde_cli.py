@@ -759,6 +759,11 @@ def run_pipeline(
                 inputs=inputs,
                 repo_id=resolved_repo_id,
             )
+        if resolved_pipeline_name == "ci_fix_pipeline":
+            _apply_ci_fix_defaults(
+                inputs=inputs,
+                repo_id=resolved_repo_id,
+            )
 
         if no_llm:
             inputs["use_llm"] = False
@@ -1278,6 +1283,55 @@ def _apply_issue_scanner_defaults(
             "repo_url is required for issue_scanner_pipeline. "
             "Set default repo via `horde repo add ... --set-default` or pass --inputs with repo_url."
         )
+
+
+def _apply_ci_fix_defaults(
+    inputs: dict[str, object],
+    repo_id: str | None,
+) -> None:
+    profile = get_repo_profile(repo_id) if repo_id else None
+
+    repository = _ensure_object(inputs.get("repository"))
+    full_name = repository.get("full_name")
+    if not isinstance(full_name, str) or not full_name.strip():
+        raw_repo = inputs.get("repository")
+        if isinstance(raw_repo, str) and raw_repo.strip():
+            full_name = raw_repo.strip()
+        elif isinstance(profile, dict):
+            profile_repo_id = profile.get("repo_id")
+            profile_repo_url = profile.get("repo_url")
+            full_name = (
+                profile_repo_id.strip()
+                if isinstance(profile_repo_id, str) and profile_repo_id.strip()
+                else _repo_full_name_from_url(profile_repo_url)
+            )
+    if isinstance(full_name, str) and full_name.strip():
+        repository["full_name"] = full_name.strip()
+    if repository:
+        inputs["repository"] = repository
+
+    if not inputs.get("github_token") and isinstance(profile, dict):
+        token_ref = profile.get("token_ref")
+        if isinstance(token_ref, str) and token_ref.strip():
+            token_value = _get_secret_value(token_ref.strip())
+            if isinstance(token_value, str) and token_value.strip():
+                inputs["github_token"] = token_value.strip()
+
+    issue = inputs.get("issue")
+    if not isinstance(issue, dict):
+        issue_number = inputs.get("issue_number")
+        issue_title = inputs.get("issue_title")
+        issue_body = inputs.get("issue_body") or inputs.get("body")
+        issue_url = inputs.get("issue_url") or inputs.get("html_url")
+        if isinstance(issue_number, int) and issue_number > 0:
+            issue = {
+                "number": issue_number,
+                "title": str(issue_title) if isinstance(issue_title, str) else f"Issue #{issue_number}",
+                "body": str(issue_body) if isinstance(issue_body, str) else "",
+                "html_url": str(issue_url) if isinstance(issue_url, str) else "",
+                "labels": [],
+            }
+            inputs["issue"] = issue
 
 
 def _parse_pipeline_inputs(raw_inputs: str | None) -> dict[str, object]:

@@ -129,7 +129,7 @@ steps:
       - code_generator
     depends_on_explicit: true
     input:
-      code_patch: "{{ fixed_code_patch }}"
+      code_patch: "{{ fixed_code_patch | default(final_code_patch) | default(code_patch) }}"
       repository: "{{ repository }}"
     output: "{{ validation_result }}"
     on_failure: continue
