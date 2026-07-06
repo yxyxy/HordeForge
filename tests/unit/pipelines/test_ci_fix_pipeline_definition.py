@@ -74,7 +74,7 @@ def test_ci_fix_pipeline_has_fix_loop_bound_to_failed_tests() -> None:
     # (e.g., exit_code=5 means no tests collected)
     assert "test_results.failed" in loop["condition"]
     assert "test_results.exit_code" in loop["condition"]
-    assert loop["steps"] == ["fix_agent", "patch_apply_agent", "test_runner"]
+    assert loop["steps"] == ["fix_agent", "patch_validator", "patch_apply_agent", "test_runner"]
 
 
 def test_ci_fix_pipeline_writes_memory_only_after_validated_success() -> None:

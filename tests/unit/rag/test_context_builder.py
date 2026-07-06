@@ -166,7 +166,7 @@ def test_limit_context_tokens():
     long_content = "This is a very long content. " * 1000  # ~30k characters
 
     mock_memory_retriever.search_memory.return_value = []
-    mock_rag_retriever.retrieve.return_value = [
+    mock_rag_retriever.search.return_value = [
         {"content": long_content, "file_path": "large_file.py", "score": 0.95}
     ]
 
@@ -230,6 +230,7 @@ def test_format_rag_section():
 def test_context_builder_uses_search_method():
     # Test that ContextBuilder uses search() method on rag_retriever
     mock_memory_retriever = Mock()
+    mock_memory_retriever.search_memory.return_value = []
     mock_rag_retriever = Mock()
     mock_rag_retriever.search.return_value = []
 

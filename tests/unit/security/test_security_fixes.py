@@ -152,12 +152,15 @@ class TestConfigValidation:
             sys.modules.pop("pytest", None)
 
         old_val = os.environ.pop("HORDEFORGE_WEBHOOK_SECRET", None)
+        old_testing = os.environ.pop("HORDEFORGE_TESTING", None)
         try:
             with pytest.raises(ValueError, match="HORDEFORGE_WEBHOOK_SECRET"):
                 RunConfig.from_env()
         finally:
             if old_val is not None:
                 os.environ["HORDEFORGE_WEBHOOK_SECRET"] = old_val
+            if old_testing is not None:
+                os.environ["HORDEFORGE_TESTING"] = old_testing
             if is_test_original:
                 sys.modules["pytest"] = pytest
 

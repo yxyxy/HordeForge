@@ -5,7 +5,6 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-import scheduler.gateway as gateway
 from agents.github_client import GitHubClient
 from scheduler.gateway import STATE, app
 
@@ -18,7 +17,7 @@ def _clean_gateway_storage():
     STATE.step_log_repository.store.write_all([])
     STATE.artifact_repository.store.write_all([])
     STATE.idempotency_store.clear()
-    gateway.CRON_DISPATCHER = None
+    STATE.cron_dispatcher = None
     yield
 
 

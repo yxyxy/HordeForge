@@ -12,6 +12,7 @@ import scheduler.gateway as gateway
 from agents.context_utils import build_agent_result
 from api.security import compute_github_signature
 from hordeforge_config import RunConfig
+from scheduler.gateway import STATE
 from scheduler.idempotency import IdempotencyStore
 from storage.repositories.artifact_repository import ArtifactRepository
 from storage.repositories.run_repository import RunRepository
@@ -57,18 +58,14 @@ def _clean_runtime_state(monkeypatch):
         shutil.rmtree(storage_dir, ignore_errors=True)
     storage_dir.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr(gateway, "RUN_REPOSITORY", RunRepository(storage_dir=str(storage_dir)))
-    monkeypatch.setattr(
-        gateway, "STEP_LOG_REPOSITORY", StepLogRepository(storage_dir=str(storage_dir))
-    )
-    monkeypatch.setattr(
-        gateway, "ARTIFACT_REPOSITORY", ArtifactRepository(storage_dir=str(storage_dir))
-    )
-    monkeypatch.setattr(gateway, "IDEMPOTENCY_STORE", IdempotencyStore(ttl_seconds=3600))
+    STATE.run_repository = RunRepository(storage_dir=str(storage_dir))
+    STATE.step_log_repository = StepLogRepository(storage_dir=str(storage_dir))
+    STATE.artifact_repository = ArtifactRepository(storage_dir=str(storage_dir))
+    STATE.idempotency_store = IdempotencyStore(ttl_seconds=3600)
 
-    gateway.RUNS.clear()
-    gateway.RUN_RUNTIME_INPUTS.clear()
-    gateway.CRON_DISPATCHER = None
+    STATE.runs.clear()
+    STATE.run_runtime_inputs.clear()
+    STATE.cron_dispatcher = None
 
     monkeypatch.setenv("HORDEFORGE_WEBHOOK_SECRET", "test-webhook-secret")
     monkeypatch.setattr(webhook_api, "config", RunConfig.from_env())
@@ -239,7 +236,7 @@ def test_cron_jobs_e2e_cover_registered_jobs_and_idempotency():
     assert first_ci_result["published_count"] == 1
     assert second_ci_result["published_count"] == 0
 
-    scanner_runs = gateway.RUN_REPOSITORY.list(pipeline_name="issue_scanner_pipeline", limit=20)
-    ci_scanner_runs = gateway.RUN_REPOSITORY.list(pipeline_name="ci_scanner_pipeline", limit=20)
+    scanner_runs = STATE.run_repository.list(pipeline_name="issue_scanner_pipeline", limit=20)
+    ci_scanner_runs = STATE.run_repository.list(pipeline_name="ci_scanner_pipeline", limit=20)
     assert len(scanner_runs) == 1
     assert len(ci_scanner_runs) == 1

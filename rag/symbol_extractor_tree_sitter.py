@@ -338,6 +338,7 @@ class TreeSitterSymbolExtractor:
                     parameters = self._get_parameters(node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=func_name,
                         type="function",
                         line_number=line_number,
@@ -362,7 +363,11 @@ class TreeSitterSymbolExtractor:
                     docstring = self._get_docstring(class_name_node, source_bytes)
 
                     symbol = Symbol(
-                        name=class_name, type="class", line_number=line_number, docstring=docstring
+                        file_path=str(file_path),
+                        name=class_name,
+                        type="class",
+                        line_number=line_number,
+                        docstring=docstring,
                     )
                     symbols.append(symbol)
 
@@ -391,6 +396,7 @@ class TreeSitterSymbolExtractor:
                     parameters = self._get_parameters(node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=func_name,
                         type="function",
                         line_number=line_number,
@@ -414,7 +420,11 @@ class TreeSitterSymbolExtractor:
                     docstring = self._get_docstring(class_name_node, source_bytes)
 
                     symbol = Symbol(
-                        name=class_name, type="class", line_number=line_number, docstring=docstring
+                        file_path=str(file_path),
+                        name=class_name,
+                        type="class",
+                        line_number=line_number,
+                        docstring=docstring,
                     )
                     symbols.append(symbol)
 
@@ -434,6 +444,7 @@ class TreeSitterSymbolExtractor:
                     parameters = self._get_parameters(node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=method_name,
                         type="method",
                         line_number=line_number,
@@ -472,6 +483,7 @@ class TreeSitterSymbolExtractor:
                     parameters = self._get_parameters(node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=method_name,
                         type="function",  # Using 'function' for consistency
                         line_number=line_number,
@@ -495,7 +507,11 @@ class TreeSitterSymbolExtractor:
                     docstring = self._get_docstring(class_name_node, source_bytes)
 
                     symbol = Symbol(
-                        name=class_name, type="class", line_number=line_number, docstring=docstring
+                        file_path=str(file_path),
+                        name=class_name,
+                        type="class",
+                        line_number=line_number,
+                        docstring=docstring,
                     )
                     symbols.append(symbol)
 
@@ -514,6 +530,7 @@ class TreeSitterSymbolExtractor:
                     docstring = self._get_docstring(interface_name_node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=interface_name,
                         type="class",  # Treating interface as class for consistency
                         line_number=line_number,
@@ -546,6 +563,7 @@ class TreeSitterSymbolExtractor:
                     parameters = self._get_parameters(node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=func_name,
                         type="function",
                         line_number=line_number,
@@ -570,6 +588,7 @@ class TreeSitterSymbolExtractor:
                     parameters = self._get_parameters(node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=method_name,
                         type="method",
                         line_number=line_number,
@@ -603,6 +622,7 @@ class TreeSitterSymbolExtractor:
                     parameters = self._get_parameters(node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=func_name,
                         type="function",
                         line_number=line_number,
@@ -626,6 +646,7 @@ class TreeSitterSymbolExtractor:
                     docstring = self._get_docstring(struct_name_node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=struct_name,
                         type="class",  # Treating struct as class for consistency
                         line_number=line_number,
@@ -648,6 +669,7 @@ class TreeSitterSymbolExtractor:
                     docstring = self._get_docstring(enum_name_node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=enum_name,
                         type="class",  # Treating enum as class for consistency
                         line_number=line_number,
@@ -680,6 +702,7 @@ class TreeSitterSymbolExtractor:
                     parameters = self._get_parameters(node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=func_name,
                         type="function",
                         line_number=line_number,
@@ -703,7 +726,11 @@ class TreeSitterSymbolExtractor:
                     docstring = self._get_docstring(class_name_node, source_bytes)
 
                     symbol = Symbol(
-                        name=class_name, type="class", line_number=line_number, docstring=docstring
+                        file_path=str(file_path),
+                        name=class_name,
+                        type="class",
+                        line_number=line_number,
+                        docstring=docstring,
                     )
                     symbols.append(symbol)
 
@@ -732,6 +759,7 @@ class TreeSitterSymbolExtractor:
                     parameters = self._get_parameters(node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=func_name,
                         type="function",
                         line_number=line_number,
@@ -765,6 +793,7 @@ class TreeSitterSymbolExtractor:
                     parameters = self._get_parameters(node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=method_name,
                         type="function",  # Using 'function' for consistency
                         line_number=line_number,
@@ -788,7 +817,11 @@ class TreeSitterSymbolExtractor:
                     docstring = self._get_docstring(class_name_node, source_bytes)
 
                     symbol = Symbol(
-                        name=class_name, type="class", line_number=line_number, docstring=docstring
+                        file_path=str(file_path),
+                        name=class_name,
+                        type="class",
+                        line_number=line_number,
+                        docstring=docstring,
                     )
                     symbols.append(symbol)
 
@@ -807,6 +840,7 @@ class TreeSitterSymbolExtractor:
                     docstring = self._get_docstring(interface_name_node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=interface_name,
                         type="class",  # Treating interface as class for consistency
                         line_number=line_number,
@@ -829,6 +863,7 @@ class TreeSitterSymbolExtractor:
                     docstring = self._get_docstring(struct_name_node, source_bytes)
 
                     symbol = Symbol(
+                        file_path=str(file_path),
                         name=struct_name,
                         type="class",  # Treating struct as class for consistency
                         line_number=line_number,

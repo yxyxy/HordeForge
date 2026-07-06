@@ -1326,7 +1326,9 @@ def _apply_ci_fix_defaults(
         if isinstance(issue_number, int) and issue_number > 0:
             issue = {
                 "number": issue_number,
-                "title": str(issue_title) if isinstance(issue_title, str) else f"Issue #{issue_number}",
+                "title": str(issue_title)
+                if isinstance(issue_title, str)
+                else f"Issue #{issue_number}",
                 "body": str(issue_body) if isinstance(issue_body, str) else "",
                 "html_url": str(issue_url) if isinstance(issue_url, str) else "",
                 "labels": [],

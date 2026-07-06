@@ -8,6 +8,7 @@ import requests
 import agents.llm_wrapper as llm_wrapper_module
 from agents.llm_wrapper import (
     AnthropicWrapper,
+    CircuitBreakerLLMWrapper,
     GoogleGenAIWrapper,
     OpenAIWrapper,
     ProfileFallbackLLMWrapper,
@@ -202,7 +203,7 @@ def test_build_code_prompt_mentions_operation_based_schema():
     assert '"patch_text"' in prompt
     assert '"operations"' in prompt
     assert '"type": "edit|write"' in prompt
-    assert "Prefer operations over raw full-file rewrites" in prompt
+    assert "Use `operations[]` for edit/write operations when you need precise control" in prompt
 
 
 def test_get_llm_wrapper_unknown():
@@ -242,9 +243,9 @@ def test_get_llm_wrapper_uses_profile_store_defaults(monkeypatch):
     )
     monkeypatch.delenv("HORDEFORGE_LLM_PROFILE", raising=False)
     result = get_llm_wrapper(None)
-    assert isinstance(result, OpenAIWrapper)
+    assert isinstance(result, CircuitBreakerLLMWrapper)
     assert result._model == "gpt-4o-mini"
-    assert result._api_key == "profile-api-key"
+    assert result._delegate._api_key == "profile-api-key"
 
 
 def test_get_llm_wrapper_uses_profile_fallback_when_multiple_profiles(monkeypatch):
@@ -634,8 +635,6 @@ def test_qwen_wrapper_sets_auth_cooldown_after_invalid_api_key(monkeypatch):
 
 
 def test_qwen_wrapper_retries_on_empty_body_and_succeeds(monkeypatch):
-    QwenCodeWrapper._auth_failure_until_by_fingerprint.clear()
-
     class _Delta:
         def __init__(self, content: str):
             self.content = content
@@ -681,6 +680,7 @@ def test_qwen_wrapper_retries_on_empty_body_and_succeeds(monkeypatch):
             '"expiry_date":9999999999999}'
         )
     )
+    wrapper._auth_failure_until_by_fingerprint.clear()
     monkeypatch.setattr(wrapper, "_client", lambda: _Client())
     monkeypatch.setattr(llm_wrapper_module.time, "sleep", lambda _: None)
     monkeypatch.setattr(llm_wrapper_module.random, "uniform", lambda _a, _b: 0.0)
@@ -691,7 +691,6 @@ def test_qwen_wrapper_retries_on_empty_body_and_succeeds(monkeypatch):
 
 
 def test_qwen_wrapper_does_not_retry_on_http_401_and_logs_diagnostics(monkeypatch, caplog):
-    QwenCodeWrapper._auth_failure_until_by_fingerprint.clear()
 
     class _FakeResponse:
         status_code = 401
@@ -730,6 +729,7 @@ def test_qwen_wrapper_does_not_retry_on_http_401_and_logs_diagnostics(monkeypatc
             '"expiry_date":9999999999999}'
         )
     )
+    wrapper._auth_failure_until_by_fingerprint.clear()
     client = _Client()
     monkeypatch.setattr(wrapper, "_client", lambda: client)
     monkeypatch.setattr(llm_wrapper_module.time, "sleep", lambda _: None)

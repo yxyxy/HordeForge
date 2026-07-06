@@ -299,6 +299,7 @@ class PipelineValidator:
             "merge_status",
             "ci_issue",
             "pipeline_status",
+            "file_tree",
         }
 
         produced_before_pre_loop: set[str] = set()

@@ -3,11 +3,15 @@ from scheduler.gateway import _authorize_manual_command
 
 def test_constant_time_api_key_comparison():
     """Test that API key comparison is constant-time."""
-    # Mock the config to have a known API key
     import scheduler.gateway as gw
+    from hordeforge_config import RunConfig
 
-    original_key = gw.config.operator_api_key
-    gw.config.operator_api_key = "test-key-12345"
+    test_config = RunConfig(
+        operator_api_key="test-key-12345",
+        operator_allowed_roles=("admin",),
+        manual_command_allowed_sources=("test",),
+    )
+    gw.config = test_config
 
     try:
         # Test that comparison works correctly
@@ -28,4 +32,4 @@ def test_constant_time_api_key_comparison():
         assert authorized is False
         assert reason == "invalid_operator_key"
     finally:
-        gw.config.operator_api_key = original_key
+        gw.config = RunConfig.from_env()
