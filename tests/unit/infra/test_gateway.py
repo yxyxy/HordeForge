@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 os.environ["HORDEFORGE_STORAGE_BACKEND"] = "json"
 os.environ["HORDEFORGE_QUEUE_BACKEND"] = "memory"
+os.environ["HORDEFORGE_OPERATOR_API_KEY"] = "local-operator-key"
 
 import scheduler.gateway as gateway
 from scheduler.gateway import STATE, app

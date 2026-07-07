@@ -250,7 +250,7 @@ class TestFixAgent:
         assert content["remaining_failures"] == 0
 
     def test_run_with_failures(self):
-        """Test run with failures."""
+        """Test run with failures — deterministic fallback returns FAILED without LLM."""
         agent = FixAgent()
         context = {
             "test_runner": {
@@ -265,10 +265,11 @@ class TestFixAgent:
         }
 
         result = agent.run(context)
-        assert result["status"] == "SUCCESS"
+        assert result["status"] == "FAILED"
         content = result["artifacts"][0]["content"]
         assert content["fix_iteration"] == 1
-        assert content["remaining_failures"] == 1
+        assert content["blocked"] is True
+        assert content["diagnosis"] == "deterministic_fallback_not_safe"
 
     def test_run_resolves_iteration(self):
         """Test iteration resolution from previous fix."""

@@ -182,3 +182,14 @@ class CronDispatcher:
         if not job:
             raise KeyError(f"Unknown cron job: {name}")
         return self._run_job(job, trigger="manual", payload=payload or {})
+
+    def list_jobs(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": job.name,
+                "interval_seconds": job.interval_seconds,
+                "enabled": job.enabled,
+                "last_run_at": job.last_run_at.isoformat() if job.last_run_at else None,
+            }
+            for job in self.jobs.values()
+        ]

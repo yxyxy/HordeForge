@@ -22,11 +22,26 @@ class PatchValidatorAgent(BaseAgent):
         code_patch = context.get("code_patch")
         repository = context.get("repository", {})
 
-        # Resolve workspace path
         workspace = self._resolve_workspace(repository)
 
         errors: list[str] = []
         warnings: list[str] = []
+
+        if isinstance(code_patch, str):
+            from orchestrator.input_mapping import try_parse_json
+
+            parsed = try_parse_json(code_patch)
+            if isinstance(parsed, dict):
+                code_patch = parsed
+            else:
+                try:
+                    import ast
+
+                    parsed = ast.literal_eval(code_patch)
+                    if isinstance(parsed, dict):
+                        code_patch = parsed
+                except (ValueError, SyntaxError):
+                    pass
 
         if not isinstance(code_patch, dict) or not code_patch:
             return self._result("FAILED", errors=["empty_or_invalid_code_patch"])
@@ -45,6 +60,8 @@ class PatchValidatorAgent(BaseAgent):
 
         # 3. Check that target files exist for modify operations
         for file_info in code_patch.get("files", []):
+            if not isinstance(file_info, dict):
+                continue
             path = file_info.get("path", "")
             change_type = file_info.get("change_type", "modify")
             if change_type == "modify" and path:
@@ -54,6 +71,8 @@ class PatchValidatorAgent(BaseAgent):
 
         # 4. Check that old_string is findable in target files
         for op in code_patch.get("operations", []):
+            if not isinstance(op, dict):
+                continue
             if op.get("type") == "edit":
                 path = op.get("path", "")
                 old_string = op.get("old_string", "")
@@ -68,9 +87,11 @@ class PatchValidatorAgent(BaseAgent):
         all_paths = []
         for key in ["files", "test_changes"]:
             for item in code_patch.get(key, []):
-                all_paths.append(item.get("path", ""))
+                if isinstance(item, dict):
+                    all_paths.append(item.get("path", ""))
         for op in code_patch.get("operations", []) + code_patch.get("test_operations", []):
-            all_paths.append(op.get("path", ""))
+            if isinstance(op, dict):
+                all_paths.append(op.get("path", ""))
 
         for path in all_paths:
             if path and ".." in Path(path).parts:
@@ -88,9 +109,10 @@ class PatchValidatorAgent(BaseAgent):
             },
         )
 
-    def _resolve_workspace(self, repository: dict[str, Any]) -> Path:
+    def _resolve_workspace(self, repository: Any) -> Path:
         """Resolve the workspace directory."""
-        # Try common paths
+        if not isinstance(repository, dict):
+            repository = {}
         for candidate in [
             Path("workspace/repo"),
             Path("."),
@@ -106,7 +128,7 @@ class PatchValidatorAgent(BaseAgent):
             "status": status,
             "artifacts": [],
             "decisions": [],
-            "logs": [{"message": f"Patch validation: {status}"}],
+            "logs": [f"Patch validation: {status}"],
             "next_actions": [],
             **kwargs,
         }

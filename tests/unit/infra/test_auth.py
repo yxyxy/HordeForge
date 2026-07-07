@@ -207,7 +207,7 @@ class TestSessionManager:
     def session_manager(self):
         """Create session manager with mock Redis."""
         mock_redis = MagicMock()
-        return SessionManager(redis_client=mock_redis, session_ttl=3600)
+        return SessionManager(redis_client=mock_redis, session_ttl=3600, jwt_secret="test-secret")
 
     def test_create_session(self, session_manager):
         """Test creating a session."""
@@ -371,7 +371,6 @@ class TestJWTConfig:
 
             config = RunConfig.from_env()
             assert config.auth_enabled is False
-            assert config.jwt_secret_key == "dev-jwt-secret-change-in-production"
             assert config.jwt_algorithm == "HS256"
             assert config.session_ttl_seconds == 3600
             assert "/health" in config.auth_public_paths

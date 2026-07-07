@@ -65,7 +65,10 @@ def _clean_runtime_state(monkeypatch):
 
     STATE.runs.clear()
     STATE.run_runtime_inputs.clear()
-    STATE.cron_dispatcher = None
+
+    from scheduler.cron_runtime import build_default_cron_dispatcher
+
+    STATE.cron_dispatcher = build_default_cron_dispatcher(gateway._trigger_pipeline_from_cron)
 
     monkeypatch.setenv("HORDEFORGE_WEBHOOK_SECRET", "test-webhook-secret")
     monkeypatch.setattr(webhook_api, "config", RunConfig.from_env())
@@ -190,7 +193,7 @@ def test_cron_jobs_e2e_cover_registered_jobs_and_idempotency():
 
     jobs_response = gateway_client.get("/cron/jobs")
     assert jobs_response.status_code == 200
-    names = {item["name"] for item in jobs_response.json()["items"]}
+    names = {item["name"] for item in jobs_response.json()["jobs"]}
     assert "issue_scanner" in names
     assert "ci_monitor" in names
 
@@ -226,10 +229,10 @@ def test_cron_jobs_e2e_cover_registered_jobs_and_idempotency():
     assert first_ci.status_code == 200
     assert second_ci.status_code == 200
 
-    first_issue_result = first_issue.json()["record"]["result"]
-    second_issue_result = second_issue.json()["record"]["result"]
-    first_ci_result = first_ci.json()["record"]["result"]
-    second_ci_result = second_ci.json()["record"]["result"]
+    first_issue_result = first_issue.json()["result"]["result"]
+    second_issue_result = second_issue.json()["result"]["result"]
+    first_ci_result = first_ci.json()["result"]["result"]
+    second_ci_result = second_ci.json()["result"]["result"]
 
     assert first_issue_result["published_count"] == 1
     assert second_issue_result["published_count"] == 0
