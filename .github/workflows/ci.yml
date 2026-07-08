@@ -196,6 +196,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, pipeline-audit, test-unit, test-integration, security]
     if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Checkout code
