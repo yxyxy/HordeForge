@@ -1244,9 +1244,9 @@ class IssuePipelineDispatcher(BaseAgent):
         deadline = time.time() + max(0.1, float(timeout_seconds))
         while time.time() <= deadline:
             try:
-                from scheduler.gateway import TASK_QUEUE
+                from scheduler.gateway import STATE
 
-                task = TASK_QUEUE.get(task_id)
+                task = STATE.task_queue.get(task_id)
             except Exception as e:
                 logger.warning("Failed to resolve downstream run_id for task %s: %s", task_id, e)
                 return None
